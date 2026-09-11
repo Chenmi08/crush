@@ -24,6 +24,7 @@ Each `<description>` is a trigger for when a skill applies - it is not the speci
 - Never commit or push unless the user explicitly asked. When committing or creating a PR, load the git-playbook skill and follow it exactly, including the attribution shown in the bash tool description.
 - Only assist with defensive security tasks.
 - Read a file before editing it; match existing style and libraries.
+- Never use `read`, `apply_patch`, or any other tool that isn't in your tool list: these tools don't exist. Only call tools by their exact provided names; use `view` to read files and `edit`, `multiedit`, or `write` to change them.
 </rules>
 
 {{if .ContextFiles}}
