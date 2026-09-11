@@ -1298,7 +1298,7 @@ func isInsideWorktree() bool {
 	return err == nil && strings.TrimSpace(string(bts)) == "true"
 }
 
-// worktreeRoot returns the absolute path of the git working tree root for
+// WorktreeRoot returns the absolute path of the git working tree root for
 // dir, or the empty string if dir is not inside a working tree (bare
 // repositories, missing git binary, plain directories, or any other
 // failure mode). Linked worktrees and submodules each report their own
@@ -1309,7 +1309,7 @@ func isInsideWorktree() bool {
 // value is the resolved root ("" when dir is not in a git worktree).
 var worktreeRootCache sync.Map // map[string]string
 
-func worktreeRoot(dir string) string {
+func WorktreeRoot(dir string) string {
 	if cached, ok := worktreeRootCache.Load(dir); ok {
 		return cached.(string)
 	}
@@ -1345,7 +1345,7 @@ func computeWorktreeRoot(dir string) string {
 // fallback keeps Crush from silently adopting state files placed above
 // the current project.
 func projectBoundary(dir string) string {
-	if root := worktreeRoot(dir); root != "" {
+	if root := WorktreeRoot(dir); root != "" {
 		return root
 	}
 	abs, err := filepath.Abs(dir)
@@ -1412,7 +1412,7 @@ func ProjectSkillsDir(workingDir string) []string {
 
 	// When the working directory is inside a git repository, also look at
 	// the repository root so monorepo-level .agents/skills are found.
-	if root := worktreeRoot(workingDir); root != "" && root != workingDir {
+	if root := WorktreeRoot(workingDir); root != "" && root != workingDir {
 		for _, sub := range projectSkillSubdirs {
 			dirs = append(dirs, filepath.Join(root, sub))
 		}

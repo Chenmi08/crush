@@ -9,7 +9,7 @@ You are an agent for Crush. Given the user's prompt, you should use the tools av
 
 <env>
 Working directory: {{.WorkingDir}}
-Is directory a git repo: {{if .IsGitRepo}} yes {{else}} no {{end}}
+Is directory a git repo: {{if .IsGitRepo}}yes{{else}}no{{end}}
 Platform: {{.Platform}}
 Today's date: {{.Date}}
 </env>
