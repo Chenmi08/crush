@@ -56,7 +56,7 @@ func resolveSymbolResults(ctx context.Context, lspManager *lsp.Manager, symbol, 
 	// (e.g. "Bar" inside "myBar"). The symbol is already QuoteMeta'd
 	// so dots and other regex metacharacters are escaped.
 	pattern := `\b` + regexp.QuoteMeta(symbol) + `\b`
-	matches, _, err := searchFiles(ctx, pattern, workingDir, "", 100)
+	matches, _, err := searchFiles(ctx, grepOptions{pattern: pattern, path: workingDir}, 100)
 	if err != nil {
 		return nil, fmt.Errorf("failed to search for symbol: %w", err)
 	}

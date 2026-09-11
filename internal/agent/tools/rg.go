@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -46,17 +47,32 @@ func getRgCmd(ctx context.Context, globPattern string) *exec.Cmd {
 	return exec.CommandContext(ctx, name, args...)
 }
 
-func getRgSearchCmd(ctx context.Context, pattern, path, include string) *exec.Cmd {
+func getRgSearchCmd(ctx context.Context, opts grepOptions) *exec.Cmd {
 	name := getRg()
 	if name == "" {
 		return nil
 	}
-	// Use -n to show line numbers, -0 for null separation to handle Windows paths
-	args := []string{"--json", "-H", "-n", "-0", pattern}
-	if include != "" {
-		args = append(args, "--glob", include)
-	}
-	args = append(args, path)
+	return exec.CommandContext(ctx, name, rgArgs(opts)...)
+}
 
-	return exec.CommandContext(ctx, name, args...)
+// rgArgs translates a grep request into ripgrep arguments.
+func rgArgs(opts grepOptions) []string {
+	// Use -n to show line numbers, -0 for null separation to handle Windows paths
+	args := []string{"--json", "-H", "-n", "-0"}
+	if opts.ignoreCase {
+		args = append(args, "-i")
+	}
+	if opts.multiline {
+		args = append(args, "-U", "--multiline-dotall")
+	}
+	if opts.context > 0 {
+		args = append(args, "-C", strconv.Itoa(opts.context))
+	}
+	if opts.typeFilter != "" {
+		args = append(args, "--type", opts.typeFilter)
+	}
+	if opts.include != "" {
+		args = append(args, "--glob", opts.include)
+	}
+	return append(args, opts.pattern, opts.path)
 }

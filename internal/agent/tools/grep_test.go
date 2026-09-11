@@ -1,9 +1,13 @@
 package tools
 
 import (
+	"context"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -84,20 +88,11 @@ func TestGrepWithIgnoreFiles(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(tempDir, ".crushignore"), []byte(crushignoreContent), 0o644))
 
 	// Test both implementations
-	for name, fn := range map[string]func(pattern, path, include string) ([]grepMatch, error){
-		"regex": searchFilesWithRegex,
-		"rg": func(pattern, path, include string) ([]grepMatch, error) {
-			return searchWithRipgrep(t.Context(), pattern, path, include)
-		},
-	} {
+	for name, search := range grepBackends() {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			if name == "rg" && getRg() == "" {
-				t.Skip("rg is not in $PATH")
-			}
-
-			matches, err := fn("hello world", tempDir, "")
+			matches, err := search(t.Context(), grepOptions{pattern: "hello world", path: tempDir})
 			require.NoError(t, err)
 
 			// Convert matches to a set of file paths for easier testing
@@ -144,20 +139,11 @@ func TestSearchImplementations(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(tempDir, ".gitignore"), []byte("file4.txt\n"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(tempDir, ".crushignore"), []byte("file5.txt\n"), 0o644))
 
-	for name, fn := range map[string]func(pattern, path, include string) ([]grepMatch, error){
-		"regex": searchFilesWithRegex,
-		"rg": func(pattern, path, include string) ([]grepMatch, error) {
-			return searchWithRipgrep(t.Context(), pattern, path, include)
-		},
-	} {
+	for name, search := range grepBackends() {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			if name == "rg" && getRg() == "" {
-				t.Skip("rg is not in $PATH")
-			}
-
-			matches, err := fn("hello world", tempDir, "")
+			matches, err := search(t.Context(), grepOptions{pattern: "hello world", path: tempDir})
 			require.NoError(t, err)
 
 			require.Equal(t, len(matches), 4)
@@ -400,20 +386,11 @@ func TestMultipleMatchesPerFile(t *testing.T) {
 	content := "Hello world.\nHello.\nHello world.\n"
 	require.NoError(t, os.WriteFile(filepath.Join(tempDir, "file.txt"), []byte(content), 0o644))
 
-	for name, fn := range map[string]func(pattern, path, include string) ([]grepMatch, error){
-		"regex": searchFilesWithRegex,
-		"rg": func(pattern, path, include string) ([]grepMatch, error) {
-			return searchWithRipgrep(t.Context(), pattern, path, include)
-		},
-	} {
+	for name, search := range grepBackends() {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			if name == "rg" && getRg() == "" {
-				t.Skip("rg is not in $PATH")
-			}
-
-			matches, err := fn("world", tempDir, "")
+			matches, err := search(t.Context(), grepOptions{pattern: "world", path: tempDir})
 			require.NoError(t, err)
 			require.Len(t, matches, 2, "should report both matching lines")
 
@@ -432,20 +409,11 @@ func TestColumnMatch(t *testing.T) {
 	t.Parallel()
 
 	// Test both implementations
-	for name, fn := range map[string]func(pattern, path, include string) ([]grepMatch, error){
-		"regex": searchFilesWithRegex,
-		"rg": func(pattern, path, include string) ([]grepMatch, error) {
-			return searchWithRipgrep(t.Context(), pattern, path, include)
-		},
-	} {
+	for name, search := range grepBackends() {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			if name == "rg" && getRg() == "" {
-				t.Skip("rg is not in $PATH")
-			}
-
-			matches, err := fn("THIS", "./testdata/", "")
+			matches, err := search(t.Context(), grepOptions{pattern: "THIS", path: "./testdata/"})
 			require.NoError(t, err)
 			require.Len(t, matches, 1)
 			match := matches[0]
@@ -455,4 +423,234 @@ func TestColumnMatch(t *testing.T) {
 			require.Equal(t, "testdata/grep.txt", filepath.ToSlash(filepath.Clean(match.path)))
 		})
 	}
+}
+
+func TestGrepContext(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	content := "zero\nhit\ntwo\nthree\nfour\nfive\nhit\nseven\neight\n"
+	require.NoError(t, os.WriteFile(filepath.Join(tempDir, "file.txt"), []byte(content), 0o644))
+
+	for name, search := range grepBackends() {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			matches, err := search(t.Context(), grepOptions{pattern: "hit", path: tempDir, context: 1})
+			require.NoError(t, err)
+			require.Len(t, matches, 6)
+
+			lines := make([]int, len(matches))
+			for i, match := range matches {
+				lines[i] = match.lineNum
+			}
+			require.Equal(t, []int{1, 2, 3, 6, 7, 8}, lines)
+
+			// Context lines have no column; match lines do.
+			require.Zero(t, matches[0].charNum)
+			require.Equal(t, 1, matches[1].charNum)
+			require.Zero(t, matches[2].charNum)
+			require.Zero(t, matches[3].charNum)
+			require.Equal(t, 1, matches[4].charNum)
+			require.Zero(t, matches[5].charNum)
+
+			require.Equal(t, "zero", matches[0].lineText)
+			require.Equal(t, "hit", matches[1].lineText)
+			require.Equal(t, "five", matches[3].lineText)
+			require.Equal(t, "seven", matches[5].lineText)
+		})
+	}
+}
+
+func TestGrepContextMergesOverlappingWindows(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(tempDir, "file.txt"), []byte("hit\nhit\ntail\n"), 0o644))
+
+	for name, search := range grepBackends() {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			matches, err := search(t.Context(), grepOptions{pattern: "hit", path: tempDir, context: 1})
+			require.NoError(t, err)
+			require.Len(t, matches, 3)
+
+			lines := make([]int, len(matches))
+			for i, match := range matches {
+				lines[i] = match.lineNum
+			}
+			require.Equal(t, []int{1, 2, 3}, lines)
+			require.Equal(t, 1, matches[0].charNum)
+			require.Equal(t, 1, matches[1].charNum)
+			require.Zero(t, matches[2].charNum)
+		})
+	}
+}
+
+func TestGrepIgnoreCase(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(tempDir, "file.txt"), []byte("Hello World\nhello world\nHELLO WORLD\n"), 0o644))
+
+	for name, search := range grepBackends() {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			matches, err := search(t.Context(), grepOptions{pattern: "hello world", path: tempDir})
+			require.NoError(t, err)
+			require.Len(t, matches, 1)
+
+			matches, err = search(t.Context(), grepOptions{pattern: "hello world", path: tempDir, ignoreCase: true})
+			require.NoError(t, err)
+			require.Len(t, matches, 3)
+		})
+	}
+}
+
+func TestRgArgs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		opts grepOptions
+		want []string
+	}{
+		{
+			name: "plain",
+			opts: grepOptions{pattern: "foo", path: "."},
+			want: []string{"--json", "-H", "-n", "-0", "foo", "."},
+		},
+		{
+			name: "all filters",
+			opts: grepOptions{
+				pattern:    "foo",
+				path:       ".",
+				include:    "*.go",
+				typeFilter: "go",
+				context:    3,
+				ignoreCase: true,
+				multiline:  true,
+			},
+			want: []string{
+				"--json", "-H", "-n", "-0",
+				"-i", "-U", "--multiline-dotall", "-C", "3",
+				"--type", "go", "--glob", "*.go", "foo", ".",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tt.want, rgArgs(tt.opts))
+		})
+	}
+}
+
+func TestParseRipgrepOutput(t *testing.T) {
+	t.Parallel()
+
+	file := filepath.Join(t.TempDir(), "file.go")
+	require.NoError(t, os.WriteFile(file, []byte("first\nsecond\n"), 0o644))
+
+	output := strings.Join([]string{
+		`{"type":"begin","data":{"path":{"text":"` + file + `"}}}`,
+		fmt.Sprintf(`{"type":"context","data":{"path":{"text":%q},"lines":{"text":"first\n"},"line_number":1}}`, file),
+		fmt.Sprintf(`{"type":"match","data":{"path":{"text":%q},"lines":{"text":"second\n"},"line_number":2,"submatches":[{"start":2}]}}`, file),
+		`{"type":"summary","data":{}}`,
+	}, "\n")
+
+	matches := parseRipgrepOutput([]byte(output))
+	require.Len(t, matches, 2)
+
+	require.Equal(t, file, matches[0].path)
+	require.Equal(t, 1, matches[0].lineNum)
+	require.Zero(t, matches[0].charNum, "context lines have no match column")
+	require.Equal(t, "first", matches[0].lineText)
+	require.False(t, matches[0].modTime.IsZero())
+
+	require.Equal(t, file, matches[1].path)
+	require.Equal(t, 2, matches[1].lineNum)
+	require.Equal(t, 3, matches[1].charNum)
+	require.Equal(t, "second", matches[1].lineText)
+}
+
+// TestRipgrepSearch runs the real ripgrep against rgArgs, covering the flags
+// and JSON parsing that the pure-Go fallback cannot exercise.
+func TestRipgrepSearch(t *testing.T) {
+	t.Parallel()
+
+	rg, err := exec.LookPath("rg")
+	if err != nil {
+		t.Skip("rg is not in $PATH")
+	}
+
+	tempDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(tempDir, "file.go"), []byte("package main\n\nneedle()\n}\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(tempDir, "file.txt"), []byte("needle\n"), 0o644))
+
+	run := func(opts grepOptions) []grepMatch {
+		t.Helper()
+		out, err := exec.CommandContext(t.Context(), rg, rgArgs(opts)...).Output()
+		require.NoError(t, err)
+		return parseRipgrepOutput(out)
+	}
+
+	// context and type: only the Go file, with one line of context.
+	matches := run(grepOptions{pattern: "needle", path: tempDir, typeFilter: "go", context: 1})
+	require.Len(t, matches, 3)
+	lines := make([]int, len(matches))
+	for i, match := range matches {
+		lines[i] = match.lineNum
+		require.Equal(t, filepath.Join(tempDir, "file.go"), match.path)
+	}
+	require.Equal(t, []int{2, 3, 4}, lines)
+	require.Zero(t, matches[0].charNum)
+	require.Equal(t, 1, matches[1].charNum)
+	require.Zero(t, matches[2].charNum)
+
+	// multiline: the pattern spans two lines.
+	require.NoError(t, os.WriteFile(filepath.Join(tempDir, "multi.txt"), []byte("foo\nbar\n"), 0o644))
+	matches = run(grepOptions{pattern: `foo\nbar`, path: tempDir, include: "multi.txt", multiline: true})
+	require.Len(t, matches, 1)
+	require.Equal(t, 1, matches[0].lineNum)
+	require.Equal(t, 1, matches[0].charNum)
+
+	// ignore_case.
+	matches = run(grepOptions{pattern: "NEEDLE", path: tempDir, include: "file.txt", ignoreCase: true})
+	require.Len(t, matches, 1)
+}
+
+func TestSearchFilesRequiresRipgrepForTypeAndMultiline(t *testing.T) {
+	t.Parallel()
+	if getRg() != "" {
+		t.Skip("rg is available; fallback not exercised")
+	}
+
+	tempDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(tempDir, "file.go"), []byte("package main"), 0o644))
+
+	for _, opts := range []grepOptions{
+		{pattern: "package", path: tempDir, typeFilter: "go"},
+		{pattern: "package", path: tempDir, multiline: true},
+	} {
+		_, _, err := searchFiles(t.Context(), opts, 100)
+		require.Error(t, err, "%+v should require ripgrep", opts)
+	}
+}
+
+// grepBackends returns each search implementation keyed by name. Ripgrep is
+// omitted when it is not on $PATH.
+func grepBackends() map[string]func(context.Context, grepOptions) ([]grepMatch, error) {
+	backends := map[string]func(context.Context, grepOptions) ([]grepMatch, error){
+		"regex": func(_ context.Context, opts grepOptions) ([]grepMatch, error) {
+			return searchFilesWithRegex(opts)
+		},
+	}
+	if getRg() != "" {
+		backends["rg"] = searchWithRipgrep
+	}
+	return backends
 }
