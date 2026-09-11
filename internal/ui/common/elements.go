@@ -125,59 +125,65 @@ func formatTokensAndCost(t *styles.Styles, tokens, contextWindow int64, cost flo
 }
 
 // formatStepStats renders runtime statistics for the most recent model
-// step: time to first token and generation speed, the prompt cache reads
-// out of the total input tokens with the cache hit rate, and the generated
-// output tokens, e.g. "0.8s · 42.3 tok/s · ↺12.4K/13.5K (92%) · out 1.2K".
-// Longer stats wrap onto separate lines when the sidebar is too narrow.
-// It returns an empty string when there are no stats to show.
+// step as two semantic rows: response timing (time to first token and
+// generation speed) and token accounting (the step's input tokens with
+// the cache hit rate, plus the generated output tokens), e.g.
+// "0.8s · 42.3 tok/s" and "↑15.2K 92.00% · ↓1.2K". The token row always
+// wraps below the timing row; a row that does not fit on a single line
+// splits into one stat per line. It returns an empty string when there
+// are no stats to show.
 func formatStepStats(t *styles.Styles, context *ModelContextInfo, width int) string {
 	stats := context.Stats
 
-	var timing []string
+	var timing, tokens []string
 	if stats.TTFT > 0 {
 		timing = append(timing, formatStepDuration(stats.TTFT))
 	}
 	if stats.TokensPerSecond > 0 {
-		tpsFormat := "%.1f tok/s"
-		if stats.TokensPerSecond >= 100 {
-			tpsFormat = "%.0f tok/s"
-		}
-		tps := fmt.Sprintf(tpsFormat, stats.TokensPerSecond)
-		if context.EstimatedUsage {
-			tps = "~" + tps
-		}
-		timing = append(timing, tps)
+		timing = append(timing, formatTokensPerSecond(stats.TokensPerSecond, context.EstimatedUsage))
+	}
+	if cache := formatCacheStats(stats); cache != "" {
+		tokens = append(tokens, cache)
+	}
+	if output := formatOutputStats(stats, context.EstimatedUsage); output != "" {
+		tokens = append(tokens, output)
 	}
 
-	timingLine := strings.Join(timing, " · ")
-	cacheLine := formatCacheStats(stats)
-	outputLine := formatOutputStats(stats, context.EstimatedUsage)
-
-	if timingLine == "" && cacheLine == "" && outputLine == "" {
+	if len(timing) == 0 && len(tokens) == 0 {
 		return ""
 	}
 
 	// ModelInfo pads the stats block by two columns.
 	available := width - 2
 
-	// Prefer a single line, then the timing and output with the cache
-	// details underneath, then one stat per line.
-	single := joinStatLines(timingLine, cacheLine, outputLine)
-	if lipgloss.Width(single) <= available {
-		return renderStatLines(t, single)
-	}
-
-	timingAndOutput := joinStatLines(timingLine, outputLine)
-	if timingLine != "" && outputLine != "" && lipgloss.Width(timingAndOutput) <= available {
-		if cacheLine == "" {
-			return renderStatLines(t, timingAndOutput)
+	// Timing and token accounting never share a line; a row that does
+	// not fit splits into one stat per line.
+	var lines []string
+	for _, group := range [][]string{timing, tokens} {
+		if len(group) == 0 {
+			continue
 		}
-		if lipgloss.Width(cacheLine) <= available {
-			return renderStatLines(t, timingAndOutput, cacheLine)
+		if line := joinStatLines(group...); lipgloss.Width(line) <= available {
+			lines = append(lines, line)
+			continue
 		}
+		lines = append(lines, group...)
 	}
+	return renderStatLines(t, lines...)
+}
 
-	return renderStatLines(t, timingLine, cacheLine, outputLine)
+// formatTokensPerSecond formats the generation speed, prefixing estimated
+// values with a tilde, e.g. "42.3 tok/s" or "~10.0 tok/s".
+func formatTokensPerSecond(tps float64, estimated bool) string {
+	tpsFormat := "%.1f tok/s"
+	if tps >= 100 {
+		tpsFormat = "%.0f tok/s"
+	}
+	formatted := fmt.Sprintf(tpsFormat, tps)
+	if estimated {
+		formatted = "~" + formatted
+	}
+	return formatted
 }
 
 // renderStatLines styles each stat line individually and stacks them.
@@ -204,25 +210,24 @@ func joinStatLines(parts ...string) string {
 	return strings.Join(nonEmpty, " · ")
 }
 
-// formatCacheStats renders the cache read tokens out of the step's total
-// input tokens with the cache hit rate, e.g. "↺12.4K/13.5K (92%)". The
-// total input and the hit rate are omitted when unknown. It returns an
-// empty string when nothing was served from the cache.
+// formatCacheStats renders the step's input tokens with an upward arrow
+// and the cache hit rate, e.g. "↑15.2K 99.00%". The hit rate is omitted
+// when unknown. It returns an empty string when no tokens were served
+// from the cache or the input total is unknown.
 func formatCacheStats(stats session.StepStats) string {
-	if stats.CacheReadTokens == 0 {
+	if stats.CacheReadTokens == 0 || stats.TotalPromptTokens == 0 {
 		return ""
 	}
-	cache := fmt.Sprintf("↺%s", formatTokenCount(stats.CacheReadTokens))
-	if stats.TotalPromptTokens > 0 {
-		cache += fmt.Sprintf("/%s", formatTokenCount(stats.TotalPromptTokens))
-	}
+	cache := fmt.Sprintf("↑%s", formatTokenCount(stats.TotalPromptTokens))
 	if stats.CacheHitRate > 0 {
-		cache += fmt.Sprintf(" (%d%%)", int(stats.CacheHitRate*100+0.5))
+		cache += fmt.Sprintf(" %.2f%%", stats.CacheHitRate*100)
 	}
 	return cache
 }
 
-// formatOutputStats renders the generated output token count.
+// formatOutputStats renders the generated output token count with a
+// downward arrow, e.g. "↓1.2K", pairing it with the upward arrow used
+// for the cache reads beside it.
 func formatOutputStats(stats session.StepStats, estimated bool) string {
 	if stats.OutputTokens == 0 {
 		return ""
@@ -231,7 +236,7 @@ func formatOutputStats(stats session.StepStats, estimated bool) string {
 	if estimated {
 		tokens = "~" + tokens
 	}
-	return fmt.Sprintf("out %s", tokens)
+	return "↓" + tokens
 }
 
 // formatStepDuration formats a model step duration compactly for the
