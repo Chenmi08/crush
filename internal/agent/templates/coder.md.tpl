@@ -2,12 +2,11 @@ You are a helpful software engineer assistant.
 
 <env>
 Working directory: {{.WorkingDir}}
-Is directory a git repo: {{if .IsGitRepo}}yes{{else}}no{{end}}
 Platform: {{.Platform}}
 Today's date: {{.Date}}
 {{if .GitStatus}}
 
-Git status (snapshot at conversation start - may be outdated):
+Git snapshot (taken at agent startup, may be outdated; run `git status` for current state):
 {{.GitStatus}}
 {{end}}
 </env>

@@ -232,9 +232,9 @@ func (p *Prompt) promptData(ctx context.Context, provider, model string, store *
 	return data, nil
 }
 
+// isGitRepo reports whether dir is inside a git working tree.
 func isGitRepo(dir string) bool {
-	_, err := os.Stat(filepath.Join(dir, ".git"))
-	return err == nil
+	return config.WorktreeRoot(dir) != ""
 }
 
 func getGitStatus(ctx context.Context, dir string) (string, error) {
@@ -269,7 +269,7 @@ func getGitBranch(ctx context.Context, sh *shell.Shell) (string, error) {
 }
 
 func getGitStatusSummary(ctx context.Context, sh *shell.Shell) (string, error) {
-	out, _, err := sh.Exec(ctx, "git status --short 2>/dev/null | head -20")
+	out, _, err := sh.Exec(ctx, "git status --short 2>/dev/null")
 	if err != nil {
 		return "", nil
 	}
@@ -277,7 +277,32 @@ func getGitStatusSummary(ctx context.Context, sh *shell.Shell) (string, error) {
 	if out == "" {
 		return "Status: clean\n", nil
 	}
-	return fmt.Sprintf("Status:\n%s\n", out), nil
+
+	const maxShown = 5
+	entries := strings.Split(out, "\n")
+	shown := entries
+	more := 0
+	if len(entries) > maxShown {
+		shown = entries[:maxShown]
+		more = len(entries) - maxShown
+	}
+
+	unit := "paths"
+	if len(entries) == 1 {
+		unit = "path"
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Status: %d %s changed", len(entries), unit)
+	if more > 0 {
+		fmt.Fprintf(&sb, " (first %d shown)", maxShown)
+	}
+	sb.WriteString(":\n")
+	sb.WriteString(strings.Join(shown, "\n"))
+	if more > 0 {
+		fmt.Fprintf(&sb, "\n... and %d more", more)
+	}
+	sb.WriteString("\n")
+	return sb.String(), nil
 }
 
 func getGitRecentCommits(ctx context.Context, sh *shell.Shell) (string, error) {
