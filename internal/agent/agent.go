@@ -787,6 +787,17 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	startTime := time.Now()
 	a.eventPromptSent(call.SessionID)
 
+	// Per-step timestamps for the sidebar TTFT/TPS stats. The stream
+	// callbacks fire in order on the stream goroutine, so plain locals
+	// are safe.
+	var stepStart, firstTokenAt, streamEnd time.Time
+	var streamUsage fantasy.Usage
+	markFirstToken := func() {
+		if firstTokenAt.IsZero() {
+			firstTokenAt = time.Now()
+		}
+	}
+
 	var stepMessages []fantasy.Message
 	var shouldSummarize bool
 	sanitizedToolCalls := make(map[string]bool)
@@ -808,6 +819,13 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 		TopK:             call.TopK,
 		FrequencyPenalty: call.FrequencyPenalty,
 		PrepareStep: func(callContext context.Context, options fantasy.PrepareStepFunctionOptions) (_ context.Context, prepared fantasy.PrepareStepResult, err error) {
+			// Reset the per-step timing window for the request that is
+			// about to start.
+			stepStart = time.Now()
+			firstTokenAt = time.Time{}
+			streamEnd = time.Time{}
+			streamUsage = fantasy.Usage{}
+
 			prepared.Messages = options.Messages
 			for i := range prepared.Messages {
 				prepared.Messages[i].ProviderOptions = nil
@@ -880,10 +898,12 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			return callContext, prepared, err
 		},
 		OnReasoningStart: func(id string, reasoning fantasy.ReasoningContent) error {
+			markFirstToken()
 			currentAssistant.AppendReasoningContent(reasoning.Text)
 			return a.messages.Update(genCtx, *currentAssistant)
 		},
 		OnReasoningDelta: func(id string, text string) error {
+			markFirstToken()
 			currentAssistant.AppendReasoningContent(text)
 			return a.messages.Update(genCtx, *currentAssistant)
 		},
@@ -908,6 +928,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			return a.messages.Update(genCtx, *currentAssistant)
 		},
 		OnTextDelta: func(id string, text string) error {
+			markFirstToken()
 			// Strip leading newline from initial text content. This is is
 			// particularly important in non-interactive mode where leading
 			// newlines are very visible.
@@ -919,6 +940,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			return a.messages.Update(genCtx, *currentAssistant)
 		},
 		OnToolInputStart: func(id string, toolName string) error {
+			markFirstToken()
 			toolCall := message.ToolCall{
 				ID:               id,
 				Name:             toolName,
@@ -932,6 +954,11 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 		},
 		OnRetry: func(err *fantasy.ProviderError, delay time.Duration) {
 			slog.Warn("Provider request failed, retrying", providerRetryLogFields(err, delay)...)
+			// Restart the timing window for the retried attempt, skipping
+			// the backoff delay so TTFT reflects provider latency.
+			stepStart = time.Now().Add(delay)
+			firstTokenAt = time.Time{}
+			streamEnd = time.Time{}
 			// Reset streamed content so the retried response doesn't
 			// concatenate with partial content from the failed attempt.
 			// On the final attempt (no more retries), any partial content
@@ -940,6 +967,14 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			if updateErr := a.messages.Update(genCtx, *currentAssistant); updateErr != nil {
 				slog.Error("Failed to reset message on retry", "error", updateErr)
 			}
+		},
+		OnStreamFinish: func(usage fantasy.Usage, _ fantasy.FinishReason, _ fantasy.ProviderMetadata) error {
+			// Freeze the generation window at stream finish. Step finish
+			// fires only after tool execution, which must not count
+			// towards tokens per second.
+			streamEnd = time.Now()
+			streamUsage = usage
+			return nil
 		},
 		OnAuthRefresh: call.OnAuthRefresh,
 		ModelProvider: func() fantasy.LanguageModel {
@@ -950,6 +985,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			return m.Model
 		},
 		OnToolCall: func(tc fantasy.ToolCallContent) error {
+			markFirstToken()
 			input, wasSanitized := sanitizeToolInput(tc.ToolName, tc.ToolCallID, tc.Input)
 			if wasSanitized {
 				sanitizedToolCalls[tc.ToolCallID] = true
@@ -1030,6 +1066,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			}
 			usage, estimated := fallbackStepUsage(stepMessages, stepResult)
 			a.updateSessionUsage(largeModel, &updatedSession, usage, a.openrouterCost(stepResult.ProviderMetadata), estimated)
+			updatedSession.Stats = computeStepStats(stepStart, firstTokenAt, streamEnd, streamUsage, usage)
 			extractHyperCredits(stepResult.ProviderMetadata)
 			_, sessionErr := a.sessions.Save(ctx, updatedSession)
 			if sessionErr != nil {
