@@ -52,6 +52,7 @@ func (m *UI) modelInfo(width int) string {
 			ModelContext:   model.CatwalkCfg.ContextWindow,
 			EstimatedUsage: m.session.EstimatedUsage,
 			Stats:          m.session.Stats,
+			Totals:         m.session.Totals,
 		}
 	}
 	var modelName string

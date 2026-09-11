@@ -184,6 +184,95 @@ func TestFormatStepStatsOmitsMissingValues(t *testing.T) {
 	require.Equal(t, "75ms", actual)
 }
 
+func TestFormatStepStatsAppendsSessionTotals(t *testing.T) {
+	t.Parallel()
+
+	sty := styles.CharmtonePantera()
+	ctx := &ModelContextInfo{
+		Stats: session.StepStats{
+			TTFT:              800 * time.Millisecond,
+			TokensPerSecond:   42.3,
+			CacheReadTokens:   12_400,
+			TotalPromptTokens: 13_500,
+			CacheHitRate:      0.92,
+			OutputTokens:      1200,
+		},
+		Totals: session.SessionTokens{
+			InputTokens:         20_000,
+			OutputTokens:        45_600,
+			CacheReadTokens:     1_200_000,
+			CacheCreationTokens: 10_000,
+		},
+	}
+
+	actual := ansi.Strip(formatStepStats(&sty, ctx, 60))
+
+	require.Equal(t, "0.8s · 42.3 tok/s\n↑13.5K 92.00% · ↓1.2K\nΣ ↑1.2M 97.56% · ↓45.6K", actual)
+}
+
+func TestFormatStepStatsSplitsSessionTotalsWhenNarrow(t *testing.T) {
+	t.Parallel()
+
+	sty := styles.CharmtonePantera()
+	ctx := &ModelContextInfo{
+		Stats: session.StepStats{
+			TTFT:              800 * time.Millisecond,
+			TokensPerSecond:   42.3,
+			CacheReadTokens:   12_400,
+			TotalPromptTokens: 13_500,
+			CacheHitRate:      0.92,
+			OutputTokens:      1200,
+		},
+		Totals: session.SessionTokens{
+			InputTokens:     20_000,
+			OutputTokens:    45_600,
+			CacheReadTokens: 1_200_000,
+		},
+	}
+
+	// Width 20 leaves 18 columns, so both token rows split into one
+	// stat per line.
+	actual := ansi.Strip(formatStepStats(&sty, ctx, 20))
+
+	require.Equal(t, "0.8s · 42.3 tok/s\n↑13.5K 92.00%\n↓1.2K\nΣ ↑1.2M 98.36%\n↓45.6K", actual)
+}
+
+func TestFormatStepStatsSessionTotalsOnly(t *testing.T) {
+	t.Parallel()
+
+	sty := styles.CharmtonePantera()
+
+	// Session totals can outlive the runtime step stats (for example
+	// after a restart), so they render on their own.
+	actual := ansi.Strip(formatStepStats(&sty, &ModelContextInfo{
+		Totals: session.SessionTokens{
+			InputTokens:     100,
+			OutputTokens:    50,
+			CacheReadTokens: 900,
+		},
+	}, 60))
+
+	require.Equal(t, "Σ ↑1K 90.00% · ↓50", actual)
+}
+
+func TestFormatSessionTotals(t *testing.T) {
+	t.Parallel()
+
+	// The hit rate is omitted when nothing was served from the cache,
+	// but the total prompt count still shows.
+	parts := formatSessionTotals(session.SessionTokens{
+		InputTokens:  1200,
+		OutputTokens: 300,
+	}, false)
+	require.Equal(t, []string{"Σ ↑1.2K", "↓300"}, parts)
+
+	// Estimated output is marked with a tilde.
+	parts = formatSessionTotals(session.SessionTokens{OutputTokens: 1200}, true)
+	require.Equal(t, []string{"↓~1.2K"}, parts)
+
+	require.Empty(t, formatSessionTotals(session.SessionTokens{}, false))
+}
+
 func TestModelInfoRendersStepStats(t *testing.T) {
 	t.Parallel()
 
@@ -205,4 +294,21 @@ func TestModelInfoRendersStepStats(t *testing.T) {
 	require.Contains(t, rendered, "0.8s · 42.3 tok/s")
 	require.Contains(t, rendered, "↑13.5K 92.00% · ↓1.2K")
 	require.NotContains(t, rendered, "0.8s · 42.3 tok/s · ↑")
+}
+
+func TestModelInfoRendersSessionTotals(t *testing.T) {
+	t.Parallel()
+
+	sty := styles.CharmtonePantera()
+	rendered := ansi.Strip(ModelInfo(&sty, "model", "", "", &ModelContextInfo{
+		ContextUsed:  120,
+		ModelContext: 1000,
+		Totals: session.SessionTokens{
+			InputTokens:     1000,
+			OutputTokens:    2000,
+			CacheReadTokens: 9000,
+		},
+	}, 80, nil))
+
+	require.Contains(t, rendered, "Σ ↑10K 90.00% · ↓2K")
 }
