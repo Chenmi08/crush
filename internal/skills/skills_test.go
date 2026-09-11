@@ -278,6 +278,44 @@ description: Name doesn't match directory.
 	require.True(t, names["skill-two"])
 }
 
+func TestDiscoverWithStatesCarriesInvocationFlags(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+
+	userOnlyDir := filepath.Join(tmpDir, "user-only")
+	require.NoError(t, os.MkdirAll(userOnlyDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(userOnlyDir, "SKILL.md"), []byte(`---
+name: user-only
+description: Only the user can invoke this skill.
+user-invocable: true
+disable-model-invocation: true
+---
+`), 0o644))
+
+	bothDir := filepath.Join(tmpDir, "both")
+	require.NoError(t, os.MkdirAll(bothDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(bothDir, "SKILL.md"), []byte(`---
+name: both
+description: Both the user and the model can invoke this skill.
+user-invocable: true
+---
+`), 0o644))
+
+	_, states := DiscoverWithStates([]string{tmpDir})
+	require.Len(t, states, 2)
+
+	byName := make(map[string]*SkillState, len(states))
+	for _, state := range states {
+		byName[state.Name] = state
+	}
+
+	require.True(t, byName["user-only"].UserInvocable)
+	require.True(t, byName["user-only"].DisableModelInvocation)
+	require.True(t, byName["both"].UserInvocable)
+	require.False(t, byName["both"].DisableModelInvocation)
+}
+
 func TestDiscoverEmptyDir(t *testing.T) {
 	t.Parallel()
 

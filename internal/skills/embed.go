@@ -65,13 +65,13 @@ func DiscoverBuiltinWithStates() ([]*Skill, []*SkillState) {
 
 		if err := skill.Validate(); err != nil {
 			slog.Warn("Builtin skill validation failed", "path", path, "error", err)
-			states = append(states, &SkillState{Name: skill.Name, Path: path, State: StateError, Err: err})
+			states = append(states, skill.state(path, StateError, err))
 			return nil
 		}
 
 		slog.Debug("Successfully loaded builtin skill", "name", skill.Name, "path", skill.SkillFilePath)
 		discovered = append(discovered, skill)
-		states = append(states, &SkillState{Name: skill.Name, Path: skill.SkillFilePath, State: StateNormal})
+		states = append(states, skill.state(skill.SkillFilePath, StateNormal, nil))
 		return nil
 	})
 

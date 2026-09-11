@@ -543,15 +543,7 @@ func skillStatesToProto(states []*skills.SkillState) []proto.SkillState {
 	}
 	out := make([]proto.SkillState, len(states))
 	for i, s := range states {
-		entry := proto.SkillState{
-			Name:  s.Name,
-			Path:  s.Path,
-			State: proto.SkillDiscoveryState(s.State),
-		}
-		if s.Err != nil {
-			entry.Error = s.Err.Error()
-		}
-		out[i] = entry
+		out[i] = proto.SkillStateFromSkills(s)
 	}
 	return out
 }

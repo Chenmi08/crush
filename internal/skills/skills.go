@@ -60,11 +60,28 @@ const (
 )
 
 // SkillState represents the latest discovery status of a skill file.
+// Invocation flags are copied from the parsed Skill so UI clients can
+// report which trigger paths (user command, model invocation) are
+// available without re-reading the source file.
 type SkillState struct {
-	Name  string
-	Path  string
-	State DiscoveryState
-	Err   error
+	Name                   string
+	Path                   string
+	State                  DiscoveryState
+	Err                    error
+	UserInvocable          bool
+	DisableModelInvocation bool
+}
+
+// state snapshots the skill's discovery state for the given path.
+func (s *Skill) state(path string, state DiscoveryState, err error) *SkillState {
+	return &SkillState{
+		Name:                   s.Name,
+		Path:                   path,
+		State:                  state,
+		Err:                    err,
+		UserInvocable:          s.UserInvocable,
+		DisableModelInvocation: s.DisableModelInvocation,
+	}
 }
 
 // Event is published when skill discovery completes.
@@ -223,14 +240,9 @@ func DiscoverWithStates(paths []string) ([]*Skill, []*SkillState) {
 	var states []*SkillState
 	var mu sync.Mutex
 	seen := make(map[string]bool)
-	addState := func(name, path string, state DiscoveryState, err error) {
+	addState := func(state *SkillState) {
 		mu.Lock()
-		states = append(states, &SkillState{
-			Name:  name,
-			Path:  path,
-			State: state,
-			Err:   err,
-		})
+		states = append(states, state)
 		mu.Unlock()
 	}
 
@@ -246,7 +258,7 @@ func DiscoverWithStates(paths []string) ([]*Skill, []*SkillState) {
 		err := fastwalk.Walk(&conf, base, func(path string, d os.DirEntry, err error) error {
 			if err != nil {
 				slog.Warn("Failed to walk skills path entry", "base", base, "path", path, "error", err)
-				addState("", path, StateError, err)
+				addState(&SkillState{Path: path, State: StateError, Err: err})
 				return nil
 			}
 			if d.IsDir() || d.Name() != SkillFileName {
@@ -262,19 +274,19 @@ func DiscoverWithStates(paths []string) ([]*Skill, []*SkillState) {
 			skill, err := Parse(path)
 			if err != nil {
 				slog.Warn("Failed to parse skill file", "path", path, "error", err)
-				addState("", path, StateError, err)
+				addState(&SkillState{Path: path, State: StateError, Err: err})
 				return nil
 			}
 			if err := skill.Validate(); err != nil {
 				slog.Warn("Skill validation failed", "path", path, "error", err)
-				addState(skill.Name, path, StateError, err)
+				addState(skill.state(path, StateError, err))
 				return nil
 			}
 			slog.Debug("Successfully loaded skill", "name", skill.Name, "path", path)
 			mu.Lock()
 			skills = append(skills, skill)
 			mu.Unlock()
-			addState(skill.Name, path, StateNormal, nil)
+			addState(skill.state(path, StateNormal, nil))
 			return nil
 		})
 		if err != nil && !os.IsNotExist(err) {
