@@ -110,11 +110,17 @@ type ProviderConfig struct {
 
 	// Extra headers to send with each request to the provider. Values
 	// run through shell expansion at config-load time, so $VAR and
-	// $(cmd) work the same way they do in MCP headers. A header whose
-	// value resolves to the empty string (unset bare $VAR under
-	// lenient nounset, $(echo), or literal "") is omitted from the
-	// outgoing request rather than sent as "Header:".
+	// $(cmd) work the same way they do in MCP headers. The runtime
+	// variables ${CRUSH_SESSION_ID}, ${CRUSH_SESSION_HASH},
+	// ${CRUSH_MESSAGE_ID}, and ${CRUSH_PROJECT_ID} are resolved per
+	// request instead. A header whose value resolves to the empty
+	// string (unset bare $VAR under lenient nounset, $(echo), or
+	// literal "") is omitted from the outgoing request rather than
+	// sent as "Header:".
 	ExtraHeaders map[string]string `json:"extra_headers,omitempty" jsonschema:"description=Additional HTTP headers to send with requests"`
+	// RuntimeHeaders are extra headers whose values reference runtime
+	// variables; they are resolved per request.
+	RuntimeHeaders map[string]string `json:"-"`
 	// ExtraBody is merged verbatim into OpenAI-compatible request
 	// bodies. String values are NOT shell-expanded: this is a plain
 	// JSON passthrough so that arbitrary provider-extension fields

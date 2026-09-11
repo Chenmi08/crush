@@ -372,6 +372,23 @@ Supported constructs: `$VAR`, `${VAR}`, `${VAR:-default}`, `${VAR:+alt}`,
 `$(command)` is a hard error. A header that resolves to empty is dropped from
 the request.
 
+Provider `extra_headers` values may additionally reference the runtime
+variables `${CRUSH_SESSION_ID}`, `${CRUSH_SESSION_HASH}`,
+`${CRUSH_MESSAGE_ID}`, and `${CRUSH_PROJECT_ID}`. These are resolved per
+request instead of at load time, which makes them usable for headers that
+need to identify the current session, for example:
+
+```json
+"extra_headers": {
+  "x-session-id": "${CRUSH_SESSION_ID}",
+  "x-request-id": "${CRUSH_MESSAGE_ID}"
+}
+```
+
+`${CRUSH_MESSAGE_ID}` is empty for requests that are not tied to a user
+message (summarization and title generation), so a header that only uses it
+is omitted there.
+
 ### Security note
 
 Both formats are trusted code. `crushrc` runs entirely, and any `$(...)` in

@@ -952,16 +952,25 @@ func (c *coordinator) buildAgentModels(ctx context.Context, isSubAgent bool) (Mo
 	largeModel = newRequestTimeoutModel(largeModel, requestTimeout)
 	smallModel = newRequestTimeoutModel(smallModel, requestTimeout)
 
+	projectID := ""
+	if wd := c.cfg.WorkingDir(); wd != "" {
+		projectID = session.HashID(wd)
+	}
+
 	return Model{
-			Model:      largeModel,
-			CatwalkCfg: *largeCatwalkModel,
-			ModelCfg:   largeModelCfg,
-			FlatRate:   largeProviderCfg.FlatRate,
+			Model:          largeModel,
+			CatwalkCfg:     *largeCatwalkModel,
+			ModelCfg:       largeModelCfg,
+			FlatRate:       largeProviderCfg.FlatRate,
+			RuntimeHeaders: largeProviderCfg.RuntimeHeaders,
+			ProjectID:      projectID,
 		}, Model{
-			Model:      smallModel,
-			CatwalkCfg: *smallCatwalkModel,
-			ModelCfg:   smallModelCfg,
-			FlatRate:   smallProviderCfg.FlatRate,
+			Model:          smallModel,
+			CatwalkCfg:     *smallCatwalkModel,
+			ModelCfg:       smallModelCfg,
+			FlatRate:       smallProviderCfg.FlatRate,
+			RuntimeHeaders: smallProviderCfg.RuntimeHeaders,
+			ProjectID:      projectID,
 		}, nil
 }
 

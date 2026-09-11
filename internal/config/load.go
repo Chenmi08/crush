@@ -275,16 +275,9 @@ func (c *Config) configureProviders(ctx context.Context, store *ConfigStore, env
 		// message, and a header that resolves to the empty string
 		// (unset bare $VAR under lenient nounset, $(echo), or literal
 		// "") is dropped from the outgoing request.
-		for k, v := range headers {
-			resolved, err := resolver.ResolveValue(v)
-			if err != nil {
-				return fmt.Errorf("resolving provider %s header %q: %w", p.ID, k, err)
-			}
-			if resolved == "" {
-				delete(headers, k)
-				continue
-			}
-			headers[k] = resolved
+		headers, runtimeHeaders, err := resolveProviderHeaders(headers, resolver, string(p.ID))
+		if err != nil {
+			return err
 		}
 		// Start from user config so all user fields survive without
 		// explicit copying. Overlay catwalk identity/endpoint fields
@@ -298,6 +291,7 @@ func (c *Config) configureProviders(ctx context.Context, store *ConfigStore, env
 		prepared.Type = p.Type
 		prepared.Models = p.Models
 		prepared.ExtraHeaders = headers
+		prepared.RuntimeHeaders = runtimeHeaders
 		if prepared.ExtraParams == nil {
 			prepared.ExtraParams = make(map[string]string)
 		}
@@ -492,17 +486,12 @@ func (c *Config) configureProviders(ctx context.Context, store *ConfigStore, env
 
 		// Custom-provider headers share the MCP error contract; see
 		// the known-provider loop above.
-		for k, v := range providerConfig.ExtraHeaders {
-			resolved, err := resolver.ResolveValue(v)
-			if err != nil {
-				return fmt.Errorf("resolving provider %s header %q: %w", id, k, err)
-			}
-			if resolved == "" {
-				delete(providerConfig.ExtraHeaders, k)
-				continue
-			}
-			providerConfig.ExtraHeaders[k] = resolved
+		extraHeaders, runtimeHeaders, err := resolveProviderHeaders(providerConfig.ExtraHeaders, resolver, id)
+		if err != nil {
+			return err
 		}
+		providerConfig.ExtraHeaders = extraHeaders
+		providerConfig.RuntimeHeaders = runtimeHeaders
 
 		c.Providers.Set(id, providerConfig)
 	}
@@ -512,6 +501,30 @@ func (c *Config) configureProviders(ctx context.Context, store *ConfigStore, env
 	}
 
 	return nil
+}
+
+// resolveProviderHeaders expands provider header values. Values that
+// reference runtime variables are kept separate so they can be expanded
+// per request. A value that resolves to the empty string is dropped.
+func resolveProviderHeaders(headers map[string]string, resolver VariableResolver, providerID string) (map[string]string, map[string]string, error) {
+	static := make(map[string]string)
+	runtimeHeaders := make(map[string]string)
+	for k, v := range headers {
+		protected, isRuntime := protectRuntimeVars(v)
+		resolved, err := resolver.ResolveValue(protected)
+		if err != nil {
+			return nil, nil, fmt.Errorf("resolving provider %s header %q: %w", providerID, k, err)
+		}
+		if resolved == "" {
+			continue
+		}
+		if isRuntime {
+			runtimeHeaders[k] = resolved
+		} else {
+			static[k] = resolved
+		}
+	}
+	return static, runtimeHeaders, nil
 }
 
 // applyEnv sets top-level env vars from the config. Keys are sorted for
