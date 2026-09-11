@@ -2354,6 +2354,50 @@ func TestConfig_configureProviders_LiteralEmptyHeaderDropped(t *testing.T) {
 	require.Equal(t, "present", pc.ExtraHeaders["X-Kept"])
 }
 
+// TestConfig_configureProviders_RuntimeHeaders verifies that values
+// referencing runtime variables are kept out of ExtraHeaders and stored
+// for per-request expansion instead.
+func TestConfig_configureProviders_RuntimeHeaders(t *testing.T) {
+	knownProviders := []catwalk.Provider{
+		{
+			ID:          "opencode-zen",
+			APIKey:      "$OPENCODE_API_KEY",
+			APIEndpoint: "https://opencode.ai/zen/v1",
+			Models:      []catwalk.Model{{ID: "test-model"}},
+		},
+	}
+
+	cfg := &Config{
+		Providers: csync.NewMapFrom(map[string]ProviderConfig{
+			"opencode-zen": {
+				ExtraHeaders: map[string]string{
+					"x-opencode-client":  "crush",
+					"x-opencode-session": "${CRUSH_SESSION_ID}",
+					"x-opencode-request": "req-$CRUSH_MESSAGE_ID",
+				},
+			},
+		}),
+	}
+	cfg.setDefaults("/tmp", "")
+
+	testEnv := env.NewFromMap(map[string]string{
+		"OPENCODE_API_KEY": "test-key",
+		"PATH":             os.Getenv("PATH"),
+	})
+	resolver := NewShellVariableResolver(testEnv)
+
+	err := cfg.configureProviders(context.Background(), testStore(cfg), testEnv, resolver, knownProviders)
+	require.NoError(t, err)
+
+	pc, ok := cfg.Providers.Get("opencode-zen")
+	require.True(t, ok)
+	require.Equal(t, "crush", pc.ExtraHeaders["x-opencode-client"])
+	_, present := pc.ExtraHeaders["x-opencode-session"]
+	require.False(t, present, "runtime header must not stay in ExtraHeaders")
+	require.Equal(t, "{{CRUSH_SESSION_ID}}", pc.RuntimeHeaders["x-opencode-session"])
+	require.Equal(t, "req-{{CRUSH_MESSAGE_ID}}", pc.RuntimeHeaders["x-opencode-request"])
+}
+
 // TestConfig_configureProviders_EchoEmptyHeaderDropped pins design
 // decision #18 for the non-failing empty case: $(echo) exits 0 with
 // empty output, resolves cleanly to "", and must be dropped the same

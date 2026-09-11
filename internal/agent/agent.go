@@ -151,10 +151,12 @@ type SessionAgent interface {
 }
 
 type Model struct {
-	Model      fantasy.LanguageModel
-	CatwalkCfg catwalk.Model
-	ModelCfg   config.SelectedModel
-	FlatRate   bool
+	Model          fantasy.LanguageModel
+	CatwalkCfg     catwalk.Model
+	ModelCfg       config.SelectedModel
+	FlatRate       bool
+	RuntimeHeaders map[string]string
+	ProjectID      string
 }
 
 // activeCancel wraps a context.CancelFunc with a unique pointer identity.
@@ -710,7 +712,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	}
 
 	// Add the user message to the session.
-	_, err = a.createUserMessage(ctx, call)
+	userMsg, err := a.createUserMessage(ctx, call)
 	if err != nil {
 		return nil, err
 	}
@@ -797,7 +799,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 		Prompt:           message.PromptWithTextAttachments(call.Prompt, call.Attachments),
 		Files:            files,
 		Messages:         history,
-		Headers:          sessionHeaders(call.SessionID),
+		Headers:          sessionHeaders(largeModel, call.SessionID, userMsg.ID),
 		ProviderOptions:  call.ProviderOptions,
 		MaxOutputTokens:  maxOutputTokens,
 		TopP:             call.TopP,
@@ -1388,7 +1390,7 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 	resp, err := agent.Stream(genCtx, fantasy.AgentStreamCall{
 		Prompt:          summaryPromptText,
 		Messages:        aiMsgs,
-		Headers:         sessionHeaders(sessionID),
+		Headers:         sessionHeaders(largeModel, sessionID, ""),
 		ProviderOptions: opts,
 		OnAuthRefresh:   onAuthRefresh,
 		ModelProvider: func() fantasy.LanguageModel {
@@ -1501,17 +1503,24 @@ func (a *sessionAgent) getCacheControlOptions() fantasy.ProviderOptions {
 	}
 }
 
-// sessionHeaders returns the HTTP headers we use for cache affinity on
-// every LLM request for a given session.
-//
-// We use the session hash is used instead of the raw UUID so the header
-// value is deterministic and opaque.
-func sessionHeaders(sessionID string) map[string]string {
+// sessionHeaders returns the HTTP headers we use for cache affinity and
+// per-request runtime variables on every LLM request for a given session.
+func sessionHeaders(model Model, sessionID, messageID string) map[string]string {
 	hash := session.HashID(sessionID)
-	return map[string]string{
+	headers := map[string]string{
 		"x-session-id":       hash,
 		"x-session-affinity": hash,
 	}
+	vars := map[string]string{
+		config.RuntimeVarSessionID:   sessionID,
+		config.RuntimeVarSessionHash: hash,
+		config.RuntimeVarMessageID:   messageID,
+		config.RuntimeVarProjectID:   model.ProjectID,
+	}
+	for k, v := range config.ExpandRuntimeHeaders(model.RuntimeHeaders, vars) {
+		headers[k] = v
+	}
+	return headers
 }
 
 func (a *sessionAgent) createUserMessage(ctx context.Context, call SessionAgentCall) (message.Message, error) {
@@ -1758,8 +1767,7 @@ func (a *sessionAgent) GenerateTitle(ctx context.Context, sessionID string, user
 	}
 
 	streamCall := fantasy.AgentStreamCall{
-		Prompt:  fmt.Sprintf("Generate a concise title for the following content:\n\n%s\n <think>\n\n</think>", userPrompt),
-		Headers: sessionHeaders(sessionID),
+		Prompt: fmt.Sprintf("Generate a concise title for the following content:\n\n%s\n <think>\n\n</think>", userPrompt),
 		PrepareStep: func(callCtx context.Context, opts fantasy.PrepareStepFunctionOptions) (_ context.Context, prepared fantasy.PrepareStepResult, err error) {
 			prepared.Messages = opts.Messages
 			if systemPromptPrefix != "" {
@@ -1789,6 +1797,7 @@ func (a *sessionAgent) GenerateTitle(ctx context.Context, sessionID string, user
 		if attempt.model.CatwalkCfg.CanReason {
 			tok = attempt.model.CatwalkCfg.DefaultMaxTokens
 		}
+		streamCall.Headers = sessionHeaders(attempt.model, sessionID, "")
 		agent := newAgent(attempt.model.Model, titlePrompt, tok)
 		resp, err = agent.Stream(ctx, streamCall)
 		if err == nil && resp.Response.FinishReason != fantasy.FinishReasonLength {
