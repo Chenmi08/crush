@@ -41,6 +41,8 @@ type ModelContextInfo struct {
 	EstimatedUsage bool
 	// Stats holds runtime statistics for the most recent model step.
 	Stats session.StepStats
+	// Totals holds cumulative token usage for the whole session.
+	Totals session.SessionTokens
 }
 
 // ModelInfo renders model information including name, provider, reasoning
@@ -125,17 +127,18 @@ func formatTokensAndCost(t *styles.Styles, tokens, contextWindow int64, cost flo
 }
 
 // formatStepStats renders runtime statistics for the most recent model
-// step as two semantic rows: response timing (time to first token and
-// generation speed) and token accounting (the step's input tokens with
-// the cache hit rate, plus the generated output tokens), e.g.
-// "0.8s · 42.3 tok/s" and "↑15.2K 92.00% · ↓1.2K". The token row always
-// wraps below the timing row; a row that does not fit on a single line
-// splits into one stat per line. It returns an empty string when there
-// are no stats to show.
+// step as semantic rows: response timing (time to first token and
+// generation speed), token accounting (the step's input tokens with the
+// cache hit rate, plus the generated output tokens), and cumulative
+// session totals, e.g. "0.8s · 42.3 tok/s", "↑15.2K 92.00% · ↓1.2K" and
+// "Σ ↑1.2M 94.10% · ↓45.6K". The token rows always wrap below the
+// timing row; a row that does not fit on a single line splits into one
+// stat per line. It returns an empty string when there are no stats to
+// show.
 func formatStepStats(t *styles.Styles, context *ModelContextInfo, width int) string {
 	stats := context.Stats
 
-	var timing, tokens []string
+	var timing, tokens, totals []string
 	if stats.TTFT > 0 {
 		timing = append(timing, formatStepDuration(stats.TTFT))
 	}
@@ -148,18 +151,19 @@ func formatStepStats(t *styles.Styles, context *ModelContextInfo, width int) str
 	if output := formatOutputStats(stats, context.EstimatedUsage); output != "" {
 		tokens = append(tokens, output)
 	}
+	totals = append(totals, formatSessionTotals(context.Totals, context.EstimatedUsage)...)
 
-	if len(timing) == 0 && len(tokens) == 0 {
+	if len(timing) == 0 && len(tokens) == 0 && len(totals) == 0 {
 		return ""
 	}
 
 	// ModelInfo pads the stats block by two columns.
 	available := width - 2
 
-	// Timing and token accounting never share a line; a row that does
-	// not fit splits into one stat per line.
+	// Timing and token rows never share a line; a row that does not fit
+	// splits into one stat per line.
 	var lines []string
-	for _, group := range [][]string{timing, tokens} {
+	for _, group := range [][]string{timing, tokens, totals} {
 		if len(group) == 0 {
 			continue
 		}
@@ -237,6 +241,30 @@ func formatOutputStats(stats session.StepStats, estimated bool) string {
 		tokens = "~" + tokens
 	}
 	return "↓" + tokens
+}
+
+// formatSessionTotals renders cumulative session token usage: the total
+// prompt tokens with the overall cache hit rate, plus all generated
+// output tokens, e.g. "Σ ↑1.2M 94.10%" and "↓45.6K". The sigma marks
+// the values as session-wide aggregates. It returns no parts when the
+// session has no recorded token usage.
+func formatSessionTotals(totals session.SessionTokens, estimated bool) []string {
+	var parts []string
+	if prompt := totals.TotalPromptTokens(); prompt > 0 {
+		part := "Σ ↑" + formatTokenCount(prompt)
+		if totals.CacheReadTokens > 0 {
+			part += fmt.Sprintf(" %.2f%%", totals.CacheHitRate()*100)
+		}
+		parts = append(parts, part)
+	}
+	if totals.OutputTokens > 0 {
+		tokens := formatTokenCount(totals.OutputTokens)
+		if estimated {
+			tokens = "~" + tokens
+		}
+		parts = append(parts, "↓"+tokens)
+	}
+	return parts
 }
 
 // formatStepDuration formats a model step duration compactly for the

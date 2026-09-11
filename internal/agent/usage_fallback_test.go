@@ -215,6 +215,37 @@ func TestUpdateSessionUsageSkipsEstimatedCost(t *testing.T) {
 	require.True(t, currentSession.EstimatedUsage)
 }
 
+func TestUpdateSessionUsageAccumulatesSessionTotals(t *testing.T) {
+	t.Parallel()
+
+	agent := &sessionAgent{}
+	currentSession := &session.Session{
+		ID: "session-id",
+		Totals: session.SessionTokens{
+			InputTokens:         100,
+			OutputTokens:        200,
+			CacheReadTokens:     3000,
+			CacheCreationTokens: 400,
+		},
+	}
+	model := Model{CatwalkCfg: catwalk.Model{CostPer1MIn: 10, CostPer1MOut: 20}}
+	usage := fantasy.Usage{
+		InputTokens:         10,
+		OutputTokens:        20,
+		CacheReadTokens:     30,
+		CacheCreationTokens: 40,
+	}
+
+	agent.updateSessionUsage(model, currentSession, usage, nil, false)
+
+	require.Equal(t, session.SessionTokens{
+		InputTokens:         110,
+		OutputTokens:        220,
+		CacheReadTokens:     3030,
+		CacheCreationTokens: 440,
+	}, currentSession.Totals)
+}
+
 func TestUpdateSessionUsageKeepsCountersForZeroUsage(t *testing.T) {
 	t.Parallel()
 

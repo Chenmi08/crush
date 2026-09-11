@@ -1905,12 +1905,16 @@ func (a *sessionAgent) GenerateTitle(ctx context.Context, sessionID string, user
 		cost = 0
 	}
 
-	promptTokens := resp.TotalUsage.InputTokens + resp.TotalUsage.CacheCreationTokens
-	completionTokens := resp.TotalUsage.OutputTokens
+	tokens := session.SessionTokens{
+		InputTokens:         resp.TotalUsage.InputTokens,
+		OutputTokens:        resp.TotalUsage.OutputTokens,
+		CacheReadTokens:     resp.TotalUsage.CacheReadTokens,
+		CacheCreationTokens: resp.TotalUsage.CacheCreationTokens,
+	}
 
 	// Atomically update only title and usage fields to avoid overriding other
 	// concurrent session updates.
-	saveErr := a.sessions.UpdateTitleAndUsage(ctx, sessionID, title, promptTokens, completionTokens, cost)
+	saveErr := a.sessions.UpdateTitleAndUsage(ctx, sessionID, title, tokens, cost)
 	if saveErr != nil {
 		slog.Error("Failed to save session title and usage", "error", saveErr)
 		return
@@ -2026,6 +2030,7 @@ func (a *sessionAgent) updateSessionUsage(model Model, session *session.Session,
 
 	session.Cost += cost
 	updateSessionTokenCounters(session, usage)
+	accumulateSessionTotals(session, usage)
 }
 
 func updateSessionTokenCounters(session *session.Session, usage fantasy.Usage) {
@@ -2035,6 +2040,15 @@ func updateSessionTokenCounters(session *session.Session, usage fantasy.Usage) {
 	if promptTokens := usage.InputTokens + usage.CacheReadTokens; promptTokens != 0 {
 		session.PromptTokens = promptTokens
 	}
+}
+
+// accumulateSessionTotals adds a step's token usage to the session's
+// cumulative counters.
+func accumulateSessionTotals(session *session.Session, usage fantasy.Usage) {
+	session.Totals.InputTokens += usage.InputTokens
+	session.Totals.OutputTokens += usage.OutputTokens
+	session.Totals.CacheReadTokens += usage.CacheReadTokens
+	session.Totals.CacheCreationTokens += usage.CacheCreationTokens
 }
 
 func summaryCompletionTokens(usage fantasy.Usage, summaryMessage message.Message) int64 {

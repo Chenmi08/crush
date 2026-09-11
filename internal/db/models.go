@@ -42,15 +42,19 @@ type ReadFile struct {
 }
 
 type Session struct {
-	ID               string         `json:"id"`
-	ParentSessionID  sql.NullString `json:"parent_session_id"`
-	Title            string         `json:"title"`
-	MessageCount     int64          `json:"message_count"`
-	PromptTokens     int64          `json:"prompt_tokens"`
-	CompletionTokens int64          `json:"completion_tokens"`
-	Cost             float64        `json:"cost"`
-	UpdatedAt        int64          `json:"updated_at"`
-	CreatedAt        int64          `json:"created_at"`
-	SummaryMessageID sql.NullString `json:"summary_message_id"`
-	Todos            sql.NullString `json:"todos"`
+	ID                  string         `json:"id"`
+	ParentSessionID     sql.NullString `json:"parent_session_id"`
+	Title               string         `json:"title"`
+	MessageCount        int64          `json:"message_count"`
+	PromptTokens        int64          `json:"prompt_tokens"`
+	CompletionTokens    int64          `json:"completion_tokens"`
+	Cost                float64        `json:"cost"`
+	UpdatedAt           int64          `json:"updated_at"`
+	CreatedAt           int64          `json:"created_at"`
+	SummaryMessageID    sql.NullString `json:"summary_message_id"`
+	Todos               sql.NullString `json:"todos"`
+	TotalInputTokens    int64          `json:"total_input_tokens"`
+	TotalOutputTokens   int64          `json:"total_output_tokens"`
+	CacheReadTokens     int64          `json:"cache_read_tokens"`
+	CacheCreationTokens int64          `json:"cache_creation_tokens"`
 }

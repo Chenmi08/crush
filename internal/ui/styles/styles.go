@@ -261,7 +261,7 @@ type Styles struct {
 		TokenPercentage      lipgloss.Style // "42%" percent of context window
 		EstimatedUsagePrefix lipgloss.Style // "~" prefix for estimated usage
 		Cost                 lipgloss.Style // "$0.42" cost readout
-		Stats                lipgloss.Style // TTFT / tokens-per-second / cache stats line
+		Stats                lipgloss.Style // TTFT / speed / step and session token stats lines
 		HypercreditIcon      lipgloss.Style // Hypercredit icon (◆)
 		HypercreditText      lipgloss.Style // Remaining Hypercredits text
 	}
