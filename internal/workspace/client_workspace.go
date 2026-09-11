@@ -1376,23 +1376,14 @@ func sessionToProto(s session.Session) proto.Session {
 }
 
 // protoToSkillStates reconstructs internal skill state slices from
-// their wire representation. Non-empty Error strings are turned into
-// synthetic error values; the TUI never type-asserts on Err.
+// their wire representation.
 func protoToSkillStates(in []proto.SkillState) []*skills.SkillState {
 	if len(in) == 0 {
 		return nil
 	}
 	out := make([]*skills.SkillState, len(in))
 	for i, s := range in {
-		state := &skills.SkillState{
-			Name:  s.Name,
-			Path:  s.Path,
-			State: skills.DiscoveryState(s.State),
-		}
-		if s.Error != "" {
-			state.Err = errors.New(s.Error)
-		}
-		out[i] = state
+		out[i] = s.ToSkillState()
 	}
 	return out
 }

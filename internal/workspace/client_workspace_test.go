@@ -178,7 +178,7 @@ func TestProtoToSkillStates(t *testing.T) {
 	t.Parallel()
 
 	in := []proto.SkillState{
-		{Name: "ok", Path: "/p/ok", State: proto.SkillStateNormal},
+		{Name: "ok", Path: "/p/ok", State: proto.SkillStateNormal, UserInvocable: true, DisableModelInvocation: true},
 		{Name: "broken", Path: "/p/broken", State: proto.SkillStateError, Error: "bad frontmatter"},
 	}
 
@@ -187,6 +187,8 @@ func TestProtoToSkillStates(t *testing.T) {
 	require.Equal(t, "ok", got[0].Name)
 	require.Equal(t, skills.StateNormal, got[0].State)
 	require.NoError(t, got[0].Err)
+	require.True(t, got[0].UserInvocable)
+	require.True(t, got[0].DisableModelInvocation)
 	require.Equal(t, "broken", got[1].Name)
 	require.Equal(t, skills.StateError, got[1].State)
 	require.EqualError(t, got[1].Err, "bad frontmatter")

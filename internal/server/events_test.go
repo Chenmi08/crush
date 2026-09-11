@@ -62,7 +62,7 @@ func TestSkillsEventToProto_RoundTrip(t *testing.T) {
 		Type: pubsub.UpdatedEvent,
 		Payload: skills.Event{
 			States: []*skills.SkillState{
-				{Name: "ok", Path: "/p/ok", State: skills.StateNormal},
+				{Name: "ok", Path: "/p/ok", State: skills.StateNormal, UserInvocable: true, DisableModelInvocation: true},
 				{Name: "broken", Path: "/p/broken", State: skills.StateError, Err: errors.New("bad frontmatter")},
 			},
 		},
@@ -81,6 +81,8 @@ func TestSkillsEventToProto_RoundTrip(t *testing.T) {
 	require.Equal(t, "/p/ok", decoded.Payload.States[0].Path)
 	require.Equal(t, proto.SkillStateNormal, decoded.Payload.States[0].State)
 	require.Empty(t, decoded.Payload.States[0].Error)
+	require.True(t, decoded.Payload.States[0].UserInvocable)
+	require.True(t, decoded.Payload.States[0].DisableModelInvocation)
 
 	require.Equal(t, "broken", decoded.Payload.States[1].Name)
 	require.Equal(t, proto.SkillStateError, decoded.Payload.States[1].State)

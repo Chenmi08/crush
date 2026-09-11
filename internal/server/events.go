@@ -332,23 +332,14 @@ func messageToProto(m message.Message) proto.Message {
 	return msg
 }
 
-// skillsEventToProto converts a skills.Event into its wire form. Errors
-// are flattened to strings because error does not round-trip over JSON.
+// skillsEventToProto converts a skills.Event into its wire form.
 func skillsEventToProto(e skills.Event) proto.SkillsEvent {
 	if len(e.States) == 0 {
 		return proto.SkillsEvent{}
 	}
 	out := proto.SkillsEvent{States: make([]proto.SkillState, len(e.States))}
 	for i, s := range e.States {
-		entry := proto.SkillState{
-			Name:  s.Name,
-			Path:  s.Path,
-			State: proto.SkillDiscoveryState(s.State),
-		}
-		if s.Err != nil {
-			entry.Error = s.Err.Error()
-		}
-		out.States[i] = entry
+		out.States[i] = proto.SkillStateFromSkills(s)
 	}
 	return out
 }

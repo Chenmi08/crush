@@ -11,12 +11,21 @@ import (
 	"github.com/charmbracelet/crush/internal/skills"
 	"github.com/charmbracelet/crush/internal/ui/common"
 	"github.com/charmbracelet/crush/internal/ui/styles"
+	"github.com/charmbracelet/x/ansi"
 )
 
 type skillStatusItem struct {
-	icon  string
-	name  string
-	title string
+	icon string
+	// name is truncated to fit the column at render time.
+	name string
+	// suffix is the invocation marker rendered directly after the name,
+	// e.g. "[u+m]". It is empty for error states and skills that neither
+	// the user nor the model can invoke.
+	suffix string
+	// display overrides the rendered text for synthetic rows such as the
+	// "…and N more" hint. Real skills leave it empty so the renderer can
+	// truncate name and suffix to the available width.
+	display string
 	// description is reserved for future use (e.g. showing error details).
 	description string
 }
@@ -53,6 +62,22 @@ func (m *UI) skillsInfo(width, maxItems int, isSection bool) string {
 	return lipgloss.NewStyle().Width(width).Render(fmt.Sprintf("%s\n\n%s", title, list))
 }
 
+// skillInvocationSuffix labels how a skill can be triggered: "[u]" for
+// user-only skills, "[m]" for model-only skills, and "[u+m]" when both
+// paths are available. Skills marked neither way return "".
+func skillInvocationSuffix(userInvocable, disableModelInvocation bool) string {
+	switch {
+	case userInvocable && disableModelInvocation:
+		return "[u]"
+	case userInvocable:
+		return "[u+m]"
+	case !disableModelInvocation:
+		return "[m]"
+	default:
+		return ""
+	}
+}
+
 func (m *UI) skillStatusItems() []skillStatusItem {
 	t := m.com.Styles
 	var items []skillStatusItem
@@ -84,13 +109,16 @@ func (m *UI) skillStatusItems() []skillStatusItem {
 		}
 		stateNames[name] = struct{}{}
 		icon := t.Resource.OnlineIcon.String()
+		suffix := ""
 		if state.State == skills.StateError {
 			icon = t.Resource.ErrorIcon.String()
+		} else {
+			suffix = skillInvocationSuffix(state.UserInvocable, state.DisableModelInvocation)
 		}
 		items = append(items, skillStatusItem{
-			icon:  icon,
-			name:  name,
-			title: t.Resource.Name.Render(name),
+			icon:   icon,
+			name:   name,
+			suffix: suffix,
 		})
 	}
 
@@ -106,9 +134,9 @@ func (m *UI) skillStatusItems() []skillStatusItem {
 			continue
 		}
 		items = append(items, skillStatusItem{
-			icon:  t.Resource.OnlineIcon.String(),
-			name:  skill.Name,
-			title: t.Resource.Name.Render(skill.Name),
+			icon:   t.Resource.OnlineIcon.String(),
+			name:   skill.Name,
+			suffix: skillInvocationSuffix(skill.UserInvocable, skill.DisableModelInvocation),
 		})
 	}
 
@@ -128,8 +156,8 @@ func skillsList(t *styles.Styles, items []skillStatusItem, width, maxItems int) 
 		visibleItems := items[:maxItems-1]
 		remaining := len(items) - (maxItems - 1)
 		items = append(visibleItems, skillStatusItem{
-			name:  "more",
-			title: t.Resource.AdditionalText.Render(fmt.Sprintf("…and %d more", remaining)),
+			name:    "more",
+			display: t.Resource.AdditionalText.Render(fmt.Sprintf("…and %d more", remaining)),
 		})
 	}
 
@@ -137,9 +165,35 @@ func skillsList(t *styles.Styles, items []skillStatusItem, width, maxItems int) 
 	for _, item := range items {
 		renderedItems = append(renderedItems, common.Status(t, common.StatusOpts{
 			Icon:        item.icon,
-			Title:       item.title,
+			Title:       item.title(t, width),
 			Description: item.description,
 		}, width))
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, renderedItems...)
+}
+
+// title renders a row title, eliding the skill name so the row
+// (icon + name + suffix) fits in width instead of wrapping. The invocation
+// suffix stays visible; only the name is truncated. If the column is too
+// narrow for even a minimal suffix, the suffix is dropped.
+func (item skillStatusItem) title(t *styles.Styles, width int) string {
+	if item.display != "" {
+		return item.display
+	}
+
+	iconWidth := lipgloss.Width(item.icon)
+	suffix := item.suffix
+
+	// One cell is reserved for the space between the icon and the title.
+	nameWidth := width - iconWidth - 1 - lipgloss.Width(suffix)
+	if nameWidth < 1 {
+		suffix = ""
+		nameWidth = max(0, width-iconWidth-1)
+	}
+
+	title := t.Resource.Name.Render(ansi.Truncate(item.name, nameWidth, "…"))
+	if suffix != "" {
+		title += t.Resource.AdditionalText.Render(suffix)
+	}
+	return title
 }

@@ -633,6 +633,9 @@ disable-model-invocation: true
 
 Skills with `disable-model-invocation` won't appear in the model's available skills list but can still be invoked manually by users.
 
+The landing page and sidebar mark each skill's trigger paths: `[u]` for
+user-only, `[m]` for model-only, and `[u+m]` when both are available.
+
 ### Desktop notifications
 
 Crush sends desktop notifications when a tool call requires permission and when
