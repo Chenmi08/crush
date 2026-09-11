@@ -71,6 +71,22 @@ type GrepParams struct {
 	Path        string `json:"path,omitempty" description:"The directory to search in. Defaults to the current working directory."`
 	Include     string `json:"include,omitempty" description:"File pattern to include in the search (e.g. \"*.js\", \"*.{ts,tsx}\")"`
 	LiteralText bool   `json:"literal_text,omitempty" description:"If true, the pattern will be treated as literal text with special regex characters escaped. Default is false."`
+	Type        string `json:"type,omitempty" description:"Only search files of this ripgrep file type (e.g. \"go\", \"js\", \"py\")."`
+	Context     int    `json:"context,omitempty" description:"Number of lines to show before and after each match (max 10)."`
+	IgnoreCase  bool   `json:"ignore_case,omitempty" description:"Search case-insensitively."`
+	Multiline   bool   `json:"multiline,omitempty" description:"Allow the pattern to match across lines."`
+}
+
+// grepOptions is a single search request, shared by the ripgrep and pure-Go
+// implementations.
+type grepOptions struct {
+	pattern    string
+	path       string
+	include    string
+	typeFilter string
+	context    int
+	ignoreCase bool
+	multiline  bool
 }
 
 type grepMatch struct {
@@ -89,6 +105,7 @@ type GrepResponseMetadata struct {
 const (
 	GrepToolName        = "grep"
 	maxGrepContentWidth = 500
+	maxGrepContext      = 10
 )
 
 //go:embed grep.md.tpl
@@ -100,12 +117,14 @@ var grepDescriptionTpl = template.Must(
 )
 
 type grepDescriptionData struct {
-	MaxResults int
+	MaxResults  int
+	RgAvailable bool
 }
 
 func grepDescription() string {
 	return renderTemplate(grepDescriptionTpl, grepDescriptionData{
-		MaxResults: 100,
+		MaxResults:  100,
+		RgAvailable: getRg() != "",
 	})
 }
 
@@ -130,26 +149,42 @@ func NewGrepTool(workingDir string, config config.ToolGrep) fantasy.AgentTool {
 				return fantasy.NewTextErrorResponse("pattern is required"), nil
 			}
 
-			searchPattern := params.Pattern
+			pattern := params.Pattern
 			if params.LiteralText {
-				searchPattern = escapeRegexPattern(params.Pattern)
+				pattern = escapeRegexPattern(pattern)
 			}
 
-			searchPath := cmp.Or(params.Path, workingDir)
+			opts := grepOptions{
+				pattern:    pattern,
+				path:       cmp.Or(params.Path, workingDir),
+				include:    params.Include,
+				typeFilter: params.Type,
+				context:    min(max(params.Context, 0), maxGrepContext),
+				ignoreCase: params.IgnoreCase,
+				multiline:  params.Multiline,
+			}
 
 			searchCtx, cancel := context.WithTimeout(ctx, config.GetTimeout())
 			defer cancel()
 
-			matches, truncated, err := searchFiles(searchCtx, searchPattern, searchPath, params.Include, 100)
+			matches, truncated, err := searchFiles(searchCtx, opts, 100)
 			if err != nil {
 				return fantasy.NewTextErrorResponse(fmt.Sprintf("error searching files: %v", err)), nil
 			}
 
-			var output strings.Builder
+			var (
+				output     strings.Builder
+				matchCount int
+			)
 			if len(matches) == 0 {
 				output.WriteString("No files found")
 			} else {
-				fmt.Fprintf(&output, "Found %d matches\n", len(matches))
+				for _, match := range matches {
+					if match.charNum > 0 {
+						matchCount++
+					}
+				}
+				fmt.Fprintf(&output, "Found %d matches\n", matchCount)
 
 				currentFile := ""
 				for _, match := range matches {
@@ -183,7 +218,7 @@ func NewGrepTool(workingDir string, config config.ToolGrep) fantasy.AgentTool {
 			return fantasy.WithResponseMetadata(
 				fantasy.NewTextResponse(output.String()),
 				GrepResponseMetadata{
-					NumberOfMatches: len(matches),
+					NumberOfMatches: matchCount,
 					Truncated:       truncated,
 				},
 			), nil
@@ -191,10 +226,15 @@ func NewGrepTool(workingDir string, config config.ToolGrep) fantasy.AgentTool {
 	)
 }
 
-func searchFiles(ctx context.Context, pattern, rootPath, include string, limit int) ([]grepMatch, bool, error) {
-	matches, err := searchWithRipgrep(ctx, pattern, rootPath, include)
+func searchFiles(ctx context.Context, opts grepOptions, limit int) ([]grepMatch, bool, error) {
+	matches, err := searchWithRipgrep(ctx, opts)
 	if err != nil {
-		matches, err = searchFilesWithRegex(pattern, rootPath, include)
+		// type and multiline exist only in ripgrep, so refuse rather
+		// than silently drop them on the fallback path.
+		if opts.typeFilter != "" || opts.multiline {
+			return nil, false, err
+		}
+		matches, err = searchFilesWithRegex(opts)
 		if err != nil {
 			return nil, false, err
 		}
@@ -215,15 +255,15 @@ func searchFiles(ctx context.Context, pattern, rootPath, include string, limit i
 	return matches, truncated, nil
 }
 
-func searchWithRipgrep(ctx context.Context, pattern, path, include string) ([]grepMatch, error) {
-	cmd := getRgSearchCmd(ctx, pattern, path, include)
+func searchWithRipgrep(ctx context.Context, opts grepOptions) ([]grepMatch, error) {
+	cmd := getRgSearchCmd(ctx, opts)
 	if cmd == nil {
 		return nil, fmt.Errorf("ripgrep not found in $PATH")
 	}
 
 	// Only add ignore files if they exist
 	for _, ignoreFile := range []string{".gitignore", ".crushignore"} {
-		ignorePath := filepath.Join(path, ignoreFile)
+		ignorePath := filepath.Join(opts.path, ignoreFile)
 		if _, err := os.Stat(ignorePath); err == nil {
 			cmd.Args = append(cmd.Args, "--ignore-file", ignorePath)
 		}
@@ -236,36 +276,49 @@ func searchWithRipgrep(ctx context.Context, pattern, path, include string) ([]gr
 		}
 		return nil, err
 	}
+	return parseRipgrepOutput(output), nil
+}
 
+// parseRipgrepOutput converts ripgrep's --json stream into grep matches.
+// Context events (from -C) are kept as entries with a zero charNum.
+func parseRipgrepOutput(output []byte) []grepMatch {
 	var matches []grepMatch
+	modTimes := make(map[string]time.Time)
 	for line := range bytes.SplitSeq(bytes.TrimSpace(output), []byte{'\n'}) {
 		if len(line) == 0 {
 			continue
 		}
-		var match ripgrepMatch
-		if err := json.Unmarshal(line, &match); err != nil {
+		var event ripgrepMatch
+		if err := json.Unmarshal(line, &event); err != nil {
 			continue
 		}
-		if match.Type != "match" {
+		if event.Type != "match" && event.Type != "context" {
 			continue
 		}
-		for _, m := range match.Data.Submatches {
-			fi, err := os.Stat(match.Data.Path.Text)
+
+		path := event.Data.Path.Text
+		modTime, ok := modTimes[path]
+		if !ok {
+			fi, err := os.Stat(path)
 			if err != nil {
 				continue // Skip files we can't access
 			}
-			matches = append(matches, grepMatch{
-				path:     match.Data.Path.Text,
-				modTime:  fi.ModTime(),
-				lineNum:  match.Data.LineNumber,
-				charNum:  m.Start + 1, // ensure 1-based
-				lineText: strings.TrimSpace(match.Data.Lines.Text),
-			})
-			// only get the first match of each line
-			break
+			modTime = fi.ModTime()
+			modTimes[path] = modTime
 		}
+
+		match := grepMatch{
+			path:     path,
+			modTime:  modTime,
+			lineNum:  event.Data.LineNumber,
+			lineText: strings.TrimSpace(event.Data.Lines.Text),
+		}
+		if event.Type == "match" && len(event.Data.Submatches) > 0 {
+			match.charNum = event.Data.Submatches[0].Start + 1 // ensure 1-based
+		}
+		matches = append(matches, match)
 	}
-	return matches, nil
+	return matches
 }
 
 type ripgrepMatch struct {
@@ -284,9 +337,13 @@ type ripgrepMatch struct {
 	} `json:"data"`
 }
 
-func searchFilesWithRegex(pattern, rootPath, include string) ([]grepMatch, error) {
+func searchFilesWithRegex(opts grepOptions) ([]grepMatch, error) {
 	matches := []grepMatch{}
 
+	pattern := opts.pattern
+	if opts.ignoreCase {
+		pattern = "(?i)" + pattern
+	}
 	// Use cached regex compilation
 	regex, err := searchRegexCache.get(pattern)
 	if err != nil {
@@ -294,8 +351,8 @@ func searchFilesWithRegex(pattern, rootPath, include string) ([]grepMatch, error
 	}
 
 	var includePattern *regexp.Regexp
-	if include != "" {
-		regexPattern := globToRegex(include)
+	if opts.include != "" {
+		regexPattern := globToRegex(opts.include)
 		includePattern, err = globRegexCache.get(regexPattern)
 		if err != nil {
 			return nil, fmt.Errorf("invalid include pattern: %w", err)
@@ -303,9 +360,9 @@ func searchFilesWithRegex(pattern, rootPath, include string) ([]grepMatch, error
 	}
 
 	// Create walker with gitignore and crushignore support
-	walker := fsext.NewFastGlobWalker(rootPath)
+	walker := fsext.NewFastGlobWalker(opts.path)
 
-	err = filepath.Walk(rootPath, func(path string, info os.FileInfo, err error) error {
+	err = filepath.Walk(opts.path, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil // Skip errors
 		}
@@ -333,7 +390,7 @@ func searchFilesWithRegex(pattern, rootPath, include string) ([]grepMatch, error
 			return nil
 		}
 
-		lineMatches, err := fileMatches(path, regex)
+		lineMatches, err := fileMatches(path, regex, opts.context)
 		if err != nil {
 			return nil // Skip files we can't read
 		}
@@ -360,20 +417,21 @@ func searchFilesWithRegex(pattern, rootPath, include string) ([]grepMatch, error
 	return matches, nil
 }
 
-// lineMatch is a single matching line within a file: its 1-based line
-// number, the 1-based column of the first match on that line, and the
-// line text (with the trailing newline stripped).
+// lineMatch is a single line in a file search result: its 1-based line
+// number, the 1-based column of the first match on that line (zero for
+// context lines), and the line text (with the trailing newline stripped).
 type lineMatch struct {
 	lineNum  int
 	charNum  int
 	lineText string
 }
 
-// fileMatches returns every line in filePath that matches pattern. Like
-// ripgrep, it reports one entry per matching line (using the first match
-// on the line for the column) instead of stopping at the first match in
-// the file.
-func fileMatches(filePath string, pattern *regexp.Regexp) ([]lineMatch, error) {
+// fileMatches returns every line in filePath that matches pattern, plus up
+// to context lines on either side of each match. Like ripgrep, it reports
+// one entry per matching line (using the first match on the line for the
+// column) and merges overlapping context windows. Match lines carry a
+// column; context lines leave charNum at zero.
+func fileMatches(filePath string, pattern *regexp.Regexp, context int) ([]lineMatch, error) {
 	if pattern == nil {
 		return nil, nil
 	}
@@ -388,26 +446,60 @@ func fileMatches(filePath string, pattern *regexp.Regexp) ([]lineMatch, error) {
 	}
 	defer file.Close()
 
-	var matches []lineMatch
+	var (
+		matches  []lineMatch
+		before   []lineMatch // Last `context` lines, oldest first.
+		after    int         // Context lines still owed after a match.
+		lastEmit int         // Last line emitted, to merge overlapping windows.
+		lineNum  int
+	)
 	reader := bufio.NewReader(file)
-	lineNum := 0
 	for {
-		line, err := reader.ReadString('\n')
+		line, readErr := reader.ReadString('\n')
 		lineNum++
 		line = strings.TrimSuffix(line, "\n")
 		line = strings.TrimSuffix(line, "\r")
+
 		if loc := pattern.FindStringIndex(line); loc != nil {
+			// Emit the before-context not already covered by a
+			// previous match's after-context.
+			for _, prev := range before {
+				if prev.lineNum > lastEmit {
+					matches = append(matches, prev)
+					lastEmit = prev.lineNum
+				}
+			}
 			matches = append(matches, lineMatch{
 				lineNum:  lineNum,
 				charNum:  loc[0] + 1,
 				lineText: line,
 			})
+			lastEmit = lineNum
+			after = context
+		} else if after > 0 {
+			matches = append(matches, lineMatch{
+				lineNum:  lineNum,
+				lineText: line,
+			})
+			lastEmit = lineNum
+			after--
 		}
-		if err == io.EOF {
+
+		if context > 0 {
+			before = append(before, lineMatch{
+				lineNum:  lineNum,
+				lineText: line,
+			})
+			if len(before) > context {
+				before = before[len(before)-context:]
+			}
+		}
+
+		if readErr == io.EOF {
 			break
 		}
-		if err != nil {
-			return nil, err
+		if readErr != nil {
+			return nil, readErr
 		}
 	}
 
