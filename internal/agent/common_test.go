@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,7 +9,6 @@ import (
 
 	"charm.land/catwalk/pkg/catwalk"
 	"charm.land/fantasy"
-	"charm.land/fantasy/providers/openaicompat"
 	"charm.land/x/vcr"
 	"github.com/charmbracelet/crush/internal/agent/prompt"
 	"github.com/charmbracelet/crush/internal/agent/tools"
@@ -37,28 +35,6 @@ type fakeEnv struct {
 	history     history.Service
 	filetracker *filetracker.Service
 	lspClients  *csync.Map[string, *lsp.Client]
-}
-
-type builderFunc func(t *testing.T, r *vcr.Recorder) (fantasy.LanguageModel, error)
-
-type modelPair struct {
-	name       string
-	largeModel builderFunc
-	smallModel builderFunc
-}
-
-func hyperBuilder(model string) builderFunc {
-	return func(t *testing.T, r *vcr.Recorder) (fantasy.LanguageModel, error) {
-		provider, err := openaicompat.New(
-			openaicompat.WithBaseURL("https://hyper.charm.land/v1"),
-			openaicompat.WithAPIKey(os.Getenv("CRUSH_HYPER_API_KEY")),
-			openaicompat.WithHTTPClient(&http.Client{Transport: r}),
-		)
-		if err != nil {
-			return nil, err
-		}
-		return provider.LanguageModel(t.Context(), model)
-	}
 }
 
 func testEnv(t *testing.T) fakeEnv {
@@ -181,26 +157,4 @@ func coderAgent(r *vcr.Recorder, env fakeEnv, large, small fantasy.LanguageModel
 	}
 
 	return testSessionAgent(env, large, small, systemPrompt, allTools...), nil
-}
-
-// createSimpleGoProject creates a simple Go project structure in the given directory.
-// It creates a go.mod file and a main.go file with a basic hello world program.
-func createSimpleGoProject(t *testing.T, dir string) {
-	goMod := `module example.com/testproject
-
-go 1.23
-`
-	err := os.WriteFile(dir+"/go.mod", []byte(goMod), 0o644)
-	require.NoError(t, err)
-
-	mainGo := `package main
-
-import "fmt"
-
-func main() {
-	fmt.Println("Hello, World!")
-}
-`
-	err = os.WriteFile(dir+"/main.go", []byte(mainGo), 0o644)
-	require.NoError(t, err)
 }
