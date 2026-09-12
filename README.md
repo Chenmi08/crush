@@ -618,6 +618,11 @@ User-invocable skills appear in the commands palette with a `user:` or `project:
 - Skills from global directories show as `user:skill-name`
 - Skills from project directories show as `project:skill-name`
 
+You can also reference a skill directly from the prompt by typing `$`. A
+popup lists every user-invocable skill with its description; selecting one
+inserts `$skill-name` into the message and attaches the skill's instructions
+to the conversation context.
+
 When invoked, the skill's instructions are loaded into the conversation context.
 
 To prevent the model from auto-triggering a skill (while still allowing user invocation), add `disable-model-invocation: true`:
