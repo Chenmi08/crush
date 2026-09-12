@@ -239,6 +239,12 @@ type UI struct {
 	frameSkipPut     bool
 	frameGCArmed     bool
 
+	// canvas is the reusable screen buffer View renders uncached frames
+	// into. Draw clears it at the start of every frame, so it can be
+	// resized in place instead of reallocated; CPU profiles showed these
+	// per-frame allocations dominated the app's garbage.
+	canvas uv.ScreenBuffer
+
 	keyMap KeyMap
 	keyenh tea.KeyboardEnhancementsMsg
 
@@ -349,6 +355,19 @@ type UI struct {
 	sidebarContentHeight    int    // available height for sidebar content
 	sidebarContentWidth     int    // available width for sidebar content
 	sidebarDrawLogo         string // logo to render (may differ from sidebarLogo for short heights)
+
+	// sidebarSections memoizes the rendered sidebar sections and the
+	// assembled content. Draw rebuilds the sidebar every frame while its
+	// inputs change far less often; see updateSidebarScrollState.
+	sidebarSections sidebarSectionCache
+	// sidebarLines is sidebarContent split on newlines, kept so drawSidebar
+	// doesn't re-split the whole content every frame.
+	sidebarLines []string
+	// sidebarContentVersion bumps whenever the assembled content changes,
+	// invalidating the decoded sidebar draw buffer.
+	sidebarContentVersion int
+	// sidebarDraw caches the decoded visible sidebar content.
+	sidebarDraw sidebarDrawCache
 
 	// Notification state
 	notifyBackend       notification.Backend
@@ -3307,6 +3326,28 @@ func mouseMode(enabled, inlineActive bool) tea.MouseMode {
 	}
 }
 
+// normalizeScreenContent converts a rendered screen buffer into the string
+// [tea.View] expects: LF line endings with trailing whitespace trimmed. The
+// previous ReplaceAll + Split + TrimRight + Join pipeline copied the whole
+// screen several times per frame; this does it in one pass into one buffer.
+func normalizeScreenContent(rendered string) string {
+	var b strings.Builder
+	b.Grow(len(rendered))
+	for {
+		i := strings.IndexByte(rendered, '\n')
+		if i < 0 {
+			// Last line has no trailing newline. A lone \r is kept, matching
+			// what splitting after CRLF normalization would have done.
+			b.WriteString(strings.TrimRight(rendered, " "))
+			return b.String()
+		}
+		line := strings.TrimSuffix(rendered[:i], "\r")
+		b.WriteString(strings.TrimRight(line, " "))
+		b.WriteByte('\n')
+		rendered = rendered[i+1:]
+	}
+}
+
 // View renders the UI model's view.
 func (m *UI) View() tea.View {
 	var v tea.View
@@ -3328,21 +3369,16 @@ func (m *UI) View() tea.View {
 		}
 	}
 
-	canvas := uv.NewScreenBuffer(m.width, m.height)
-	v.Cursor = m.Draw(canvas, canvas.Bounds())
-
-	content := strings.ReplaceAll(canvas.Render(), "\r\n", "\n") // normalize newlines
-	contentLines := strings.Split(content, "\n")
-	for i, line := range contentLines {
-		// Trim trailing spaces for concise rendering
-		contentLines[i] = strings.TrimRight(line, " ")
+	if m.canvas.RenderBuffer == nil {
+		m.canvas = uv.NewScreenBuffer(m.width, m.height)
+	} else {
+		m.canvas.Resize(m.width, m.height)
 	}
+	v.Cursor = m.Draw(m.canvas, m.canvas.Bounds())
 
-	content = strings.Join(contentLines, "\n")
-
-	v.Content = content
+	v.Content = normalizeScreenContent(m.canvas.Render())
 	if cacheable {
-		m.storeFrame(key, content, v.Cursor)
+		m.storeFrame(key, v.Content, v.Cursor)
 	}
 	m.applyProgressBar(&v)
 
@@ -4476,7 +4512,12 @@ func (m *UI) renderEditorView(width int) string {
 
 // cacheSidebarLogo renders and caches the sidebar logo at the specified width.
 func (m *UI) cacheSidebarLogo(width int) {
-	m.sidebarLogo = renderLogo(m.com.Styles, true, m.com.IsHyper(), width)
+	rendered := renderLogo(m.com.Styles, true, m.com.IsHyper(), width)
+	if rendered == m.sidebarLogo {
+		return
+	}
+	m.sidebarLogo = rendered
+	m.invalidateSidebar()
 }
 
 // applyThemeForProvider swaps the active theme to the one associated with
@@ -4525,6 +4566,7 @@ func (m *UI) refreshStyles() {
 	m.todoSpinner.Style = t.Pills.TodoSpinner
 	m.status.help.Styles = t.Help
 	m.chat.InvalidateRenderCaches()
+	m.invalidateSidebar()
 }
 
 // attachSkill reads a skill's content by ID and returns it as a markdown
