@@ -112,6 +112,17 @@ const (
 	uiChat
 )
 
+// completionKind identifies the trigger that opened the completions
+// popup.
+type completionKind uint8
+
+const (
+	// completionFiles is the '@' file/resource reference popup.
+	completionFiles completionKind = iota
+	// completionSkills is the '$' user-invocable skill popup.
+	completionSkills
+)
+
 type openEditorMsg struct {
 	Text string
 }
@@ -136,6 +147,12 @@ type (
 	// userCommandsLoadedMsg is sent when user commands are loaded.
 	userCommandsLoadedMsg struct {
 		Commands []commands.CustomCommand
+		// Skills is the workspace skill catalog, loaded alongside user
+		// commands and cached for the '$' completions popup.
+		Skills []skills.CatalogEntry
+		// SkillsLoaded reports whether the catalog RPC succeeded, so a
+		// failed load can be retried on the next '$'.
+		SkillsLoaded bool
 	}
 	// mcpPromptsLoadedMsg is sent when mcp prompts are loaded.
 	mcpPromptsLoadedMsg struct {
@@ -280,9 +297,10 @@ type UI struct {
 	// Completions state
 	completions              *completions.Completions
 	completionsOpen          bool
+	completionsKind          completionKind
 	completionsStartIndex    int
 	completionsQuery         string
-	completionsPositionStart image.Point // x,y where user typed '@'
+	completionsPositionStart image.Point // x,y where user typed '@' or '$'
 
 	// Chat components
 	chat *Chat
@@ -311,6 +329,11 @@ type UI struct {
 
 	// skills
 	skillStates []*skills.SkillState
+	// skillCatalog caches the workspace skill catalog used by the '$'
+	// completions popup. It is refreshed with custom commands whenever
+	// skill discovery changes.
+	skillCatalog       []skills.CatalogEntry
+	skillCatalogLoaded bool
 
 	// sidebarLogo keeps a cached version of the sidebar sidebarLogo.
 	sidebarLogo string
@@ -438,6 +461,7 @@ func New(com *common.Common, initialSessionID string, continueLast bool) *UI {
 		com.Styles.Completions.Focused,
 		com.Styles.Completions.Match,
 	)
+	comp.SetDescriptionStyle(com.Styles.Completions.Description)
 
 	todoSpinner := spinner.New(
 		spinner.WithSpinner(spinner.MiniDot),
@@ -709,7 +733,11 @@ func (m *UI) loadCustomCommands() tea.Cmd {
 			slog.Error("Failed to load skill commands", "error", err)
 		}
 		customCommands = append(customCommands, commands.FromSkillCatalog(skillEntries)...)
-		return userCommandsLoadedMsg{Commands: customCommands}
+		return userCommandsLoadedMsg{
+			Commands:     customCommands,
+			Skills:       skillEntries,
+			SkillsLoaded: err == nil,
+		}
 	}
 }
 
@@ -864,6 +892,10 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case userCommandsLoadedMsg:
 		m.customCommands = msg.Commands
+		if msg.SkillsLoaded {
+			m.skillCatalog = msg.Skills
+			m.skillCatalogLoaded = true
+		}
 		dia := m.dialog.Dialog(dialog.CommandsID)
 		if dia == nil {
 			break
@@ -991,6 +1023,9 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case pubsub.Event[skills.Event]:
 		m.skillStates = msg.Payload.States
+		// Refresh the cached catalog (and the command palette) since
+		// the effective skill set changed.
+		cmds = append(cmds, m.loadCustomCommands())
 	case pubsub.Event[mcp.Event]:
 		switch msg.Payload.Type {
 		case mcp.EventStateChanged:
@@ -2679,6 +2714,11 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 						if !msg.KeepOpen {
 							m.closeCompletions()
 						}
+					case completions.SelectionMsg[completions.SkillCompletionValue]:
+						cmds = append(cmds, m.insertSkillCompletion(msg.Value))
+						if !msg.KeepOpen {
+							m.closeCompletions()
+						}
 					case completions.ClosedMsg:
 						m.completionsOpen = false
 					}
@@ -2708,6 +2748,11 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 				cmds = append(cmds, m.pasteTextFromClipboard)
 
 			case key.Matches(msg, m.keyMap.Editor.SendMessage):
+				// A popup with no matches falls through to here; make sure
+				// it does not linger across the send.
+				if m.completionsOpen {
+					m.closeCompletions()
+				}
 				prevHeight := m.textarea.Height()
 				value := m.textarea.Value()
 				if before, ok := strings.CutSuffix(value, "\\"); ok {
@@ -2832,7 +2877,7 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 					break
 				}
 
-				// Check for @ trigger before passing to textarea.
+				// Check for @ / $ triggers before passing to textarea.
 				curValue := m.textarea.Value()
 				curIdx := len(curValue)
 
@@ -2841,11 +2886,35 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 					// Only show if beginning of prompt or after whitespace.
 					if curIdx == 0 || (curIdx > 0 && isWhitespace(curValue[curIdx-1])) {
 						m.completionsOpen = true
+						m.completionsKind = completionFiles
 						m.completionsQuery = ""
 						m.completionsStartIndex = curIdx
 						m.completionsPositionStart = m.completionsPosition()
 						depth, limit := m.com.Config().Options.TUI.Completions.Limits()
 						cmds = append(cmds, m.completions.Open(depth, limit))
+					}
+				}
+
+				// Trigger skill completions on $. Bang mode is excluded: '$'
+				// is shell variable syntax there, not a skill reference.
+				if msg.String() == "$" && !m.bangMode && !m.completionsOpen {
+					if !m.skillCatalogLoaded {
+						// The catalog may still be loading; retry so the first
+						// '$' after startup works.
+						cmds = append(cmds, m.loadCustomCommands())
+					} else {
+						offset := m.textareaCursorOffset()
+						if offset == 0 || (offset > 0 && isWhitespace(curValue[offset-1])) {
+							if skillValues := m.userInvocableSkills(); len(skillValues) > 0 {
+								m.completionsOpen = true
+								m.completionsKind = completionSkills
+								m.completionsQuery = ""
+								m.completionsStartIndex = offset
+								m.completionsPositionStart = m.completionsPosition()
+								m.completions.SetAvailableRows(m.completionsPositionStart.Y + 1)
+								m.completions.SetSkillItems(skillValues, m.skillCompletionsWidth())
+							}
+						}
 					}
 				}
 
@@ -2888,26 +2957,31 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 				// Any text modification becomes the current draft.
 				m.updateHistoryDraft(curValue)
 
-				// After updating textarea, check if we need to filter completions.
-				// Skip filtering on the initial @ keystroke since items are loading async.
-				if m.completionsOpen && msg.String() != "@" {
-					newValue := m.textarea.Value()
-					newIdx := len(newValue)
-
-					// Close completions if cursor moved before start.
-					if newIdx <= m.completionsStartIndex {
-						m.closeCompletions()
-					} else if msg.String() == "space" {
-						// Close on space.
-						m.closeCompletions()
+				// After updating textarea, check if we need to filter
+				// completions. Skip filtering on the initial @/$ keystroke
+				// since items may be loading async.
+				if m.completionsOpen && msg.String() != "@" && msg.String() != "$" {
+					if m.completionsKind == completionSkills {
+						m.filterSkillCompletions()
 					} else {
-						// Extract current word and filter.
-						word := m.textareaWord()
-						if strings.HasPrefix(word, "@") {
-							m.completionsQuery = word[1:]
-							m.completions.Filter(m.completionsQuery)
-						} else if m.completionsOpen {
+						newValue := m.textarea.Value()
+						newIdx := len(newValue)
+
+						// Close completions if cursor moved before start.
+						if newIdx <= m.completionsStartIndex {
 							m.closeCompletions()
+						} else if msg.String() == "space" {
+							// Close on space.
+							m.closeCompletions()
+						} else {
+							// Extract current word and filter.
+							word := m.textareaWord()
+							if strings.HasPrefix(word, "@") {
+								m.completionsQuery = word[1:]
+								m.completions.Filter(m.completionsQuery)
+							} else if m.completionsOpen {
+								m.closeCompletions()
+							}
 						}
 					}
 				}
@@ -3150,6 +3224,9 @@ func (m *UI) Draw(scr uv.Screen, area uv.Rectangle) *tea.Cursor {
 		y := m.completionsPositionStart.Y - h
 
 		screenW := area.Dx()
+		if w > screenW {
+			w = screenW
+		}
 		if x+w > screenW {
 			x = screenW - w
 		}
@@ -4169,6 +4246,123 @@ func (m *UI) insertMCPResourceCompletion(item completions.ResourceCompletionValu
 	return tea.Batch(heightCmd, resourceCmd)
 }
 
+// insertSkillCompletion replaces the "$query" span with the skill's
+// "$name" token and attaches the skill instructions as a markdown
+// attachment. Re-selecting a skill already attached to the draft only
+// inserts its token.
+func (m *UI) insertSkillCompletion(skill completions.SkillCompletionValue) tea.Cmd {
+	prevHeight := m.textarea.Height()
+	if !m.replaceCompletionText("$" + skill.Name) {
+		return nil
+	}
+	heightCmd := m.handleTextareaHeightChange(prevHeight)
+
+	if skill.ID == "" || m.hasSkillAttachment(skill.ID) {
+		return heightCmd
+	}
+	return tea.Batch(heightCmd, m.attachSkill(skill.ID, skill.Name))
+}
+
+// replaceCompletionText replaces the text between the completion
+// trigger and the cursor with text. It is cursor-aware, unlike
+// insertCompletionText, and leaves the cursor at the end of the
+// inserted text.
+func (m *UI) replaceCompletionText(text string) bool {
+	value := m.textarea.Value()
+	start := m.completionsStartIndex
+	if start < 0 || start > len(value) {
+		return false
+	}
+	cursor := min(m.textareaCursorOffset(), len(value))
+	if cursor < start {
+		return false
+	}
+
+	// Delete the query through the textarea's own key handling so the
+	// cursor stays correct across soft wraps, then insert the token at
+	// the same position.
+	for i := 0; i < len([]rune(value[start:cursor]))+4 && m.textareaCursorOffset() > start; i++ {
+		m.textarea, _ = m.textarea.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	}
+	m.textarea.InsertString(text)
+
+	// Match the '@' completion behavior of appending a space, but only
+	// when inserting at the end of the input.
+	if cursor == len(value) {
+		m.textarea.InsertRune(' ')
+	}
+	return true
+}
+
+// hasSkillAttachment reports whether the current draft already carries
+// an attachment for the given skill.
+func (m *UI) hasSkillAttachment(skillID string) bool {
+	for _, a := range m.attachments.List() {
+		if a.FilePath == skillID {
+			return true
+		}
+	}
+	return false
+}
+
+// filterSkillCompletions keeps the '$' popup in sync with the text
+// between the trigger and the cursor. Unlike '@' filtering it uses the
+// real cursor offset, so editing mid-line replaces only the query.
+func (m *UI) filterSkillCompletions() {
+	value := m.textarea.Value()
+	cursor := m.textareaCursorOffset()
+	if cursor <= m.completionsStartIndex ||
+		m.completionsStartIndex >= len(value) ||
+		value[m.completionsStartIndex] != '$' {
+		m.closeCompletions()
+		return
+	}
+	query := value[m.completionsStartIndex+1 : cursor]
+	if strings.ContainsAny(query, " \t\n\r") {
+		m.closeCompletions()
+		return
+	}
+	m.completionsQuery = query
+	m.completions.Filter(query)
+	if !m.completions.HasItems() {
+		// Nothing matches: close so Enter sends the message.
+		m.closeCompletions()
+	}
+}
+
+// userInvocableSkills returns the cached catalog entries users can
+// invoke explicitly, sorted by name.
+func (m *UI) userInvocableSkills() []completions.SkillCompletionValue {
+	values := make([]completions.SkillCompletionValue, 0, len(m.skillCatalog))
+	for _, entry := range m.skillCatalog {
+		if !entry.UserInvocable {
+			continue
+		}
+		values = append(values, completions.SkillCompletionValue{
+			ID:          entry.ID,
+			Name:        entry.Name,
+			Description: entry.Description,
+		})
+	}
+	slices.SortStableFunc(values, func(a, b completions.SkillCompletionValue) int {
+		return strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
+	})
+	return values
+}
+
+// skillCompletionsWidth returns the pinned popup width for the '$'
+// skill list so long descriptions cannot grow it past the editor.
+func (m *UI) skillCompletionsWidth() int {
+	editorWidth := m.width
+	if !m.isCompact && m.layout.sidebar.Dx() > 0 {
+		editorWidth -= m.layout.sidebar.Dx()
+	}
+	if editorWidth <= 0 {
+		editorWidth = 80
+	}
+	return max(24, min(editorWidth-4, 64))
+}
+
 // completionsPosition returns the X and Y position for the completions popup.
 func (m *UI) completionsPosition() image.Point {
 	cur := m.textarea.Cursor()
@@ -4187,6 +4381,25 @@ func (m *UI) completionsPosition() image.Point {
 // textareaWord returns the current word at the cursor position.
 func (m *UI) textareaWord() string {
 	return m.textarea.Word()
+}
+
+// textareaCursorOffset returns the cursor's byte offset within the
+// textarea value. Line() is the logical row and Column() the rune
+// index inside that row.
+func (m *UI) textareaCursorOffset() int {
+	value := m.textarea.Value()
+	if value == "" {
+		return 0
+	}
+	lines := strings.Split(value, "\n")
+	row := min(max(m.textarea.Line(), 0), len(lines)-1)
+	offset := 0
+	for _, line := range lines[:row] {
+		offset += len(line) + 1
+	}
+	runes := []rune(lines[row])
+	col := min(max(m.textarea.Column(), 0), len(runes))
+	return offset + len(string(runes[:col]))
 }
 
 // isWhitespace returns true if the byte is a whitespace character.
@@ -4298,6 +4511,7 @@ func (m *UI) refreshStyles() {
 	}
 	m.textarea.SetStyles(t.Editor.Textarea)
 	m.completions.SetStyles(t.Completions.Normal, t.Completions.Focused, t.Completions.Match)
+	m.completions.SetDescriptionStyle(t.Completions.Description)
 	m.attachments.Renderer().SetStyles(
 		t.Attachments.Normal,
 		t.Attachments.Deleting,
@@ -4326,8 +4540,14 @@ func (m *UI) attachSkill(skillID, name string) tea.Cmd {
 		if fileName == "" {
 			fileName = name
 		}
+		// FilePath carries the skill ID so a draft can dedupe repeated
+		// references; FileName is what the chip renders.
+		filePath := skillID
+		if filePath == "" {
+			filePath = fileName
+		}
 		return message.Attachment{
-			FilePath: fileName,
+			FilePath: filePath,
 			FileName: fileName,
 			MimeType: "text/markdown",
 			Content:  content,

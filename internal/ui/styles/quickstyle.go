@@ -1043,6 +1043,7 @@ func quickStyle(o quickStyleOpts) Styles {
 	s.Completions.Normal = base.Background(o.bgLessVisible).Foreground(o.fgBase)
 	s.Completions.Focused = base.Background(o.primary).Foreground(o.onPrimary)
 	s.Completions.Match = base.Underline(true)
+	s.Completions.Description = base.Foreground(o.fgMoreSubtle)
 
 	// Attachments styles
 	attachmentIconStyle := base.Foreground(o.bgLessVisible).Background(o.success).Padding(0, 1)

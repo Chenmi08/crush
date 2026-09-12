@@ -587,9 +587,10 @@ type Styles struct {
 
 	// Completions popup styles
 	Completions struct {
-		Normal  lipgloss.Style
-		Focused lipgloss.Style
-		Match   lipgloss.Style
+		Normal      lipgloss.Style
+		Focused     lipgloss.Style
+		Match       lipgloss.Style
+		Description lipgloss.Style
 	}
 
 	// Attachments styles
