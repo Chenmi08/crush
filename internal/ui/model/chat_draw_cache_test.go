@@ -54,8 +54,8 @@ func TestChatDrawCache_HitOnIdenticalRender(t *testing.T) {
 }
 
 // TestChatDrawCache_MissOnDifferentRender asserts that when the list output
-// changes, the cache is rebuilt and the new draw output matches a fresh
-// uv.NewStyledString render byte-for-byte.
+// changes, the cache is re-decoded in place and the new draw output matches a
+// fresh uv.NewStyledString render byte-for-byte.
 func TestChatDrawCache_MissOnDifferentRender(t *testing.T) {
 	t.Parallel()
 
@@ -77,8 +77,10 @@ func TestChatDrawCache_MissOnDifferentRender(t *testing.T) {
 	u.updateLayoutAndSize()
 
 	got := renderToBuffer(t, u.chat, w, h)
-	require.NotSame(t, firstCache, u.chat.drawCache,
-		"changed rendered string must replace the cache entry")
+	require.Same(t, firstCache, u.chat.drawCache,
+		"changed rendered string must update the cache in place")
+	require.Equal(t, u.chat.list.Render(), u.chat.drawCache.rendered,
+		"cache must hold the new rendered string")
 
 	// Output must match a fresh uv.NewStyledString render of the current
 	// list output for the same area. This is the byte-equivalence guard
@@ -162,7 +164,7 @@ func freshStyledRender(s string, w, h int) string {
 	return scr.Render()
 }
 
-// TestChatDrawCache_InvalidatedByWidthMethodSwap asserts the cache rebuilds
+// TestChatDrawCache_InvalidatedByWidthMethodSwap asserts the cache re-decodes
 // when the destination screen's width method changes between frames.
 // GraphemeWidth and WcWidth disagree on emoji ZWJ sequences and other
 // modern unicode, so the decoded buffer is only valid for the method it
@@ -199,8 +201,8 @@ func TestChatDrawCache_InvalidatedByWidthMethodSwap(t *testing.T) {
 		Method:       ansi.WcWidth,
 	}
 	u.chat.Draw(scrB, uv.Rect(0, 0, w, h))
-	require.NotSame(t, firstCache, u.chat.drawCache,
-		"width method change must invalidate the cache")
+	require.Same(t, firstCache, u.chat.drawCache,
+		"width method change must re-decode the cache in place")
 	require.Equal(t, ansi.WcWidth, u.chat.drawCache.method)
 }
 

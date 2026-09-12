@@ -256,10 +256,10 @@ func (m *Chat) Draw(scr uv.Screen, area uv.Rectangle) {
 		// to the uncached path so behavior matches upstream exactly.
 		uv.NewStyledString(rendered).Draw(scr, listArea)
 	} else {
-		if m.drawCache == nil ||
-			m.drawCache.rendered != rendered ||
-			m.drawCache.method != method {
+		if m.drawCache == nil {
 			m.drawCache = newChatDrawCache(rendered, method)
+		} else if m.drawCache.rendered != rendered || m.drawCache.method != method {
+			m.drawCache.update(rendered, method)
 		}
 		drawCachedBuffer(scr, listArea, m.drawCache.buf)
 	}
@@ -296,6 +296,15 @@ func (m *Chat) Draw(scr uv.Screen, area uv.Rectangle) {
 // cell-by-cell, since both decode ANSI sequences and use the same width
 // method.
 func newChatDrawCache(rendered string, method ansi.Method) *chatDrawCache {
+	c := &chatDrawCache{}
+	c.update(rendered, method)
+	return c
+}
+
+// update re-decodes the rendered string into the cache's existing buffer,
+// resizing it in place. Reusing the buffer keeps every streaming frame from
+// allocating a fresh copy of the rendered list.
+func (c *chatDrawCache) update(rendered string, method ansi.Method) {
 	w, h := renderedBounds(rendered, method)
 	if w <= 0 {
 		w = 1
@@ -303,14 +312,17 @@ func newChatDrawCache(rendered string, method ansi.Method) *chatDrawCache {
 	if h <= 0 {
 		h = 1
 	}
-	buf := uv.NewScreenBuffer(w, h)
-	buf.Method = method
-	uv.NewStyledString(rendered).Draw(buf, buf.Bounds())
-	return &chatDrawCache{
-		rendered: rendered,
-		method:   method,
-		buf:      buf,
+	if c.buf.RenderBuffer == nil {
+		c.buf = uv.NewScreenBuffer(w, h)
+	} else {
+		c.buf.Resize(w, h)
 	}
+	c.buf.Method = method
+	// StyledString.Draw clears the destination area before drawing, so the
+	// reused buffer never leaks cells from the previous render.
+	uv.NewStyledString(rendered).Draw(c.buf, c.buf.Bounds())
+	c.rendered = rendered
+	c.method = method
 }
 
 // renderedBounds returns the (width, height) cell extent of rendered
