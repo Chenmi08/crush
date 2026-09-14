@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/fantasy"
 	"github.com/stretchr/testify/require"
@@ -172,4 +173,85 @@ func TestResetStreamedContentEmpty(t *testing.T) {
 	msg := &Message{}
 	msg.ResetStreamedContent()
 	require.Empty(t, msg.Parts)
+}
+
+func TestStatsAccessorsAndHelpers(t *testing.T) {
+	t.Parallel()
+
+	msg := &Message{}
+	_, ok := msg.Stats()
+	require.False(t, ok, "message without stats should report none")
+
+	want := Stats{
+		TTFTMillis:          1250,
+		TokensPerSecond:     111.2,
+		CacheReadTokens:     34900,
+		CacheCreationTokens: 100,
+		TotalPromptTokens:   35300,
+		OutputTokens:        1024,
+		Estimated:           true,
+	}
+	msg.SetStats(want)
+
+	got, ok := msg.Stats()
+	require.True(t, ok)
+	require.Equal(t, want, got)
+	require.Equal(t, 1250*time.Millisecond, got.TTFT())
+	require.InDelta(t, float64(34900)/float64(35300), got.CacheHitRate(), 1e-9)
+	require.False(t, got.IsZero())
+	require.True(t, Stats{}.IsZero())
+	require.Zero(t, Stats{}.CacheHitRate(), "zero stats have no prompt tokens")
+
+	replacement := Stats{OutputTokens: 5}
+	msg.SetStats(replacement)
+	got, ok = msg.Stats()
+	require.True(t, ok)
+	require.Equal(t, replacement, got)
+	require.Len(t, msg.Parts, 1, "SetStats must replace the existing part")
+}
+
+func TestStatsPartRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	want := Stats{
+		TTFTMillis:          800,
+		TokensPerSecond:     42.3,
+		CacheReadTokens:     12400,
+		CacheCreationTokens: 100,
+		TotalPromptTokens:   13500,
+		OutputTokens:        1200,
+	}
+	parts := []ContentPart{
+		TextContent{Text: "answer"},
+		Finish{Reason: FinishReasonEndTurn, Time: 1},
+		want,
+	}
+
+	data, err := marshalParts(parts)
+	require.NoError(t, err)
+
+	decoded, err := unmarshalParts(data)
+	require.NoError(t, err)
+
+	msg := &Message{Role: Assistant, Parts: decoded}
+	require.NotNil(t, msg.FinishPart(), "other parts must survive the round trip")
+	got, ok := msg.Stats()
+	require.True(t, ok)
+	require.Equal(t, want, got)
+}
+
+func TestToAIMessageIgnoresStats(t *testing.T) {
+	t.Parallel()
+
+	msg := &Message{
+		Role: Assistant,
+		Parts: []ContentPart{
+			TextContent{Text: "answer"},
+			Stats{TotalPromptTokens: 100, OutputTokens: 10},
+		},
+	}
+
+	messages := msg.ToAIMessage()
+	require.Len(t, messages, 1)
+	require.Len(t, messages[0].Content, 1, "stats are metadata and must not be sent back to the model")
 }

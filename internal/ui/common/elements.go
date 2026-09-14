@@ -11,6 +11,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/crush/internal/agent/hyper"
 	"github.com/charmbracelet/crush/internal/home"
+	"github.com/charmbracelet/crush/internal/message"
 	"github.com/charmbracelet/crush/internal/session"
 	"github.com/charmbracelet/crush/internal/ui/styles"
 	"github.com/charmbracelet/x/ansi"
@@ -39,8 +40,6 @@ type ModelContextInfo struct {
 	ModelContext   int64
 	Cost           float64
 	EstimatedUsage bool
-	// Stats holds runtime statistics for the most recent model step.
-	Stats session.StepStats
 	// Totals holds cumulative token usage for the whole session.
 	Totals session.SessionTokens
 }
@@ -83,8 +82,9 @@ func ModelInfo(t *styles.Styles, modelName, providerName, reasoningInfo string, 
 	if context != nil {
 		formattedInfo := formatTokensAndCost(t, context.ContextUsed, context.ModelContext, context.Cost, context.EstimatedUsage)
 		parts = append(parts, lipgloss.NewStyle().PaddingLeft(2).Render(formattedInfo))
-		if stats := formatStepStats(t, context, width); stats != "" {
-			parts = append(parts, lipgloss.NewStyle().PaddingLeft(2).Render(stats))
+		if totalParts := sessionTotalParts(context.Totals, context.EstimatedUsage); len(totalParts) > 0 {
+			totals := renderStatGroups(t.ModelInfo.Stats, width-2, totalParts)
+			parts = append(parts, lipgloss.NewStyle().PaddingLeft(2).Render(totals))
 		}
 	}
 
@@ -126,54 +126,35 @@ func formatTokensAndCost(t *styles.Styles, tokens, contextWindow int64, cost flo
 	return fmt.Sprintf("%s %s", formattedTokens, formattedCost)
 }
 
-// formatStepStats renders runtime statistics for the most recent model
-// step as semantic rows: response timing (time to first token and
-// generation speed), token accounting (the step's input tokens with the
-// cache hit rate, plus the generated output tokens), and cumulative
-// session totals, e.g. "0.8s · 42.3 tok/s", "↑15.2K 92.00% · ↓1.2K" and
-// "Σ ↑1.2M 94.10% · ↓45.6K". The token rows always wrap below the
-// timing row; a row that does not fit on a single line splits into one
-// stat per line. It returns an empty string when there are no stats to
-// show.
-func formatStepStats(t *styles.Styles, context *ModelContextInfo, width int) string {
-	stats := context.Stats
-
-	var timing, tokens, totals []string
-	if stats.TTFT > 0 {
-		timing = append(timing, formatStepDuration(stats.TTFT))
+// FormatTurnStats renders runtime statistics for a single user turn as
+// semantic groups: response timing (time to first token and generation
+// speed) and token accounting (the turn's prompt tokens with the cache
+// hit rate, plus the generated output tokens). The groups share one line
+// when they fit within the available width, so a normal terminal spends a
+// single line under the assistant footer; otherwise they fall back to one
+// group per line and then to one stat per line. indent is the left padding
+// applied to every line; width is the total number of columns available to
+// the block, including the indent. It returns an empty string when there
+// are no stats to show.
+func FormatTurnStats(t *styles.Styles, stats message.Stats, width, indent int) string {
+	var timing, tokens []string
+	if ttft := stats.TTFT(); ttft > 0 {
+		timing = append(timing, formatStepDuration(ttft))
 	}
 	if stats.TokensPerSecond > 0 {
-		timing = append(timing, formatTokensPerSecond(stats.TokensPerSecond, context.EstimatedUsage))
+		timing = append(timing, formatTokensPerSecond(stats.TokensPerSecond, stats.Estimated))
 	}
 	if cache := formatCacheStats(stats); cache != "" {
 		tokens = append(tokens, cache)
 	}
-	if output := formatOutputStats(stats, context.EstimatedUsage); output != "" {
+	if output := formatOutputStats(stats); output != "" {
 		tokens = append(tokens, output)
 	}
-	totals = append(totals, formatSessionTotals(context.Totals, context.EstimatedUsage)...)
-
-	if len(timing) == 0 && len(tokens) == 0 && len(totals) == 0 {
-		return ""
+	style := t.Messages.AssistantInfoStats
+	if indent > 0 {
+		style = style.PaddingLeft(indent)
 	}
-
-	// ModelInfo pads the stats block by two columns.
-	available := width - 2
-
-	// Timing and token rows never share a line; a row that does not fit
-	// splits into one stat per line.
-	var lines []string
-	for _, group := range [][]string{timing, tokens, totals} {
-		if len(group) == 0 {
-			continue
-		}
-		if line := joinStatLines(group...); lipgloss.Width(line) <= available {
-			lines = append(lines, line)
-			continue
-		}
-		lines = append(lines, group...)
-	}
-	return renderStatLines(t, lines...)
+	return renderStatGroups(style, width-indent, timing, tokens)
 }
 
 // formatTokensPerSecond formats the generation speed, prefixing estimated
@@ -193,14 +174,44 @@ func formatTokensPerSecond(tps float64, estimated bool) string {
 // renderStatLines styles each stat line individually and stacks them.
 // Rendering line by line avoids the block padding lipgloss applies to
 // multi-line strings.
-func renderStatLines(t *styles.Styles, lines ...string) string {
+func renderStatLines(style lipgloss.Style, lines ...string) string {
 	rendered := make([]string, 0, len(lines))
 	for _, line := range lines {
 		if line != "" {
-			rendered = append(rendered, t.ModelInfo.Stats.Render(line))
+			rendered = append(rendered, style.Render(line))
 		}
 	}
 	return strings.Join(rendered, "\n")
+}
+
+// renderStatGroups lays the stats out as compactly as the width allows.
+// It first tries every stat on one line; when that overflows it falls
+// back to joining each group on its own line, and finally to one stat per
+// line, so narrow panes never overflow. Empty groups are skipped.
+func renderStatGroups(style lipgloss.Style, width int, groups ...[]string) string {
+	var flat []string
+	for _, group := range groups {
+		flat = append(flat, group...)
+	}
+	if len(flat) == 0 {
+		return ""
+	}
+	if line := joinStatLines(flat...); lipgloss.Width(line) <= width {
+		return renderStatLines(style, line)
+	}
+
+	var lines []string
+	for _, group := range groups {
+		if len(group) == 0 {
+			continue
+		}
+		if line := joinStatLines(group...); lipgloss.Width(line) <= width {
+			lines = append(lines, line)
+			continue
+		}
+		lines = append(lines, group...)
+	}
+	return renderStatLines(style, lines...)
 }
 
 // joinStatLines joins non-empty stats with a middle dot.
@@ -214,41 +225,41 @@ func joinStatLines(parts ...string) string {
 	return strings.Join(nonEmpty, " · ")
 }
 
-// formatCacheStats renders the step's input tokens with an upward arrow
-// and the cache hit rate, e.g. "↑15.2K 99.00%". The hit rate is omitted
-// when unknown. It returns an empty string when no tokens were served
-// from the cache or the input total is unknown.
-func formatCacheStats(stats session.StepStats) string {
-	if stats.CacheReadTokens == 0 || stats.TotalPromptTokens == 0 {
+// formatCacheStats renders the turn's prompt tokens with an upward arrow
+// and, when known, the cache hit rate, e.g. "↑15.2K 99.00%". Prompt
+// tokens are shown even without cache reads so the row stays the
+// increment of the session totals; the rate is omitted when no tokens
+// were served from the cache. It returns an empty string when the prompt
+// total is unknown.
+func formatCacheStats(stats message.Stats) string {
+	if stats.TotalPromptTokens == 0 {
 		return ""
 	}
 	cache := fmt.Sprintf("↑%s", formatTokenCount(stats.TotalPromptTokens))
-	if stats.CacheHitRate > 0 {
-		cache += fmt.Sprintf(" %.2f%%", stats.CacheHitRate*100)
+	if rate := stats.CacheHitRate(); rate > 0 {
+		cache += fmt.Sprintf(" %.2f%%", rate*100)
 	}
 	return cache
 }
 
-// formatOutputStats renders the generated output token count with a
-// downward arrow, e.g. "↓1.2K", pairing it with the upward arrow used
-// for the cache reads beside it.
-func formatOutputStats(stats session.StepStats, estimated bool) string {
+// formatOutputStats renders the turn's generated output token count with a
+// downward arrow, e.g. "↓1.2K", pairing it with the upward arrow used for
+// the prompt tokens beside it.
+func formatOutputStats(stats message.Stats) string {
 	if stats.OutputTokens == 0 {
 		return ""
 	}
 	tokens := formatTokenCount(stats.OutputTokens)
-	if estimated {
+	if stats.Estimated {
 		tokens = "~" + tokens
 	}
 	return "↓" + tokens
 }
 
-// formatSessionTotals renders cumulative session token usage: the total
-// prompt tokens with the overall cache hit rate, plus all generated
-// output tokens, e.g. "Σ ↑1.2M 94.10%" and "↓45.6K". The sigma marks
-// the values as session-wide aggregates. It returns no parts when the
-// session has no recorded token usage.
-func formatSessionTotals(totals session.SessionTokens, estimated bool) []string {
+// sessionTotalParts returns the individual rows of the session totals:
+// prompt tokens with the overall cache hit rate, plus generated output
+// tokens. It returns no parts when the session has no recorded usage.
+func sessionTotalParts(totals session.SessionTokens, estimated bool) []string {
 	var parts []string
 	if prompt := totals.TotalPromptTokens(); prompt > 0 {
 		part := "Σ ↑" + formatTokenCount(prompt)

@@ -273,11 +273,15 @@ func AssistantInfoID(messageID string) string {
 // render its info footer. The turn that ends the prompt always gets one;
 // intermediate turns only get one when a Prism-routed model name is
 // available, since that is the only case where the footer adds
-// per-turn information.
+// per-turn information. Messages carrying usage stats always get one so
+// truncated or failed turns still surface their token accounting.
 func ShouldShowAssistantInfo(msg *message.Message) bool {
 	finishData := msg.FinishPart()
 	if finishData == nil {
 		return false
+	}
+	if _, ok := msg.Stats(); ok {
+		return true
 	}
 	return finishData.Reason == message.FinishReasonEndTurn || msg.PrismModelName != ""
 }
@@ -372,24 +376,36 @@ func (a *AssistantInfoItem) renderContent(width int) string {
 		modelFormatted = fmt.Sprintf("%s %s %s", modelFormatted, arrow, routedModel)
 	}
 	savings := prismSavingsSuffix(a.sty, a.message)
-	if !isFinalTurn {
-		if savings != "" {
-			return fmt.Sprintf("%s %s %s", icon, modelFormatted, savings)
+
+	header := fmt.Sprintf("%s %s", icon, modelFormatted)
+	if isFinalTurn {
+		providerName := a.message.Provider
+		if providerConfig, ok := a.cfg.Providers.Get(a.message.Provider); ok {
+			providerName = providerConfig.Name
 		}
-		return fmt.Sprintf("%s %s", icon, modelFormatted)
+		provider := a.sty.Messages.AssistantInfoProvider.Render(fmt.Sprintf("via %s", providerName))
+		duration := time.Unix(finishData.Time, 0).Sub(a.lastUserMessageTime)
+		infoMsg := a.sty.Messages.AssistantInfoDuration.Render(fmt.Sprintf("in %s", duration))
+		header = fmt.Sprintf("%s %s %s", header, provider, infoMsg)
 	}
-	providerName := a.message.Provider
-	if providerConfig, ok := a.cfg.Providers.Get(a.message.Provider); ok {
-		providerName = providerConfig.Name
-	}
-	provider := a.sty.Messages.AssistantInfoProvider.Render(fmt.Sprintf("via %s", providerName))
-	duration := time.Unix(finishData.Time, 0).Sub(a.lastUserMessageTime)
-	infoMsg := a.sty.Messages.AssistantInfoDuration.Render(fmt.Sprintf("in %s", duration))
-	assistant := fmt.Sprintf("%s %s %s %s", icon, modelFormatted, provider, infoMsg)
 	if savings != "" {
-		assistant = fmt.Sprintf("%s %s", assistant, savings)
+		header = fmt.Sprintf("%s %s", header, savings)
 	}
-	return common.Section(a.sty, assistant, width)
+	if isFinalTurn {
+		header = common.Section(a.sty, header, width)
+	}
+
+	stats, ok := a.message.Stats()
+	if !ok {
+		return header
+	}
+	// Stats are ancillary per-turn information, indented so they read as
+	// metadata rather than message content.
+	block := common.FormatTurnStats(a.sty, stats, width, 2)
+	if block == "" {
+		return header
+	}
+	return header + "\n" + block
 }
 
 // cappedMessageWidth returns the maximum width for message content for readability.

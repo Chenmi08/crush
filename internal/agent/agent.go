@@ -787,11 +787,12 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	startTime := time.Now()
 	a.eventPromptSent(call.SessionID)
 
-	// Per-step timestamps for the sidebar TTFT/TPS stats. The stream
-	// callbacks fire in order on the stream goroutine, so plain locals
-	// are safe.
+	// Per-step timestamps and the per-turn stats accumulator for the
+	// assistant footer (TTFT/TPS/token accounting). The stream callbacks
+	// fire in order on the stream goroutine, so plain locals are safe.
 	var stepStart, firstTokenAt, streamEnd time.Time
 	var streamUsage fantasy.Usage
+	turn := &turnStats{}
 	markFirstToken := func() {
 		if firstTokenAt.IsZero() {
 			firstTokenAt = time.Now()
@@ -1066,7 +1067,16 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			}
 			usage, estimated := fallbackStepUsage(stepMessages, stepResult)
 			a.updateSessionUsage(largeModel, &updatedSession, usage, a.openrouterCost(stepResult.ProviderMetadata), estimated)
-			updatedSession.Stats = computeStepStats(stepStart, firstTokenAt, streamEnd, streamUsage, usage)
+			metrics := computeStepStats(stepStart, firstTokenAt, streamEnd, streamUsage, usage, estimated)
+			turn.addStep(metrics)
+			// The turn's aggregate is attached to the message that ends it,
+			// before the update that also carries the finish part. Tool-use
+			// steps in the middle of a turn carry no stats of their own.
+			if finishReason != message.FinishReasonToolUse {
+				if stats := turn.snapshot(); !stats.IsZero() {
+					currentAssistant.SetStats(stats)
+				}
+			}
 			extractHyperCredits(stepResult.ProviderMetadata)
 			_, sessionErr := a.sessions.Save(ctx, updatedSession)
 			if sessionErr != nil {
@@ -1225,6 +1235,11 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			currentAssistant.AddFinish(message.FinishReasonError, stringext.Capitalize(wrapped.Title), wrapped.Message)
 		} else {
 			currentAssistant.AddFinish(message.FinishReasonError, defaultTitle, err.Error())
+		}
+		// A turn that fails mid-way still carries the stats accumulated
+		// from its completed steps so the footer can surface them.
+		if stats := turn.snapshot(); !stats.IsZero() {
+			currentAssistant.SetStats(stats)
 		}
 		// Note: we use the cleanup context here because the genCtx has been
 		// cancelled.

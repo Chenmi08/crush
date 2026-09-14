@@ -48,10 +48,6 @@ func buildSidebarBenchUI(tb testing.TB) *UI {
 		PromptTokens:     12400,
 		CompletionTokens: 3210,
 		Cost:             0.42,
-		Stats: session.StepStats{
-			TokensPerSecond: 42.5,
-			OutputTokens:    3210,
-		},
 		Totals: session.SessionTokens{
 			InputTokens:     9000,
 			OutputTokens:    3210,

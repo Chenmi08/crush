@@ -74,6 +74,10 @@ func TestSidebarDrawCache_ReuseMatchesFreshBuffer(t *testing.T) {
 	t.Parallel()
 
 	u := buildSidebarBenchUI(t)
+	// Shrink the viewport so the fixture overflows by more than the
+	// scroll step below; the default test height fits the whole fixture.
+	u.height = 32
+	u.updateLayoutAndSize()
 	u.sidebarOffset = 0
 	u.updateSidebarScrollState()
 	require.Greater(t, u.sidebarMaxOffsetVal, 2, "sidebar must be scrollable for this test")
