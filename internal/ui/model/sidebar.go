@@ -53,7 +53,6 @@ func (m *UI) modelInfo(width int) string {
 			Cost:           m.session.Cost,
 			ModelContext:   model.CatwalkCfg.ContextWindow,
 			EstimatedUsage: m.session.EstimatedUsage,
-			Stats:          m.session.Stats,
 			Totals:         m.session.Totals,
 		}
 	}
@@ -216,13 +215,6 @@ func (m *UI) sidebarModelInfoKey(width int) uint64 {
 		h = sidebarHashInt64(h, s.PromptTokens)
 		h = sidebarHashFloat(h, s.Cost)
 		h = sidebarHashBool(h, s.EstimatedUsage)
-		h = sidebarHashInt64(h, int64(s.Stats.TTFT))
-		h = sidebarHashFloat(h, s.Stats.TokensPerSecond)
-		h = sidebarHashInt64(h, s.Stats.CacheReadTokens)
-		h = sidebarHashInt64(h, s.Stats.CacheCreationTokens)
-		h = sidebarHashInt64(h, s.Stats.TotalPromptTokens)
-		h = sidebarHashFloat(h, s.Stats.CacheHitRate)
-		h = sidebarHashInt64(h, s.Stats.OutputTokens)
 		h = sidebarHashInt64(h, s.Totals.InputTokens)
 		h = sidebarHashInt64(h, s.Totals.OutputTokens)
 		h = sidebarHashInt64(h, s.Totals.CacheReadTokens)
