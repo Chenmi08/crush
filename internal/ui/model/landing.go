@@ -46,9 +46,24 @@ func (m *UI) landingView() string {
 
 	lspSection := m.lspInfo(mcpLspSectionWidth, max(1, remainingHeightArea.Dy()), false)
 	mcpSection := m.mcpInfo(mcpLspSectionWidth, max(1, remainingHeightArea.Dy()), false)
-	skillsSection := m.skillsInfo(mcpLspSectionWidth, max(1, remainingHeightArea.Dy()), false)
+	skillsSection, skillRows := m.skillsSection(mcpLspSectionWidth, max(1, remainingHeightArea.Dy()), false)
 
 	content := lipgloss.JoinHorizontal(lipgloss.Left, lspSection, " ", mcpSection, " ", skillsSection)
+
+	// Record where the Skills column landed so clicks on its indicator
+	// circles can be mapped back to a skill. The column starts after the LSP
+	// and MCP columns plus their separators, and the shared content block
+	// begins one padding line below the info section plus its blank
+	// separator (see the JoinVertical below).
+	skillsTop := m.layout.main.Min.Y + 1 + lipgloss.Height(infoSection) + 1
+	skillsLeft := m.layout.main.Min.X + lipgloss.Width(lspSection) + 1 + lipgloss.Width(mcpSection) + 1
+	m.landingSkillsRect = image.Rect(
+		skillsLeft,
+		skillsTop,
+		skillsLeft+mcpLspSectionWidth,
+		skillsTop+lipgloss.Height(skillsSection),
+	)
+	m.landingSkillRows = skillRows
 
 	return lipgloss.NewStyle().
 		Width(width).

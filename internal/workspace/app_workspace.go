@@ -45,7 +45,19 @@ func NewAppWorkspace(a *app.App, store *config.ConfigStore) *AppWorkspace {
 // -- Sessions --
 
 func (w *AppWorkspace) CreateSession(ctx context.Context, title string) (session.Session, error) {
-	return w.app.Sessions.Create(ctx, title)
+	sess, err := w.app.Sessions.Create(ctx, title)
+	if err != nil {
+		return session.Session{}, err
+	}
+	// Seed the session's skill opt-outs from the global default so a new
+	// session starts where options.disabled_skills left off, then diverges
+	// independently as the user toggles skills for this session.
+	if disabled := w.store.DisabledSkills(); len(disabled) > 0 {
+		if err := w.app.Sessions.SetDisabledSkills(ctx, sess.ID, disabled); err != nil {
+			return session.Session{}, err
+		}
+	}
+	return w.app.Sessions.Get(ctx, sess.ID)
 }
 
 func (w *AppWorkspace) GetSession(ctx context.Context, sessionID string) (session.Session, error) {
@@ -58,6 +70,10 @@ func (w *AppWorkspace) ListSessions(ctx context.Context) ([]session.Session, err
 
 func (w *AppWorkspace) SaveSession(ctx context.Context, sess session.Session) (session.Session, error) {
 	return w.app.Sessions.Save(ctx, sess)
+}
+
+func (w *AppWorkspace) SetSessionDisabledSkills(ctx context.Context, sessionID string, names []string) error {
+	return w.app.Sessions.SetDisabledSkills(ctx, sessionID, names)
 }
 
 func (w *AppWorkspace) DeleteSession(ctx context.Context, sessionID string) error {
@@ -389,14 +405,18 @@ func (w *AppWorkspace) InitializePrompt() (string, error) {
 	return agent.InitializePrompt(w.store)
 }
 
+// ListSkills returns the full discovered skill catalog. Which skills a
+// session can use is decided per session from its own disabled set, so
+// filtering here by the global default would hide skills a session
+// re-enabled.
 func (w *AppWorkspace) ListSkills(_ context.Context) ([]skills.CatalogEntry, error) {
 	mgr := w.app.Skills
-	return skills.Catalog(mgr.ActiveSkills(), mgr.ResolvedPaths(), mgr.WorkingDir()), nil
+	return skills.Catalog(mgr.AllSkills(), mgr.ResolvedPaths(), mgr.WorkingDir()), nil
 }
 
 func (w *AppWorkspace) ReadSkill(_ context.Context, skillID string) ([]byte, skills.SkillReadResult, error) {
 	mgr := w.app.Skills
-	return skills.ReadContent(mgr.ActiveSkills(), mgr.ResolvedPaths(), mgr.WorkingDir(), skillID)
+	return skills.ReadContent(mgr.AllSkills(), mgr.ResolvedPaths(), mgr.WorkingDir(), skillID)
 }
 
 // -- MCP operations --

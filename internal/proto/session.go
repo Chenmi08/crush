@@ -23,10 +23,18 @@ type Session struct {
 	SummaryMessageID string  `json:"summary_message_id"`
 	Cost             float64 `json:"cost"`
 	Todos            []Todo  `json:"todos,omitempty"`
-	CreatedAt        int64   `json:"created_at"`
-	UpdatedAt        int64   `json:"updated_at"`
-	IsBusy           bool    `json:"is_busy"`
-	AttachedClients  int     `json:"attached_clients"`
+	// DisabledSkills carries the session's per-session skill opt-outs.
+	DisabledSkills  []string `json:"disabled_skills,omitempty"`
+	CreatedAt       int64    `json:"created_at"`
+	UpdatedAt       int64    `json:"updated_at"`
+	IsBusy          bool     `json:"is_busy"`
+	AttachedClients int      `json:"attached_clients"`
+}
+
+// SessionDisabledSkills is the request body for updating a session's
+// per-session disabled-skill set.
+type SessionDisabledSkills struct {
+	DisabledSkills []string `json:"disabled_skills"`
 }
 
 // Todo represents a single todo entry on a session in the proto layer.

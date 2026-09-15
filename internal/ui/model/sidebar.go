@@ -129,6 +129,26 @@ func (c *cachedSidebarSection) get(key uint64, render func() string) string {
 	return c.value
 }
 
+// cachedSkillsSection memoizes the rendered Skills section together with
+// the rows it drew. The sidebar needs both to map a click to a skill, so
+// they are cached and invalidated as a pair.
+type cachedSkillsSection struct {
+	key   uint64
+	valid bool
+	text  string
+	rows  []skillRow
+}
+
+func (c *cachedSkillsSection) get(key uint64, render func() (string, []skillRow)) (string, []skillRow) {
+	if c.valid && c.key == key {
+		return c.text, c.rows
+	}
+	c.text, c.rows = render()
+	c.key = key
+	c.valid = true
+	return c.text, c.rows
+}
+
 // sidebarSectionCache memoizes the rendered sidebar sections plus the
 // assembled content. The contentKey fast path skips the assembly entirely
 // when every section input is unchanged.
@@ -139,6 +159,10 @@ type sidebarSectionCache struct {
 	totalLines    int
 	contentHeight int
 	drawLogo      string
+	// skillRows maps assembled-content lines to the skill rendered on
+	// them. It is stored alongside content so a cache hit reuses the exact
+	// same mapping the content was built with.
+	skillRows []skillRow
 
 	title  cachedSidebarSection
 	cwd    cachedSidebarSection
@@ -146,7 +170,7 @@ type sidebarSectionCache struct {
 	model  cachedSidebarSection
 	lsp    cachedSidebarSection
 	mcp    cachedSidebarSection
-	skills cachedSidebarSection
+	skills cachedSkillsSection
 	files  cachedSidebarSection
 }
 
@@ -184,6 +208,9 @@ func (m *UI) invalidateSidebar() {
 	m.sidebarSections = sidebarSectionCache{}
 	m.sidebarDraw = sidebarDrawCache{}
 	m.sidebarLines = nil
+	m.sidebarSkillRows = nil
+	m.landingSkillRows = nil
+	m.landingSkillsRect = image.Rectangle{}
 	m.sidebarContentVersion++
 }
 
@@ -280,7 +307,7 @@ func (m *UI) sidebarMCPKey(width int) uint64 {
 }
 
 // sidebarSkillsKey fingerprints the discovered skill states and the
-// disabled-skills config. skillStatusItems orders states by path, so they
+// session's disabled-skill set. Skill rows are ordered by path, so states
 // are hashed in order; the disabled set is order-independent.
 func (m *UI) sidebarSkillsKey(width int) uint64 {
 	h := sidebarHashInt(sidebarHashSeed, width)
@@ -295,16 +322,11 @@ func (m *UI) sidebarSkillsKey(width int) uint64 {
 		h = sidebarHashBool(h, state.UserInvocable)
 		h = sidebarHashBool(h, state.DisableModelInvocation)
 	}
-	if m.com != nil {
-		if cfg := m.com.Config(); cfg != nil && cfg.Options != nil {
-			var disabled uint64
-			for _, name := range cfg.Options.DisabledSkills {
-				disabled += sidebarHashString(sidebarHashSeed, name)
-			}
-			h ^= disabled
-		}
+	var disabled uint64
+	for name := range m.disabledSkillNames() {
+		disabled += sidebarHashString(sidebarHashSeed, name)
 	}
-	return h
+	return h ^ disabled
 }
 
 // sidebarFilesKey fingerprints the modified-files section inputs.
@@ -392,9 +414,6 @@ func (m *UI) updateSidebarScrollState() {
 		mcpSection := cache.mcp.get(mcpKey, func() string {
 			return m.mcpInfo(contentWidth, mcpCount(m.com.Config().MCP.Sorted(), m.mcpStates), true)
 		})
-		skillsSection := cache.skills.get(skillsKey, func() string {
-			return m.skillsInfo(contentWidth, len(m.skillStatusItems()), true)
-		})
 		filesSection := cache.files.get(filesKey, func() string {
 			return m.filesInfo(cwd, contentWidth, fileChangeCount(m.sessionFiles), true)
 		})
@@ -402,24 +421,40 @@ func (m *UI) updateSidebarScrollState() {
 			return m.modelInfo(contentWidth)
 		})
 
-		// Build the scrollable content.
-		content = lipgloss.JoinVertical(
-			lipgloss.Left,
-			title,
-			"",
-			cwdLine,
-			"",
-			modelSection,
-			"",
-			filesSection,
-			"",
-			lspSection,
-			"",
-			mcpSection,
-			"",
-			skillsSection,
-		)
+		// Render the Skills section together with the rows it drew, so a
+		// click can be mapped back to a skill. Skills is the last section,
+		// so its position is the running height of everything before it.
+		skillsSection, skillRows := cache.skills.get(skillsKey, func() (string, []skillRow) {
+			return m.skillsSection(contentWidth, len(m.allSkillStatusItems()), true)
+		})
+
+		// Build the scrollable content. Parts are joined with "\n", so the
+		// height of each part is exactly the number of lines it contributes
+		// to the result.
+		parts := []string{
+			title, "",
+			cwdLine, "",
+			modelSection, "",
+			filesSection, "",
+			lspSection, "",
+			mcpSection, "",
+		}
+		skillsStart := 0
+		for _, part := range parts {
+			skillsStart += lipgloss.Height(part)
+		}
+		parts = append(parts, skillsSection)
+		content = strings.Join(parts, "\n")
 		totalLines = strings.Count(content, "\n") + 1
+
+		rows := make([]skillRow, 0, len(skillRows))
+		for _, row := range skillRows {
+			rows = append(rows, skillRow{
+				Name:   row.Name,
+				Line:   skillsStart + row.Line,
+				Height: row.Height,
+			})
+		}
 
 		var logoRect, contentRect image.Rectangle
 		layout.Vertical(
@@ -434,6 +469,7 @@ func (m *UI) updateSidebarScrollState() {
 		cache.totalLines = totalLines
 		cache.contentHeight = contentHeight
 		cache.drawLogo = sidebarLogo
+		cache.skillRows = rows
 		m.sidebarLines = strings.Split(content, "\n")
 		m.sidebarContentVersion++
 	}
@@ -445,6 +481,9 @@ func (m *UI) updateSidebarScrollState() {
 	m.sidebarDrawLogo = sidebarLogo
 	m.sidebarScrollable = totalLines > m.sidebarContentHeight
 	m.sidebarMaxOffsetVal = max(0, totalLines-m.sidebarContentHeight)
+	// The row map comes from the same cache entry as the content, so a
+	// cache hit reuses the exact mapping the content was built with.
+	m.sidebarSkillRows = cache.skillRows
 
 	// If the sidebar is focused but no longer scrollable (e.g. after a
 	// resize), return focus to the chat.

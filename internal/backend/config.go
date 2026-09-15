@@ -181,7 +181,7 @@ func (b *Backend) ReadSkill(ctx context.Context, workspaceID, skillID string) ([
 
 	mgr := ws.Skills
 	content, result, err := skills.ReadContent(
-		mgr.ActiveSkills(), mgr.ResolvedPaths(), mgr.WorkingDir(), skillID,
+		mgr.AllSkills(), mgr.ResolvedPaths(), mgr.WorkingDir(), skillID,
 	)
 	if err != nil {
 		return nil, proto.SkillReadResult{}, err
@@ -201,7 +201,11 @@ func (b *Backend) ListSkills(workspaceID string) ([]proto.SkillInfo, error) {
 		return nil, err
 	}
 	mgr := ws.Skills
-	entries := skills.Catalog(mgr.ActiveSkills(), mgr.ResolvedPaths(), mgr.WorkingDir())
+	// The catalog is the full discovered set: which skills a session can
+	// actually use is decided per session from its own disabled set, so
+	// filtering here by the global default would hide skills a session
+	// has re-enabled.
+	entries := skills.Catalog(mgr.AllSkills(), mgr.ResolvedPaths(), mgr.WorkingDir())
 	result := make([]proto.SkillInfo, len(entries))
 	for i, entry := range entries {
 		result[i] = proto.SkillInfo{

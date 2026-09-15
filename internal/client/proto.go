@@ -802,6 +802,25 @@ func (c *Client) SaveSession(ctx context.Context, id string, sess proto.Session)
 	return &saved, nil
 }
 
+// SetSessionDisabledSkills replaces a session's per-session disabled
+// skill set and returns the updated session.
+func (c *Client) SetSessionDisabledSkills(ctx context.Context, id, sessionID string, names []string) (*proto.Session, error) {
+	body := proto.SessionDisabledSkills{DisabledSkills: names}
+	rsp, err := c.put(ctx, fmt.Sprintf("/workspaces/%s/sessions/%s/disabled-skills", id, sessionID), nil, jsonBody(body), http.Header{"Content-Type": []string{"application/json"}})
+	if err != nil {
+		return nil, fmt.Errorf("failed to set session disabled skills: %w", err)
+	}
+	defer rsp.Body.Close()
+	if rsp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to set session disabled skills: status code %d", rsp.StatusCode)
+	}
+	var session proto.Session
+	if err := json.NewDecoder(rsp.Body).Decode(&session); err != nil {
+		return nil, fmt.Errorf("failed to decode session: %w", err)
+	}
+	return &session, nil
+}
+
 // DeleteSession deletes a session from a workspace.
 func (c *Client) DeleteSession(ctx context.Context, id string, sessionID string) error {
 	rsp, err := c.delete(ctx, fmt.Sprintf("/workspaces/%s/sessions/%s", id, sessionID), nil, nil)

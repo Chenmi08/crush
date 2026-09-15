@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 
@@ -91,8 +92,12 @@ type Session struct {
 	SummaryMessageID string
 	Cost             float64
 	Todos            []Todo
-	CreatedAt        int64
-	UpdatedAt        int64
+	// DisabledSkills lists the skills this session opted out of, on top
+	// of (and independent from) the global options.disabled_skills
+	// default a new session is seeded from.
+	DisabledSkills []string
+	CreatedAt      int64
+	UpdatedAt      int64
 	// Totals carries cumulative token usage for the whole session. It
 	// is persisted with the session.
 	Totals SessionTokens
@@ -107,6 +112,7 @@ type Service interface {
 	GetLast(ctx context.Context) (Session, error)
 	List(ctx context.Context) ([]Session, error)
 	Save(ctx context.Context, session Session) (Session, error)
+	SetDisabledSkills(ctx context.Context, id string, names []string) error
 	UpdateTitleAndUsage(ctx context.Context, sessionID, title string, tokens SessionTokens, cost float64) error
 	Rename(ctx context.Context, id string, title string) error
 	Delete(ctx context.Context, id string) error
@@ -122,11 +128,30 @@ type service struct {
 	db *sql.DB
 	q  *db.Queries
 
+	// defaultDisabledSkills is consulted for sessions that never stored
+	// their own skill opt-outs (rows written before per-session skills
+	// existed). Such a session inherits the global
+	// options.disabled_skills default instead of silently re-enabling every
+	// globally disabled skill. Nil means no fallback.
+	defaultDisabledSkills func() []string
+
 	// Estimated usage stays in memory so fetch-modify-save paths (e.g.,
 	// updating todos or parent-session cost) do not rebuild a session from
 	// SQLite and incorrectly clear the UI "~" marker.
 	estimatedUsageMu sync.RWMutex
 	estimatedUsage   map[string]bool
+}
+
+// Option configures a session service.
+type Option func(*service)
+
+// WithDefaultDisabledSkills sets the provider consulted for sessions that
+// never stored their own skill opt-outs, so legacy rows keep inheriting the
+// global options.disabled_skills default.
+func WithDefaultDisabledSkills(fn func() []string) Option {
+	return func(s *service) {
+		s.defaultDisabledSkills = fn
+	}
 }
 
 func (s *service) Create(ctx context.Context, title string) (Session, error) {
@@ -229,6 +254,10 @@ func (s *service) Save(ctx context.Context, session Session) (Session, error) {
 	if err != nil {
 		return Session{}, err
 	}
+	disabledSkillsJSON, err := marshalDisabledSkills(session.DisabledSkills)
+	if err != nil {
+		return Session{}, err
+	}
 
 	dbSession, err := s.q.UpdateSession(ctx, db.UpdateSessionParams{
 		ID:                  session.ID,
@@ -247,6 +276,10 @@ func (s *service) Save(ctx context.Context, session Session) (Session, error) {
 		Todos: sql.NullString{
 			String: todosJSON,
 			Valid:  todosJSON != "",
+		},
+		DisabledSkills: sql.NullString{
+			String: disabledSkillsJSON,
+			Valid:  disabledSkillsJSON != "",
 		},
 	})
 	if err != nil {
@@ -280,6 +313,37 @@ func (s *service) UpdateTitleAndUsage(ctx context.Context, sessionID, title stri
 		return err
 	}
 	s.publishSessionUpdate(ctx, sessionID)
+	return nil
+}
+
+// SetDisabledSkills replaces a session's per-session disabled-skill set and
+// publishes the updated session. It writes only the disabled_skills column
+// so a concurrent title/usage update cannot be clobbered. Names are stored
+// sorted so the persisted value is deterministic, and an explicitly empty
+// set is stored as `[]` rather than NULL so it stays distinguishable from a
+// legacy row that inherits the global default.
+func (s *service) SetDisabledSkills(ctx context.Context, id string, names []string) error {
+	if names == nil {
+		names = []string{}
+	}
+	disabledSkillsJSON, err := marshalDisabledSkills(names)
+	if err != nil {
+		return err
+	}
+	rows, err := s.q.UpdateSessionDisabledSkills(ctx, db.UpdateSessionDisabledSkillsParams{
+		ID: id,
+		DisabledSkills: sql.NullString{
+			String: disabledSkillsJSON,
+			Valid:  disabledSkillsJSON != "",
+		},
+	})
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
+	s.publishSessionUpdate(ctx, id)
 	return nil
 }
 
@@ -347,6 +411,15 @@ func (s *service) fromDBItem(item db.Session) Session {
 	if err != nil {
 		slog.Error("Failed to unmarshal todos", "session_id", item.ID, "error", err)
 	}
+	disabledSkills, err := unmarshalDisabledSkills(item.DisabledSkills.String)
+	if err != nil {
+		slog.Error("Failed to unmarshal disabled skills", "session_id", item.ID, "error", err)
+	}
+	// A NULL column means the session never stored its own opt-outs, so the
+	// global default still applies to it.
+	if !item.DisabledSkills.Valid && s.defaultDisabledSkills != nil {
+		disabledSkills = s.defaultDisabledSkills()
+	}
 	return Session{
 		ID:               item.ID,
 		ParentSessionID:  item.ParentSessionID.String,
@@ -357,6 +430,7 @@ func (s *service) fromDBItem(item db.Session) Session {
 		SummaryMessageID: item.SummaryMessageID.String,
 		Cost:             item.Cost,
 		Todos:            todos,
+		DisabledSkills:   disabledSkills,
 		CreatedAt:        item.CreatedAt,
 		UpdatedAt:        item.UpdatedAt,
 		Totals: SessionTokens{
@@ -390,14 +464,60 @@ func unmarshalTodos(data string) ([]Todo, error) {
 	return todos, nil
 }
 
-func NewService(q *db.Queries, conn *sql.DB) Service {
+// normalizeDisabledSkills sorts and deduplicates a disabled-skill set so
+// the persisted JSON and the in-memory value agree on one canonical order.
+// A non-nil input always yields a non-nil result, so an explicitly empty set
+// stays distinguishable from a session that never stored one (nil).
+func normalizeDisabledSkills(names []string) []string {
+	if names == nil {
+		return nil
+	}
+	cleaned := slices.Compact(slices.Sorted(slices.Values(names)))
+	if cleaned == nil {
+		cleaned = []string{}
+	}
+	return cleaned
+}
+
+// marshalDisabledSkills encodes a disabled-skill set for storage. A nil set
+// is stored as SQL NULL, meaning "the session never chose, inherit the
+// global default"; an explicitly empty set is stored as `[]`.
+func marshalDisabledSkills(names []string) (string, error) {
+	if names == nil {
+		return "", nil
+	}
+	data, err := json.Marshal(normalizeDisabledSkills(names))
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func unmarshalDisabledSkills(data string) ([]string, error) {
+	if data == "" {
+		return nil, nil
+	}
+	var names []string
+	if err := json.Unmarshal([]byte(data), &names); err != nil {
+		return nil, err
+	}
+	return normalizeDisabledSkills(names), nil
+}
+
+// NewService creates a session service. Options are optional so existing
+// callers keep working; see [WithDefaultDisabledSkills].
+func NewService(q *db.Queries, conn *sql.DB, opts ...Option) Service {
 	broker := pubsub.NewBroker[Session]()
-	return &service{
+	s := &service{
 		Broker:         broker,
 		db:             conn,
 		q:              q,
 		estimatedUsage: make(map[string]bool),
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // CreateAgentToolSessionID creates a session ID for agent tool sessions using the format "messageID$$toolCallID"

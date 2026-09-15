@@ -44,6 +44,7 @@ import (
 	"github.com/charmbracelet/crush/internal/message"
 	"github.com/charmbracelet/crush/internal/pubsub"
 	"github.com/charmbracelet/crush/internal/session"
+	"github.com/charmbracelet/crush/internal/skills"
 	"github.com/charmbracelet/crush/internal/stringext"
 	"github.com/charmbracelet/crush/internal/version"
 	"github.com/charmbracelet/x/ansi"
@@ -182,6 +183,10 @@ type sessionAgent struct {
 	isYolo               bool
 	notify               pubsub.Publisher[notify.Notification]
 	runComplete          pubsub.Publisher[notify.RunComplete]
+	// allSkills is the pre-filter discovery set. It is filtered per run by
+	// the session's DisabledSkills so the model sees the session's own
+	// skill catalog instead of a workspace-wide one.
+	allSkills []*skills.Skill
 
 	messageQueue   *csync.Map[string, []SessionAgentCall]
 	activeRequests *csync.Map[string, *activeCancel]
@@ -237,6 +242,9 @@ type SessionAgentOptions struct {
 	Tools                []fantasy.AgentTool
 	Notify               pubsub.Publisher[notify.Notification]
 	RunComplete          pubsub.Publisher[notify.RunComplete]
+	// AllSkills is the pre-filter discovery set used to build each
+	// session's model-facing skill block at run time.
+	AllSkills []*skills.Skill
 }
 
 func NewSessionAgent(
@@ -255,6 +263,7 @@ func NewSessionAgent(
 		isYolo:               opts.IsYolo,
 		notify:               opts.Notify,
 		runComplete:          opts.RunComplete,
+		allSkills:            opts.AllSkills,
 		messageQueue:         csync.NewMap[string, []SessionAgentCall](),
 		activeRequests:       csync.NewMap[string, *activeCancel](),
 		dispatchMu:           csync.NewMap[string, *sync.Mutex](),
@@ -565,6 +574,16 @@ func ValidateCall(call SessionAgentCall) error {
 	return nil
 }
 
+// sessionSkillsBlock returns the skills catalog to append to a session's
+// system prompt, honoring that session's own opt-outs. Sub-agents keep their
+// own prompt and never carry the catalog, so they get nothing.
+func sessionSkillsBlock(allSkills []*skills.Skill, sess session.Session, isSubAgent bool) string {
+	if isSubAgent {
+		return ""
+	}
+	return skills.PromptBlock(skills.Filter(allSkills, sess.DisabledSkills))
+}
+
 func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *fantasy.AgentResult, retErr error) {
 	if err := ValidateCall(call); err != nil {
 		return nil, err
@@ -663,6 +682,20 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	largeModel := a.largeModel.Get()
 	systemPrompt := a.systemPrompt.Get()
 	promptPrefix := a.systemPromptPrefix.Get()
+
+	// Load the session before building the prompt: its per-session
+	// disabled-skill set selects which skills are visible to the model
+	// for this turn. The base system prompt is built once per agent, so
+	// the skills block is injected here instead. Sub-agents keep their own
+	// prompt and never carried the skills catalog.
+	currentSession, err := a.sessions.Get(ctx, call.SessionID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get session: %w", err)
+	}
+	if block := sessionSkillsBlock(a.allSkills, currentSession, a.isSubAgent); block != "" {
+		systemPrompt += "\n\n" + block
+	}
+
 	var instructions strings.Builder
 
 	for _, server := range mcp.GetStates() {
@@ -692,10 +725,6 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	)
 
 	sessionLock := sync.Mutex{}
-	currentSession, err := a.sessions.Get(ctx, call.SessionID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get session: %w", err)
-	}
 
 	msgs, err := a.getSessionMessages(ctx, currentSession)
 	if err != nil {

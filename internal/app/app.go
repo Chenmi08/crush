@@ -96,7 +96,7 @@ type App struct {
 // skills.NewManager + skills.DiscoverFromConfig).
 func New(ctx context.Context, conn *sql.DB, store *config.ConfigStore, skillsMgr *skills.Manager) (*App, error) {
 	q := db.New(conn)
-	sessions := session.NewService(q, conn)
+	sessions := session.NewService(q, conn, session.WithDefaultDisabledSkills(store.DisabledSkills))
 	messages := message.NewService(q)
 	files := history.NewService(q, conn)
 	cfg := store.Config()

@@ -839,6 +839,16 @@ func (c *Config) IsConfigured() bool {
 	return len(c.EnabledProviders()) > 0
 }
 
+// DisabledSkills returns the global list of skill names disabled through
+// options.disabled_skills, or nil when no options are set. It is the
+// default new sessions are seeded from.
+func (c *Config) DisabledSkills() []string {
+	if c == nil || c.Options == nil {
+		return nil
+	}
+	return c.Options.DisabledSkills
+}
+
 func (c *Config) GetModel(provider, model string) *catwalk.Model {
 	if providerConfig, ok := c.Providers.Get(provider); ok {
 		for _, m := range providerConfig.Models {
