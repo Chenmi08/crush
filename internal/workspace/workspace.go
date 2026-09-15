@@ -120,6 +120,10 @@ type Workspace interface {
 	GetSession(ctx context.Context, sessionID string) (session.Session, error)
 	ListSessions(ctx context.Context) ([]session.Session, error)
 	SaveSession(ctx context.Context, sess session.Session) (session.Session, error)
+	// SetSessionDisabledSkills replaces a session's per-session disabled
+	// skill set, so skill toggles made in the UI are scoped to one
+	// session rather than written to global config.
+	SetSessionDisabledSkills(ctx context.Context, sessionID string, names []string) error
 	DeleteSession(ctx context.Context, sessionID string) error
 	CreateAgentToolSessionID(messageID, toolCallID string) string
 	ParseAgentToolSessionID(sessionID string) (messageID string, toolCallID string, ok bool)

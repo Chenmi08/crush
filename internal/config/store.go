@@ -148,6 +148,16 @@ func (s *ConfigStore) Config() *Config {
 	return s.config
 }
 
+// DisabledSkills returns the global skill opt-outs from the store's current
+// config, or nil when the store has no config. Nil-safe so callers do not
+// each have to repeat the store/config/options checks.
+func (s *ConfigStore) DisabledSkills() []string {
+	if s == nil {
+		return nil
+	}
+	return s.Config().DisabledSkills()
+}
+
 // setConfig atomically swaps the active config pointer under configMu.
 // Used by the reload path; in-place field mutators leave the pointer
 // untouched and run under mu instead.

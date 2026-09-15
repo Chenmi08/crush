@@ -548,6 +548,15 @@ disk.
 option disable-skill crush-config
 ```
 
+You can also toggle skills without editing config. The **Skills** section in
+the sidebar lists every known skill with a single status circle — green when
+the skill is enabled, dim when it is disabled. Click the circle to toggle it.
+The change applies to the session you are in — each session keeps its own
+set, so disabling a skill in one session leaves it available in the others.
+New sessions start from the `options.disabled_skills` default and then evolve
+independently; the selection is persisted with the session rather than
+written back to your config.
+
 ### Agent Skills
 
 Crush supports the [Agent Skills](https://agentskills.io) open standard for

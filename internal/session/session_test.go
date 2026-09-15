@@ -174,3 +174,99 @@ func TestUpdateTitleAndUsageAccumulatesTotals(t *testing.T) {
 	require.Equal(t, int64(50), fetched.CompletionTokens)
 	require.Equal(t, 0.5, fetched.Cost)
 }
+
+// TestDisabledSkillsArePerSession verifies each session persists its own
+// skill opt-out set independently, which is what makes the sidebar toggle
+// per-session rather than global.
+func TestDisabledSkillsArePerSession(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Cleanup(func() {
+		require.NoError(t, db.Release(dataDir))
+		db.ResetPool()
+	})
+
+	conn, err := db.Connect(t.Context(), dataDir)
+	require.NoError(t, err)
+
+	sessions := NewService(db.New(conn), conn)
+
+	first, err := sessions.Create(t.Context(), "first")
+	require.NoError(t, err)
+	second, err := sessions.Create(t.Context(), "second")
+	require.NoError(t, err)
+
+	// Unsorted input with duplicates is normalized before persisting.
+	require.NoError(t, sessions.SetDisabledSkills(t.Context(), first.ID, []string{"zeta", "alpha", "zeta"}))
+
+	firstFetched, err := sessions.Get(t.Context(), first.ID)
+	require.NoError(t, err)
+	require.Equal(t, []string{"alpha", "zeta"}, firstFetched.DisabledSkills)
+
+	secondFetched, err := sessions.Get(t.Context(), second.ID)
+	require.NoError(t, err)
+	require.Empty(t, secondFetched.DisabledSkills, "other sessions must be unaffected")
+
+	// Clearing the set persists as empty, not as the previous value.
+	require.NoError(t, sessions.SetDisabledSkills(t.Context(), first.ID, nil))
+	firstFetched, err = sessions.Get(t.Context(), first.ID)
+	require.NoError(t, err)
+	require.Empty(t, firstFetched.DisabledSkills)
+}
+
+// TestLegacySessionInheritsGlobalDisabledSkills verifies a session row that
+// never stored its own opt-outs (written before per-session skills existed)
+// keeps inheriting the global options.disabled_skills default instead of
+// silently re-enabling every globally disabled skill.
+func TestLegacySessionInheritsGlobalDisabledSkills(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Cleanup(func() {
+		require.NoError(t, db.Release(dataDir))
+		db.ResetPool()
+	})
+
+	conn, err := db.Connect(t.Context(), dataDir)
+	require.NoError(t, err)
+
+	globalDefault := []string{"crush-config"}
+	sessions := NewService(db.New(conn), conn, WithDefaultDisabledSkills(func() []string {
+		return globalDefault
+	}))
+
+	// Create leaves disabled_skills NULL, which is exactly the shape of a row
+	// written by an older binary.
+	legacy, err := sessions.Create(t.Context(), "legacy")
+	require.NoError(t, err)
+
+	fetched, err := sessions.Get(t.Context(), legacy.ID)
+	require.NoError(t, err)
+	require.Equal(t, globalDefault, fetched.DisabledSkills)
+}
+
+// TestExplicitlyEmptyDisabledSkillsDoNotInheritDefault verifies an explicit
+// "nothing disabled" choice survives the round trip and is distinguishable
+// from a legacy row that never chose.
+func TestExplicitlyEmptyDisabledSkillsDoNotInheritDefault(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Cleanup(func() {
+		require.NoError(t, db.Release(dataDir))
+		db.ResetPool()
+	})
+
+	conn, err := db.Connect(t.Context(), dataDir)
+	require.NoError(t, err)
+
+	globalDefault := []string{"crush-config"}
+	sessions := NewService(db.New(conn), conn, WithDefaultDisabledSkills(func() []string {
+		return globalDefault
+	}))
+
+	created, err := sessions.Create(t.Context(), "cleared")
+	require.NoError(t, err)
+
+	// Clearing every opt-out must not fall back to the global default.
+	require.NoError(t, sessions.SetDisabledSkills(t.Context(), created.ID, nil))
+	fetched, err := sessions.Get(t.Context(), created.ID)
+	require.NoError(t, err)
+	require.Empty(t, fetched.DisabledSkills)
+	require.NotNil(t, fetched.DisabledSkills, "an explicit empty set must not read as unset")
+}

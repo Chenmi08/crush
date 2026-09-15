@@ -410,6 +410,24 @@ func TestToPromptXMLBuiltinType(t *testing.T) {
 	require.Equal(t, 1, strings.Count(xml, "<type>builtin</type>"))
 }
 
+// TestPromptBlock tests the per-run skills block: it pairs the catalog
+// XML with the usage guidance and is empty when there is nothing to show.
+func TestPromptBlock(t *testing.T) {
+	t.Parallel()
+
+	active := []*Skill{
+		{Name: "pdf-processing", Description: "Extracts text from PDFs.", SkillFilePath: "/skills/pdf/SKILL.md"},
+	}
+	block := PromptBlock(active)
+	require.Contains(t, block, "<available_skills>")
+	require.Contains(t, block, "<name>pdf-processing</name>")
+	require.Contains(t, block, "<skills_usage>")
+	// The two halves are separated so the model sees them as distinct.
+	require.Contains(t, block, "</available_skills>\n\n<skills_usage>")
+
+	require.Empty(t, PromptBlock(nil))
+}
+
 func TestParseContent(t *testing.T) {
 	t.Parallel()
 

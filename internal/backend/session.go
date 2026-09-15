@@ -15,7 +15,36 @@ func (b *Backend) CreateSession(ctx context.Context, workspaceID, title string) 
 		return session.Session{}, err
 	}
 
-	return ws.Sessions.Create(ctx, title)
+	sess, err := ws.Sessions.Create(ctx, title)
+	if err != nil {
+		return session.Session{}, err
+	}
+	// Seed the session's skill opt-outs from the global default so a new
+	// session starts where options.disabled_skills left off, then diverges
+	// independently as the user toggles skills for this session.
+	if disabled := ws.Cfg.DisabledSkills(); len(disabled) > 0 {
+		if err := ws.Sessions.SetDisabledSkills(ctx, sess.ID, disabled); err != nil {
+			return session.Session{}, err
+		}
+		sess, err = ws.Sessions.Get(ctx, sess.ID)
+		if err != nil {
+			return session.Session{}, err
+		}
+	}
+	return sess, nil
+}
+
+// SetSessionDisabledSkills replaces a session's per-session disabled-skill
+// set and returns the updated session.
+func (b *Backend) SetSessionDisabledSkills(ctx context.Context, workspaceID, sessionID string, names []string) (session.Session, error) {
+	ws, err := b.GetWorkspace(workspaceID)
+	if err != nil {
+		return session.Session{}, err
+	}
+	if err := ws.Sessions.SetDisabledSkills(ctx, sessionID, names); err != nil {
+		return session.Session{}, err
+	}
+	return ws.Sessions.Get(ctx, sessionID)
 }
 
 // GetSession retrieves a session by workspace and session ID.

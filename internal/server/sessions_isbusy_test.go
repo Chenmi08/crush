@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -75,6 +76,16 @@ func (s *stubSessions) Get(_ context.Context, id string) (session.Session, error
 	return session.Session{}, errors.New("not found")
 }
 
+func (s *stubSessions) SetDisabledSkills(_ context.Context, id string, names []string) error {
+	for i := range s.all {
+		if s.all[i].ID == id {
+			s.all[i].DisabledSkills = names
+			return nil
+		}
+	}
+	return errors.New("not found")
+}
+
 // buildBusyWorkspace returns a controller wired to a backend that owns
 // a single workspace whose AgentCoordinator reports the named session
 // as busy.
@@ -131,6 +142,34 @@ func TestSessionListIdleSessionIsNotBusy(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
 	require.Len(t, got, 1)
 	require.False(t, got[0].IsBusy, "expected IsBusy=false for idle session")
+}
+
+// TestPutWorkspaceSessionDisabledSkills verifies the per-session skill
+// toggle endpoint persists the set and echoes it back on the wire.
+func TestPutWorkspaceSessionDisabledSkills(t *testing.T) {
+	t.Parallel()
+
+	c, ws := buildMultiSessionWorkspace(t, "s1", "s2")
+	body, err := json.Marshal(proto.SessionDisabledSkills{DisabledSkills: []string{"alpha", "beta"}})
+	require.NoError(t, err)
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPut,
+		"/v1/workspaces/"+ws.ID+"/sessions/s1/disabled-skills", bytes.NewReader(body))
+	req.SetPathValue("id", ws.ID)
+	req.SetPathValue("sid", "s1")
+	rec := httptest.NewRecorder()
+	c.handlePutWorkspaceSessionDisabledSkills(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var got proto.Session
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	require.Equal(t, "s1", got.ID)
+	require.Equal(t, []string{"alpha", "beta"}, got.DisabledSkills)
+
+	// The sibling session keeps its own set.
+	other, err := c.backend.GetSession(t.Context(), ws.ID, "s2")
+	require.NoError(t, err)
+	require.Empty(t, other.DisabledSkills)
 }
 
 func TestSessionGetIncludesIsBusy(t *testing.T) {

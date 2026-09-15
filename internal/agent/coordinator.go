@@ -156,7 +156,6 @@ type coordinator struct {
 
 	// Skills discovery results (session-start snapshot).
 	allSkills    []*skills.Skill // Pre-filter: all discovered after dedup.
-	activeSkills []*skills.Skill // Post-filter: active skills only.
 	skillTracker *skills.Tracker
 
 	readyWg errgroup.Group
@@ -185,14 +184,16 @@ func NewCoordinator(ctx context.Context, opts CoordinatorOptions) (Coordinator, 
 	// backend.CreateWorkspace) and passed in via the manager. If no
 	// manager was provided (legacy callers), fall back to an in-line
 	// discovery so the coordinator still works.
-	var allSkills, activeSkills []*skills.Skill
+	var allSkills []*skills.Skill
 	if opts.Skills != nil {
 		allSkills = opts.Skills.AllSkills()
-		activeSkills = opts.Skills.ActiveSkills()
 	} else {
-		allSkills, activeSkills = discoverSkills(opts.Config)
+		allSkills, _ = discoverSkills(opts.Config)
 	}
-	skillTracker := skills.NewTracker(activeSkills)
+	// The tracker is seeded with the pre-filter set: which skills are
+	// *visible* is per-session and decided at run time, but tracking stays
+	// name-based against the deduplicated set.
+	skillTracker := skills.NewTracker(allSkills)
 
 	c := &coordinator{
 		cfg:          opts.Config,
@@ -207,7 +208,6 @@ func NewCoordinator(ctx context.Context, opts CoordinatorOptions) (Coordinator, 
 		runComplete:  opts.RunComplete,
 		agents:       make(map[string]SessionAgent),
 		allSkills:    allSkills,
-		activeSkills: activeSkills,
 		skillTracker: skillTracker,
 		interactive:  opts.Interactive,
 	}
@@ -342,7 +342,13 @@ func (c *coordinator) run(ctx context.Context, accept *AcceptedRun, sessionID st
 	}
 	beforeLoaded := c.skillTracker.LoadedNames()
 	result, originalErr := run()
-	logTurnSkillUsage(sessionID, prompt, c.activeSkills, c.skillTracker, beforeLoaded)
+	// Skill-usage telemetry only: a lookup failure must not fail the turn,
+	// but it must not be reported as "every skill was active" either.
+	activeSkills, skillsErr := c.sessionActiveSkills(ctx, sessionID)
+	if skillsErr != nil {
+		slog.Error("Failed to resolve session skills for usage logging", "session_id", sessionID, "error", skillsErr)
+	}
+	logTurnSkillUsage(sessionID, prompt, activeSkills, c.skillTracker, beforeLoaded)
 
 	// Notify only if still unauthorized after retry — a successful
 	// retry means the user doesn't need to re-authenticate. AWS SSO is
@@ -711,6 +717,7 @@ func (c *coordinator) buildAgent(ctx context.Context, prompt *prompt.Prompt, age
 		Tools:                nil,
 		Notify:               c.notify,
 		RunComplete:          c.runComplete,
+		AllSkills:            c.allSkills,
 	})
 
 	// The readiness goroutines below perform one-time setup — building the
@@ -783,7 +790,7 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 	allTools = append(
 		allTools,
 		tools.NewBashTool(c.permissions, c.cfg.WorkingDir(), c.cfg.Config().Options.Attribution, modelID),
-		tools.NewCrushInfoTool(c.cfg, c.lspManager, c.allSkills, c.activeSkills, c.skillTracker),
+		tools.NewCrushInfoTool(c.cfg, c.lspManager, c.allSkills, c.sessions, c.skillTracker),
 		tools.NewCrushLogsTool(logFile),
 		tools.NewJobOutputTool(),
 		tools.NewJobKillTool(),
@@ -958,20 +965,20 @@ func (c *coordinator) buildAgentModels(ctx context.Context, isSubAgent bool) (Mo
 	}
 
 	return Model{
-			Model:          largeModel,
-			CatwalkCfg:     *largeCatwalkModel,
-			ModelCfg:       largeModelCfg,
-			FlatRate:       largeProviderCfg.FlatRate,
-			RuntimeHeaders: largeProviderCfg.RuntimeHeaders,
-			ProjectID:      projectID,
-		}, Model{
-			Model:          smallModel,
-			CatwalkCfg:     *smallCatwalkModel,
-			ModelCfg:       smallModelCfg,
-			FlatRate:       smallProviderCfg.FlatRate,
-			RuntimeHeaders: smallProviderCfg.RuntimeHeaders,
-			ProjectID:      projectID,
-		}, nil
+		Model:          largeModel,
+		CatwalkCfg:     *largeCatwalkModel,
+		ModelCfg:       largeModelCfg,
+		FlatRate:       largeProviderCfg.FlatRate,
+		RuntimeHeaders: largeProviderCfg.RuntimeHeaders,
+		ProjectID:      projectID,
+	}, Model{
+		Model:          smallModel,
+		CatwalkCfg:     *smallCatwalkModel,
+		ModelCfg:       smallModelCfg,
+		FlatRate:       smallProviderCfg.FlatRate,
+		RuntimeHeaders: smallProviderCfg.RuntimeHeaders,
+		ProjectID:      projectID,
+	}, nil
 }
 
 func (c *coordinator) buildAnthropicProvider(baseURL, apiKey string, headers map[string]string, providerID string) (fantasy.Provider, error) {
@@ -1644,6 +1651,22 @@ func (c *coordinator) updateParentSessionCost(ctx context.Context, childSessionI
 	}
 
 	return nil
+}
+
+// sessionActiveSkills returns the skills visible to a session: the
+// coordinator's pre-filter discovery set minus that session's own
+// disabled-skill opt-outs. Only the telemetry call site uses it, so a
+// lookup failure is reported to the caller rather than silently widening
+// the set to every discovered skill.
+func (c *coordinator) sessionActiveSkills(ctx context.Context, sessionID string) ([]*skills.Skill, error) {
+	if c.sessions == nil {
+		return c.allSkills, nil
+	}
+	sess, err := c.sessions.Get(ctx, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("getting session skills: %w", err)
+	}
+	return skills.Filter(c.allSkills, sess.DisabledSkills), nil
 }
 
 // discoverSkills is a thin fallback wrapper used only when no

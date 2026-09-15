@@ -369,6 +369,31 @@ func (c *controllerV1) handlePutWorkspaceSession(w http.ResponseWriter, r *http.
 	jsonEncode(w, out)
 }
 
+// handlePutWorkspaceSessionDisabledSkills updates a session's per-session
+// disabled-skill set.
+func (c *controllerV1) handlePutWorkspaceSessionDisabledSkills(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	sid := r.PathValue("sid")
+
+	var body proto.SessionDisabledSkills
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		c.server.logError(r, "Failed to decode request", "error", err)
+		jsonError(w, http.StatusBadRequest, "failed to decode request")
+		return
+	}
+
+	saved, err := c.backend.SetSessionDisabledSkills(r.Context(), id, sid, body.DisabledSkills)
+	if err != nil {
+		c.handleError(w, r, err)
+		return
+	}
+	ws, _ := c.backend.GetWorkspace(id)
+	out := sessionToProto(saved)
+	out.IsBusy = isSessionBusy(ws, saved.ID)
+	out.AttachedClients = attachedClients(ws, saved.ID)
+	jsonEncode(w, out)
+}
+
 // handleDeleteWorkspaceSession deletes a session.
 func (c *controllerV1) handleDeleteWorkspaceSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")

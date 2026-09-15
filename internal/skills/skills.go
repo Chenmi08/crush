@@ -333,6 +333,31 @@ func ToPromptXML(skills []*Skill) string {
 	return sb.String()
 }
 
+// skillUsageBlock tells the model how to consume the available-skills
+// catalog. It is appended alongside ToPromptXML by PromptBlock so a
+// skills-enabled prompt always carries the usage guidance.
+const skillUsageBlock = "<skills_usage>\n" +
+	"Each `<description>` is a trigger for when a skill applies - it is not the specification. " +
+	"Before any other tool call for a matching task, `view` its `<location>` and follow the SKILL.md body; " +
+	"do not infer a skill's behavior from its name or description. " +
+	"Builtin skills use virtual `crush://skills/...` locations, passed verbatim to view.\n" +
+	"</skills_usage>"
+
+// PromptBlock renders the model-facing skill catalog plus its usage
+// guidance for the given active set. It returns "" when there is no
+// model-visible skill, so callers can append it to a system prompt
+// unconditionally.
+//
+// Unlike the system prompt, which is built once per agent, this is
+// evaluated per run so a session's own disabled-skills set is reflected
+// in what the model sees.
+func PromptBlock(active []*Skill) string {
+	if len(active) == 0 {
+		return ""
+	}
+	return ToPromptXML(active) + "\n\n" + skillUsageBlock
+}
+
 // FormatInvocation generates XML for a skill when invoked as a user command.
 func (s *Skill) FormatInvocation() string {
 	var sb strings.Builder

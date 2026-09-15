@@ -10,14 +10,6 @@ Git snapshot (taken at agent startup, may be outdated; run `git status` for curr
 {{.GitStatus}}
 {{end}}
 </env>
-{{- if .AvailSkillXML}}
-
-{{.AvailSkillXML}}
-
-<skills_usage>
-Each `<description>` is a trigger for when a skill applies - it is not the specification. Before any other tool call for a matching task, `view` its `<location>` and follow the SKILL.md body; do not infer a skill's behavior from its name or description. Builtin skills use virtual `crush://skills/...` locations, passed verbatim to view.
-</skills_usage>
-{{- end}}
 
 <rules>
 - Never commit or push unless the user explicitly asked. When committing or creating a PR, load the git-playbook skill and follow it exactly, including the attribution shown in the bash tool description.

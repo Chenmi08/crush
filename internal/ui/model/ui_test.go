@@ -1,6 +1,9 @@
 package model
 
 import (
+	"context"
+	"slices"
+	"sync"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -112,6 +115,15 @@ func newTestUIWithConfig(t *testing.T, cfg *config.Config) *UI {
 type testWorkspace struct {
 	workspace.Workspace
 	cfg *config.Config
+
+	// sessionSkills records the most recent SetSessionDisabledSkills call
+	// so tests can assert what the UI persisted.
+	skillsMu           sync.Mutex
+	lastSessionID      string
+	lastDisabledSkills []string
+	// setSkillsErr, when non-nil, makes SetSessionDisabledSkills fail so
+	// tests can exercise the rollback path.
+	setSkillsErr error
 }
 
 func (w *testWorkspace) Config() *config.Config {
@@ -120,6 +132,25 @@ func (w *testWorkspace) Config() *config.Config {
 
 func (w *testWorkspace) WorkingDir() string {
 	return "/tmp/crush-test"
+}
+
+// SetSessionDisabledSkills records the call instead of talking to a backend.
+func (w *testWorkspace) SetSessionDisabledSkills(_ context.Context, sessionID string, names []string) error {
+	w.skillsMu.Lock()
+	defer w.skillsMu.Unlock()
+	if w.setSkillsErr != nil {
+		return w.setSkillsErr
+	}
+	w.lastSessionID = sessionID
+	w.lastDisabledSkills = slices.Clone(names)
+	return nil
+}
+
+// recordedDisabledSkills returns the last persisted disabled-skill set.
+func (w *testWorkspace) recordedDisabledSkills() (string, []string) {
+	w.skillsMu.Lock()
+	defer w.skillsMu.Unlock()
+	return w.lastSessionID, slices.Clone(w.lastDisabledSkills)
 }
 
 func (w *testWorkspace) AgentIsReady() bool {

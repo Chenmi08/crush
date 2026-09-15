@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/crush/internal/agent/tools/mcp"
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/lsp"
+	"github.com/charmbracelet/crush/internal/session"
 	"github.com/charmbracelet/crush/internal/skills"
 )
 
@@ -26,19 +27,43 @@ func NewCrushInfoTool(
 	cfg *config.ConfigStore,
 	lspManager *lsp.Manager,
 	allSkills []*skills.Skill,
-	activeSkills []*skills.Skill,
+	sessions session.Service,
 	skillTracker *skills.Tracker,
 ) fantasy.AgentTool {
 	return fantasy.NewAgentTool(
 		CrushInfoToolName,
 		crushInfoDescription,
 		func(ctx context.Context, _ CrushInfoParams, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
-			return fantasy.NewTextResponse(buildCrushInfo(cfg, lspManager, allSkills, activeSkills, skillTracker)), nil
+			activeSkills, disabledSkills, err := sessionSkills(ctx, sessions, cfg, allSkills)
+			if err != nil {
+				return fantasy.ToolResponse{}, err
+			}
+			return fantasy.NewTextResponse(buildCrushInfo(cfg, lspManager, allSkills, activeSkills, disabledSkills, skillTracker)), nil
 		},
 	)
 }
 
-func buildCrushInfo(cfg *config.ConfigStore, lspManager *lsp.Manager, allSkills []*skills.Skill, activeSkills []*skills.Skill, skillTracker *skills.Tracker) string {
+// sessionSkills resolves the skills visible to the session in ctx. It
+// returns the active set (all skills minus the session's per-session
+// opt-outs) and the opt-out names themselves. Without a session to resolve
+// (no session ID in ctx, e.g. a sub-agent call) it falls back to the global
+// options.disabled_skills default rather than advertising disabled skills.
+// A failed lookup is returned to the caller instead of silently widening the
+// visible set.
+func sessionSkills(ctx context.Context, sessions session.Service, cfg *config.ConfigStore, allSkills []*skills.Skill) (activeSkills []*skills.Skill, disabled []string, err error) {
+	sessionID, _ := ctx.Value(SessionIDContextKey).(string)
+	if sessions == nil || sessionID == "" {
+		disabled = cfg.DisabledSkills()
+		return skills.Filter(allSkills, disabled), disabled, nil
+	}
+	sess, err := sessions.Get(ctx, sessionID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolving session skills: %w", err)
+	}
+	return skills.Filter(allSkills, sess.DisabledSkills), sess.DisabledSkills, nil
+}
+
+func buildCrushInfo(cfg *config.ConfigStore, lspManager *lsp.Manager, allSkills []*skills.Skill, activeSkills []*skills.Skill, disabledSkills []string, skillTracker *skills.Tracker) string {
 	var b strings.Builder
 
 	writeConfigFiles(&b, cfg)
@@ -47,7 +72,7 @@ func buildCrushInfo(cfg *config.ConfigStore, lspManager *lsp.Manager, allSkills 
 	writeProviders(&b, cfg)
 	writeLSP(&b, lspManager, cfg)
 	writeMCP(&b, mcp.GetStates(), cfg)
-	writeSkills(&b, allSkills, activeSkills, skillTracker, cfg)
+	writeSkills(&b, allSkills, activeSkills, disabledSkills, skillTracker)
 	writeHooks(&b, cfg)
 	writePermissions(&b, cfg)
 	writeDisabledTools(&b, cfg)
@@ -293,12 +318,8 @@ func writeMCP(b *strings.Builder, states map[string]mcp.ClientInfo, cfg *config.
 	}
 }
 
-func writeSkills(b *strings.Builder, allSkills []*skills.Skill, activeSkills []*skills.Skill, tracker *skills.Tracker, cfg *config.ConfigStore) {
-	var disabled []string
-	if cfg.Config().Options != nil {
-		disabled = cfg.Config().Options.DisabledSkills
-	}
-	if len(activeSkills) == 0 && len(disabled) == 0 {
+func writeSkills(b *strings.Builder, allSkills []*skills.Skill, activeSkills []*skills.Skill, disabledSkills []string, tracker *skills.Tracker) {
+	if len(activeSkills) == 0 && len(disabledSkills) == 0 {
 		return
 	}
 
@@ -330,7 +351,7 @@ func writeSkills(b *strings.Builder, allSkills []*skills.Skill, activeSkills []*
 	}
 
 	// Disabled skills.
-	for _, name := range disabled {
+	for _, name := range disabledSkills {
 		origin := originMap[name]
 		if origin == "" {
 			origin = "user"

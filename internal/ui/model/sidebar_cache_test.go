@@ -42,6 +42,9 @@ func TestSidebarCache_InvalidatesOnInputChange(t *testing.T) {
 			})
 		}},
 		{"session files", func(u *UI) { u.sessionFiles[0].Additions = 999 }},
+		{"session disabled skills", func(u *UI) {
+			u.session.DisabledSkills = []string{"alpha"}
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -52,9 +52,16 @@ SET
     cache_creation_tokens = ?,
     summary_message_id = ?,
     cost = ?,
-    todos = ?
+    todos = ?,
+    disabled_skills = ?
 WHERE id = ?
 RETURNING *;
+
+-- name: UpdateSessionDisabledSkills :execrows
+UPDATE sessions
+SET
+    disabled_skills = ?
+WHERE id = ?;
 
 -- name: UpdateSessionTitleAndUsage :exec
 UPDATE sessions

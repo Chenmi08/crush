@@ -355,6 +355,32 @@ type UI struct {
 	sidebarContentHeight    int    // available height for sidebar content
 	sidebarContentWidth     int    // available width for sidebar content
 	sidebarDrawLogo         string // logo to render (may differ from sidebarLogo for short heights)
+	// sidebarSkillRows maps sidebar content lines to the skill rendered on
+	// them, so a click on a Skills row's indicator toggles that skill for
+	// the session.
+	sidebarSkillRows []skillRow
+
+	// landingSkillRows and landingSkillsRect locate the Skills column on the
+	// landing page (a session that does not exist yet) so it can be toggled
+	// the same way as the chat sidebar. They are rebuilt every landing frame
+	// and cleared on resize so a stale map can never toggle the wrong skill.
+	landingSkillRows  []skillRow
+	landingSkillsRect image.Rectangle
+
+	// skillPress is the mouse-down half of a skill toggle. The toggle only
+	// fires on a matching mouse-up, so a press-and-drag or an imprecise click
+	// cannot flip a skill by accident.
+	skillPress skillPressState
+	// lastSkillToggle debounces repeated toggles of the same row so a
+	// double-click only flips a skill once.
+	lastSkillToggle skillToggleState
+
+	// pendingDisabledSkills holds the skill opt-outs chosen on the landing
+	// page before a session exists. pendingSkillsDirty distinguishes "the
+	// user picked an empty set" from "the user has not touched the landing
+	// toggles yet, so fall back to the global default".
+	pendingDisabledSkills []string
+	pendingSkillsDirty    bool
 
 	// sidebarSections memoizes the rendered sidebar sections and the
 	// assembled content. Draw rebuilds the sidebar every frame while its
@@ -849,6 +875,13 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.session = msg.session
 		m.sidebarOffset = 0
 		m.sessionFiles = msg.files
+		// The session is now authoritative for its skill opt-outs, so drop
+		// any landing-page pending selection.
+		m.pendingDisabledSkills = nil
+		m.pendingSkillsDirty = false
+		// A pending press or debounce belongs to the previous session.
+		m.skillPress = skillPressState{}
+		m.lastSkillToggle = skillToggleState{}
 		// Session switch: the memoized busy state and queued prompts
 		// belong to the previous session. Drop them and re-fetch
 		// off-thread so the queue pill and esc behavior track the new
@@ -1137,6 +1170,12 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+		// A press on a Skills indicator is held until the release so a drag
+		// or an imprecise click cannot toggle a skill.
+		if m.handleSkillPress(msg) {
+			return m, tea.Batch(cmds...)
+		}
+
 		if cmd := m.handleClickFocus(msg); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
@@ -1182,6 +1221,10 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.dialog.Update(msg)
 			return m, tea.Batch(cmds...)
 		}
+
+		// A pending skill press becomes a drag once the pointer strays from
+		// where it went down, cancelling the toggle.
+		m.handleSkillMotion(msg)
 
 		// Track hover position for inline editors.
 		if m.activeInline != nil {
@@ -1236,6 +1279,14 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Pass mouse events to dialogs first if any are open.
 		if m.dialog.HasDialogs() {
 			m.dialog.Update(msg)
+			return m, tea.Batch(cmds...)
+		}
+
+		// A release that stayed on a skill indicator completes the toggle.
+		if cmd, handled := m.handleSkillRelease(msg); handled {
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
 			return m, tea.Batch(cmds...)
 		}
 
@@ -1420,6 +1471,10 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case creditsUpdatedMsg:
 		m.hyperCredits = msg.credits
+	case sessionSkillsSetMsg:
+		if cmd := m.applySessionSkillsSet(msg); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	case util.InfoMsg:
 		if msg.Type == util.InfoTypeError {
 			slog.Error("Error reported", "error", msg.Msg)
@@ -1766,6 +1821,259 @@ func (m *UI) handleClickFocus(msg tea.MouseClickMsg) (cmd tea.Cmd) {
 		m.chat.Focus()
 	}
 	return cmd
+}
+
+// skillPressState records the skill indicator the mouse went down on, so a
+// toggle can wait for a matching release instead of firing on press.
+type skillPressState struct {
+	active bool
+	name   string
+	x, y   int
+}
+
+// skillToggleState debounces a repeated toggle of the same skill.
+type skillToggleState struct {
+	name string
+	at   time.Time
+}
+
+// sessionSkillsSetMsg carries the outcome of persisting a session's
+// disabled-skill set. previous is the set to restore when err is non-nil, so
+// the optimistic sidebar update can be rolled back.
+type sessionSkillsSetMsg struct {
+	sessionID string
+	previous  []string
+	name      string
+	enabled   bool
+	err       error
+}
+
+const (
+	// skillClickSlop is how far the pointer may drift between mouse-down and
+	// mouse-up and still count as a click on the skill indicator.
+	skillClickSlop = 2
+	// skillToggleDebounce suppresses a repeat toggle of the same skill within
+	// this window so a double-click does not flip it back and forth.
+	skillToggleDebounce = 250 * time.Millisecond
+	// skillIconHitWidth is the width of the clickable toggle target: the
+	// one-cell status circle plus the space separating it from the name.
+	skillIconHitWidth = 2
+)
+
+// skillAt maps a screen coordinate to the skill whose toggle indicator is
+// under it, or "" when the coordinate is not on an indicator. Only the
+// leading circle is a hit target: the rest of the row (and the space around
+// it) keeps its normal focus behavior, so a stray click cannot flip a skill.
+func (m *UI) skillAt(x, y int) string {
+	switch m.state {
+	case uiChat:
+		if m.session == nil {
+			return ""
+		}
+		return m.sidebarSkillAt(x, y)
+	case uiLanding:
+		return m.landingSkillAt(x, y)
+	default:
+		return ""
+	}
+}
+
+// sidebarSkillAt maps a screen coordinate to the skill on that sidebar line.
+// The row map was computed alongside the sidebar content, so only the scroll
+// offset and the fixed logo height are needed to translate between screen
+// and content coordinates.
+func (m *UI) sidebarSkillAt(x, y int) string {
+	if len(m.sidebarSkillRows) == 0 {
+		return ""
+	}
+	// Mirror drawSidebar's split: the logo is fixed at the top and the
+	// scrollable content starts right below it.
+	contentTop := m.layout.sidebar.Min.Y + lipgloss.Height(m.sidebarDrawLogo)
+	if y < contentTop || !onSkillIndicator(x, m.layout.sidebar.Min.X) {
+		return ""
+	}
+	return skillRowAt(m.sidebarSkillRows, y-contentTop+m.sidebarOffset)
+}
+
+// landingSkillAt maps a screen coordinate to the skill on that line of the
+// landing page's Skills column. The geometry is captured while the landing
+// view is assembled; see landingView.
+func (m *UI) landingSkillAt(x, y int) string {
+	if len(m.landingSkillRows) == 0 {
+		return ""
+	}
+	if !image.Pt(x, y).In(m.landingSkillsRect) || !onSkillIndicator(x, m.landingSkillsRect.Min.X) {
+		return ""
+	}
+	return skillRowAt(m.landingSkillRows, y-m.landingSkillsRect.Min.Y)
+}
+
+// onSkillIndicator reports whether x lands on the leading status circle of a
+// skill column that starts at colX.
+func onSkillIndicator(x, colX int) bool {
+	return x >= colX && x < colX+skillIconHitWidth
+}
+
+// skillRowAt returns the name of the skill whose line range contains line.
+func skillRowAt(rows []skillRow, line int) string {
+	for _, row := range rows {
+		if line >= row.Line && line < row.Line+max(row.Height, 1) {
+			return row.Name
+		}
+	}
+	return ""
+}
+
+// handleSkillPress records a mouse-down on a skill indicator and reports
+// whether the press was consumed, so normal focus handling can be skipped.
+// The toggle itself only fires once the mouse is released.
+func (m *UI) handleSkillPress(msg tea.MouseClickMsg) bool {
+	if msg.Button != uv.MouseLeft {
+		return false
+	}
+	name := m.skillAt(msg.X, msg.Y)
+	if name == "" {
+		return false
+	}
+	m.skillPress = skillPressState{active: true, name: name, x: msg.X, y: msg.Y}
+	return true
+}
+
+// handleSkillMotion cancels a pending skill press once the pointer drifts
+// past the click slop, so dragging never toggles a skill.
+func (m *UI) handleSkillMotion(msg tea.MouseMotionMsg) {
+	if !m.skillPress.active {
+		return
+	}
+	if abs(msg.X-m.skillPress.x) > skillClickSlop || abs(msg.Y-m.skillPress.y) > skillClickSlop {
+		m.skillPress.active = false
+	}
+}
+
+// handleSkillRelease toggles the skill pressed down earlier when the pointer
+// stayed on it. It reports whether the release ended a skill press.
+func (m *UI) handleSkillRelease(msg tea.MouseReleaseMsg) (tea.Cmd, bool) {
+	if !m.skillPress.active {
+		return nil, false
+	}
+	press := m.skillPress
+	m.skillPress.active = false
+	if abs(msg.X-press.x) > skillClickSlop || abs(msg.Y-press.y) > skillClickSlop {
+		return nil, true
+	}
+	return m.toggleSkill(press.name), true
+}
+
+// toggleSkill flips a skill for the session in view, ignoring a repeat of
+// the same skill within skillToggleDebounce so a double-click does not undo
+// itself.
+func (m *UI) toggleSkill(name string) tea.Cmd {
+	now := time.Now()
+	if m.lastSkillToggle.name == name && now.Sub(m.lastSkillToggle.at) < skillToggleDebounce {
+		return nil
+	}
+	m.lastSkillToggle = skillToggleState{name: name, at: now}
+	return m.toggleSessionSkill(name)
+}
+
+// toggleSessionSkill flips a skill's enabled state for the session in view
+// and persists it, or stages the change in the landing-page pending set when
+// no session exists yet. The sidebar is invalidated optimistically so the
+// indicator flips immediately; a failed write rolls it back via
+// [sessionSkillsSetMsg].
+func (m *UI) toggleSessionSkill(name string) tea.Cmd {
+	if m.session == nil {
+		return m.togglePendingSkill(name)
+	}
+	sessionID := m.session.ID
+	previous := slices.Clone(m.session.DisabledSkills)
+	disabled := setSkillDisabled(m.session.DisabledSkills, name, !slices.Contains(m.session.DisabledSkills, name))
+	m.session.DisabledSkills = disabled
+	m.invalidateSidebar()
+
+	enabled := !slices.Contains(disabled, name)
+	return m.setSessionSkillsCmd(sessionID, disabled, previous, name, enabled)
+}
+
+// setSessionSkillsCmd persists a session's disabled-skill set and reports the
+// outcome as a [sessionSkillsSetMsg], so the model can roll the optimistic
+// update back in the main Update loop instead of mutating state here.
+func (m *UI) setSessionSkillsCmd(sessionID string, disabled, previous []string, name string, enabled bool) tea.Cmd {
+	workspace := m.com.Workspace
+	return func() tea.Msg {
+		err := workspace.SetSessionDisabledSkills(context.Background(), sessionID, disabled)
+		return sessionSkillsSetMsg{
+			sessionID: sessionID,
+			previous:  previous,
+			name:      name,
+			enabled:   enabled,
+			err:       err,
+		}
+	}
+}
+
+// applySessionSkillsSet applies the result of persisting a skill toggle. A
+// failed write restores the previous set so the sidebar cannot keep showing
+// a value the database rejected, and clears the debounce so the user can
+// retry immediately.
+func (m *UI) applySessionSkillsSet(msg sessionSkillsSetMsg) tea.Cmd {
+	if msg.err != nil {
+		if m.session != nil && m.session.ID == msg.sessionID {
+			m.session.DisabledSkills = msg.previous
+			m.invalidateSidebar()
+		}
+		m.lastSkillToggle = skillToggleState{}
+		return util.ReportError(msg.err)
+	}
+	return util.CmdHandler(util.NewInfoMsg(skillToggleMessage(msg.name, msg.enabled, false)))
+}
+
+// togglePendingSkill stages a skill toggle made on the landing page, before
+// a session exists. The set seeds from the global default on first touch so
+// untouched skills keep their global state, and is written onto the session
+// when the first message creates it.
+func (m *UI) togglePendingSkill(name string) tea.Cmd {
+	if !m.pendingSkillsDirty {
+		m.pendingDisabledSkills = slices.Clone(m.globalDisabledSkills())
+		m.pendingSkillsDirty = true
+	}
+	disabled := setSkillDisabled(m.pendingDisabledSkills, name, !slices.Contains(m.pendingDisabledSkills, name))
+	m.pendingDisabledSkills = disabled
+	m.invalidateSidebar()
+
+	enabled := !slices.Contains(disabled, name)
+	return util.CmdHandler(util.NewInfoMsg(skillToggleMessage(name, enabled, true)))
+}
+
+// skillToggleMessage describes a skill toggle for the status line.
+func skillToggleMessage(name string, enabled, pending bool) string {
+	state := "disabled"
+	if enabled {
+		state = "enabled"
+	}
+	scope := "this session"
+	if pending {
+		scope = "the new session"
+	}
+	return fmt.Sprintf("Skill %q %s for %s.", name, state, scope)
+}
+
+// applyPendingSkills writes the landing-page skill choices onto a freshly
+// created session and clears them. It reports the set that was applied so
+// the caller can keep the in-memory session in sync. On failure the pending
+// set is kept and the error returned, so the caller can abort instead of
+// silently starting the session with the global default.
+func (m *UI) applyPendingSkills(ctx context.Context, sessionID string) (applied []string, ok bool, err error) {
+	if !m.pendingSkillsDirty {
+		return nil, false, nil
+	}
+	disabled := slices.Clone(m.pendingDisabledSkills)
+	if err := m.com.Workspace.SetSessionDisabledSkills(ctx, sessionID, disabled); err != nil {
+		return nil, true, err
+	}
+	m.pendingDisabledSkills = nil
+	m.pendingSkillsDirty = false
+	return disabled, true, nil
 }
 
 // updateSessionMessage updates an existing message in the current session in
@@ -3797,6 +4105,11 @@ func (m *UI) updateTextareaWithPrevHeight(msg tea.Msg, prevHeight int) tea.Cmd {
 // updateSize updates the sizes of UI components based on the current layout.
 func (m *UI) updateSize() {
 	m.invalidateFrames()
+	// The landing skills geometry is derived from the layout, so drop it and
+	// let the next landing frame rebuild it at the new size. A click that
+	// arrives before that rebuild is ignored rather than mis-mapped.
+	m.landingSkillRows = nil
+	m.landingSkillsRect = image.Rectangle{}
 
 	// Set status width
 	m.status.SetWidth(m.layout.status.Dx())
@@ -4367,11 +4680,13 @@ func (m *UI) filterSkillCompletions() {
 }
 
 // userInvocableSkills returns the cached catalog entries users can
-// invoke explicitly, sorted by name.
+// invoke explicitly, sorted by name. Skills disabled for the session in
+// view are omitted, matching the model's own per-session view.
 func (m *UI) userInvocableSkills() []completions.SkillCompletionValue {
+	disabled := m.disabledSkillNames()
 	values := make([]completions.SkillCompletionValue, 0, len(m.skillCatalog))
 	for _, entry := range m.skillCatalog {
-		if !entry.UserInvocable {
+		if !entry.UserInvocable || disabled[entry.Name] {
 			continue
 		}
 		values = append(values, completions.SkillCompletionValue{
@@ -4616,6 +4931,17 @@ func (m *UI) sendMessage(content string, attachments ...message.Attachment) tea.
 			m.isCompact = true
 		}
 		if newSession.ID != "" {
+			// Apply any skill choices made on the landing page before the
+			// session becomes current, so its very first run already sees
+			// them. A failure aborts the send rather than silently falling
+			// back to the global default.
+			disabled, pending, err := m.applyPendingSkills(context.Background(), newSession.ID)
+			if err != nil {
+				return util.ReportError(err)
+			}
+			if pending {
+				newSession.DisabledSkills = disabled
+			}
 			m.session = &newSession
 			cmds = append(cmds, m.loadSession(newSession.ID))
 		}
@@ -4679,6 +5005,15 @@ func (m *UI) runShellCommandInternal(command string, isFirstMessage bool) tea.Cm
 			m.isCompact = true
 		}
 		if newSession.ID != "" {
+			// Carry the landing-page skill choices onto the new session
+			// before it becomes current.
+			disabled, pending, err := m.applyPendingSkills(context.Background(), newSession.ID)
+			if err != nil {
+				return util.ReportError(err)
+			}
+			if pending {
+				newSession.DisabledSkills = disabled
+			}
 			m.session = &newSession
 			cmds = append(cmds, m.loadSession(newSession.ID))
 		}
@@ -5187,6 +5522,12 @@ func (m *UI) newSession() tea.Cmd {
 	m.sidebarOffset = 0
 	m.sessionFiles = nil
 	m.sessionFileReads = nil
+	// The next session starts fresh from the global skill default; skills
+	// toggled for the session that just closed must not leak into it.
+	m.pendingDisabledSkills = nil
+	m.pendingSkillsDirty = false
+	m.skillPress = skillPressState{}
+	m.lastSkillToggle = skillToggleState{}
 	m.setState(uiLanding, uiFocusEditor)
 	m.textarea.Focus()
 	m.chat.Blur()
