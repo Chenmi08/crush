@@ -515,6 +515,11 @@
           "type": "array",
           "description": "List of built-in tools to disable and hide from the agent"
         },
+        "require_read_before_write": {
+          "type": "boolean",
+          "description": "Require a prior read with the view tool before write, edit, or multiedit can modify a file. When false, files may be modified without a prior read unless they changed on disk since the last read",
+          "default": false
+        },
         "disable_provider_auto_update": {
           "type": "boolean",
           "description": "Disable providers auto-update",

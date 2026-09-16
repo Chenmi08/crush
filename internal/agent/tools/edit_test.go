@@ -85,3 +85,75 @@ func TestDeleteContentRejectsMultipleMatchesWithoutReplaceAll(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "alpha\nbeta\nalpha\n", string(content))
 }
+
+func newReadGuardEditContext(ctx context.Context, dir string, tracker *mockEditFileTracker, opts FileWriteOptions) editContext {
+	return editContext{
+		ctx:         context.WithValue(ctx, SessionIDContextKey, "session"),
+		permissions: &mockPermissionService{},
+		files:       &mockHistoryService{},
+		filetracker: tracker,
+		workingDir:  dir,
+		opts:        opts,
+	}
+}
+
+func TestReplaceContentAllowsUnreadFileByDefault(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "test.txt")
+	require.NoError(t, os.WriteFile(filePath, []byte("alpha\nbeta\n"), 0o644))
+
+	// A zero last-read time means the session never read the file. The
+	// default policy allows the edit rather than forcing a view first.
+	edit := newReadGuardEditContext(t.Context(), dir, &mockEditFileTracker{}, FileWriteOptions{})
+
+	resp, err := replaceContent(edit, filePath, "beta", "BETA", false, fantasy.ToolCall{ID: "call"})
+	require.NoError(t, err)
+	require.False(t, resp.IsError)
+	require.Equal(t, "Content replaced in file: "+filePath, resp.Content)
+
+	content, err := os.ReadFile(filePath)
+	require.NoError(t, err)
+	require.Equal(t, "alpha\nBETA\n", string(content))
+}
+
+func TestReplaceContentRequiresReadWhenStrict(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "test.txt")
+	require.NoError(t, os.WriteFile(filePath, []byte("alpha\nbeta\n"), 0o644))
+
+	edit := newReadGuardEditContext(t.Context(), dir, &mockEditFileTracker{}, FileWriteOptions{RequireRead: true})
+
+	resp, err := replaceContent(edit, filePath, "beta", "BETA", false, fantasy.ToolCall{ID: "call"})
+	require.NoError(t, err)
+	require.True(t, resp.IsError)
+	require.Contains(t, resp.Content, "you must read the file before editing it")
+
+	content, err := os.ReadFile(filePath)
+	require.NoError(t, err)
+	require.Equal(t, "alpha\nbeta\n", string(content))
+}
+
+func TestReplaceContentRejectsStaleRead(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "test.txt")
+	require.NoError(t, os.WriteFile(filePath, []byte("alpha\nbeta\n"), 0o644))
+
+	// The file was read long before it changed on disk, so the baseline is
+	// stale in both policies.
+	edit := newReadGuardEditContext(t.Context(), dir, &mockEditFileTracker{lastRead: time.Now().Add(-2 * time.Hour)}, FileWriteOptions{})
+
+	resp, err := replaceContent(edit, filePath, "beta", "BETA", false, fantasy.ToolCall{ID: "call"})
+	require.NoError(t, err)
+	require.True(t, resp.IsError)
+	require.Contains(t, resp.Content, "has been modified since it was last read")
+
+	content, err := os.ReadFile(filePath)
+	require.NoError(t, err)
+	require.Equal(t, "alpha\nbeta\n", string(content))
+}

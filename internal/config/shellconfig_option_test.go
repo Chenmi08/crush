@@ -132,3 +132,11 @@ func TestShellConfigOptionResetRejectsNonList(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not one")
 }
+
+func TestShellConfigOptionRequireReadBeforeWrite(t *testing.T) {
+	store := loadCrushSh(t, `option require-read-before-write true`)
+	require.True(t, store.Config().Options.RequireReadBeforeWrite)
+
+	store = loadCrushSh(t, `option require-read-before-write false`)
+	require.False(t, store.Config().Options.RequireReadBeforeWrite)
+}

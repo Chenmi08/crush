@@ -49,6 +49,7 @@ func NewWriteTool(
 	files history.Service,
 	filetracker filetracker.Service,
 	workingDir string,
+	opts FileWriteOptions,
 ) fantasy.AgentTool {
 	return fantasy.NewAgentTool(
 		WriteToolName,
@@ -71,11 +72,14 @@ func NewWriteTool(
 					return fantasy.NewTextErrorResponse(fmt.Sprintf("Path is a directory, not a file: %s", filePath)), nil
 				}
 
-				modTime := fileInfo.ModTime().Truncate(time.Second)
-				lastRead := filetracker.LastReadTime(ctx, sessionID, filePath)
-				if modTime.After(lastRead) {
+				// Read-before-write policy: see [FileWriteOptions].
+				reason, lastRead := checkReadGuard(filetracker, ctx, sessionID, filePath, fileInfo, opts)
+				switch reason {
+				case readGuardBaselineMissing:
+					return fantasy.NewTextErrorResponse(fmt.Sprintf("you must read the file before writing it. Use the View tool first: %s", filePath)), nil
+				case readGuardStale:
 					return fantasy.NewTextErrorResponse(fmt.Sprintf("File %s has been modified since it was last read.\nLast modification: %s\nLast read: %s\n\nPlease read the file again before modifying it.",
-						filePath, modTime.Format(time.RFC3339), lastRead.Format(time.RFC3339))), nil
+						filePath, fileInfo.ModTime().Truncate(time.Second).Format(time.RFC3339), lastRead.Format(time.RFC3339))), nil
 				}
 
 				oldContent, readErr := os.ReadFile(filePath)

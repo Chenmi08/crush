@@ -241,6 +241,89 @@ func TestMultiEditAllEditsFail(t *testing.T) {
 	require.Equal(t, content, currentContent, "Content should be unchanged")
 }
 
+func TestProcessMultiEditExistingFileAllowsUnreadFileByDefault(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "test.txt")
+	require.NoError(t, os.WriteFile(filePath, []byte("one\ntwo\nthree\n"), 0o644))
+
+	// A zero last-read time means the session never read the file.
+	edit := newReadGuardEditContext(t.Context(), dir, &mockEditFileTracker{}, FileWriteOptions{})
+	params := MultiEditParams{
+		FilePath: filePath,
+		Edits: []MultiEditOperation{
+			{OldString: "two", NewString: "TWO"},
+		},
+	}
+
+	resp, err := processMultiEditExistingFile(edit, params, fantasy.ToolCall{ID: "call"})
+	require.NoError(t, err)
+	require.False(t, resp.IsError)
+
+	content, err := os.ReadFile(filePath)
+	require.NoError(t, err)
+	require.Equal(t, "one\nTWO\nthree\n", string(content))
+}
+
+func TestProcessMultiEditExistingFileRequiresReadWhenStrict(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "test.txt")
+	require.NoError(t, os.WriteFile(filePath, []byte("one\ntwo\nthree\n"), 0o644))
+
+	edit := newReadGuardEditContext(t.Context(), dir, &mockEditFileTracker{}, FileWriteOptions{RequireRead: true})
+	params := MultiEditParams{
+		FilePath: filePath,
+		Edits: []MultiEditOperation{
+			{OldString: "two", NewString: "TWO"},
+		},
+	}
+
+	resp, err := processMultiEditExistingFile(edit, params, fantasy.ToolCall{ID: "call"})
+	require.NoError(t, err)
+	require.True(t, resp.IsError)
+	require.Contains(t, resp.Content, "you must read the file before editing it")
+
+	content, err := os.ReadFile(filePath)
+	require.NoError(t, err)
+	require.Equal(t, "one\ntwo\nthree\n", string(content))
+}
+
+// A partial-failure multiedit on a file with no read baseline must still
+// apply the edits that matched and report the ones that did not.
+func TestProcessMultiEditExistingFilePartialFailureWithoutBaseline(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "test.txt")
+	require.NoError(t, os.WriteFile(filePath, []byte("one\ntwo\nthree\n"), 0o644))
+
+	edit := newReadGuardEditContext(t.Context(), dir, &mockEditFileTracker{}, FileWriteOptions{})
+	params := MultiEditParams{
+		FilePath: filePath,
+		Edits: []MultiEditOperation{
+			{OldString: "two", NewString: "TWO"},
+			{OldString: "missing", NewString: "MISSING"},
+		},
+	}
+
+	resp, err := processMultiEditExistingFile(edit, params, fantasy.ToolCall{ID: "call"})
+	require.NoError(t, err)
+	require.False(t, resp.IsError)
+
+	content, err := os.ReadFile(filePath)
+	require.NoError(t, err)
+	require.Equal(t, "one\nTWO\nthree\n", string(content))
+
+	var meta MultiEditResponseMetadata
+	require.NoError(t, json.Unmarshal([]byte(resp.Metadata), &meta))
+	require.Equal(t, 1, meta.EditsApplied)
+	require.Len(t, meta.EditsFailed, 1)
+	require.Equal(t, 2, meta.EditsFailed[0].Index)
+}
+
 func TestProcessMultiEditExistingFilePartialFailure(t *testing.T) {
 	t.Parallel()
 

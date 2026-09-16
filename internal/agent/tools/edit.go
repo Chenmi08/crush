@@ -53,6 +53,7 @@ type editContext struct {
 	files       history.Service
 	filetracker filetracker.Service
 	workingDir  string
+	opts        FileWriteOptions
 }
 
 func NewEditTool(
@@ -61,6 +62,7 @@ func NewEditTool(
 	files history.Service,
 	filetracker filetracker.Service,
 	workingDir string,
+	opts FileWriteOptions,
 ) fantasy.AgentTool {
 	return fantasy.NewAgentTool(
 		EditToolName,
@@ -75,7 +77,14 @@ func NewEditTool(
 			var response fantasy.ToolResponse
 			var err error
 
-			editCtx := editContext{ctx, permissions, files, filetracker, workingDir}
+			editCtx := editContext{
+				ctx:         ctx,
+				permissions: permissions,
+				files:       files,
+				filetracker: filetracker,
+				workingDir:  workingDir,
+				opts:        opts,
+			}
 
 			if params.OldString == "" {
 				response, err = createNewFile(editCtx, params.FilePath, params.NewString, call)
@@ -287,17 +296,16 @@ func loadExistingFile(edit editContext, filePath, sessionError string) (sessionI
 		return "", "", false, fantasy.ToolResponse{}, fmt.Errorf("%s", sessionError)
 	}
 
-	lastRead := edit.filetracker.LastReadTime(edit.ctx, sessionID, filePath)
-	if lastRead.IsZero() {
+	// Read-before-write policy: see [FileWriteOptions].
+	reason, lastRead := checkReadGuard(edit.filetracker, edit.ctx, sessionID, filePath, fileInfo, edit.opts)
+	switch reason {
+	case readGuardBaselineMissing:
 		return "", "", false, fantasy.NewTextErrorResponse("you must read the file before editing it. Use the View tool first"), nil
-	}
-
-	modTime := fileInfo.ModTime().Truncate(time.Second)
-	if modTime.After(lastRead) {
+	case readGuardStale:
 		return "", "", false, fantasy.NewTextErrorResponse(
 			fmt.Sprintf(
 				"file %s has been modified since it was last read (mod time: %s, last read: %s)",
-				filePath, modTime.Format(time.RFC3339), lastRead.Format(time.RFC3339),
+				filePath, fileInfo.ModTime().Truncate(time.Second).Format(time.RFC3339), lastRead.Format(time.RFC3339),
 			),
 		), nil
 	}
