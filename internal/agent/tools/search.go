@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/rand/v2"
 	"net/http"
 	"net/url"
@@ -67,11 +68,76 @@ var ddgAnomalyMarkers = []string{
 // local httptest server.
 var ddgLiteEndpoint = "https://lite.duckduckgo.com/lite/?q="
 
+const (
+	// searchRetryAttempts bounds how many times one query is sent before
+	// giving up. DuckDuckGo's bot checks are sometimes transient, so a
+	// single retry with a fresh User-Agent is worthwhile; retrying more
+	// would make throttling worse.
+	searchRetryAttempts = 2
+
+	// maxSnippetRunes caps how much of a search snippet reaches the model.
+	// Snippets are forwarded verbatim into the sub-agent context, so an
+	// unbounded one quietly inflates token usage.
+	maxSnippetRunes = 500
+)
+
+// searchRetryDelay is the pause before a retry. It is a variable so tests
+// can disable the wait.
+var searchRetryDelay = time.Second
+
+// retryableError marks a search failure that a fresh attempt could recover
+// from, such as throttling, a transport error, or a 5xx response.
+type retryableError struct{ err error }
+
+func (e *retryableError) Error() string { return e.err.Error() }
+func (e *retryableError) Unwrap() error { return e.err }
+
+func markRetryable(err error) error { return &retryableError{err: err} }
+
+func isRetryable(err error) bool {
+	var retryable *retryableError
+	return errors.As(err, &retryable)
+}
+
+// searchStatusError reports a non-OK response without a dedicated meaning
+// (202 and 200 are handled separately).
+type searchStatusError struct{ statusCode int }
+
+func (e *searchStatusError) Error() string {
+	return fmt.Sprintf("search failed with status code: %d", e.statusCode)
+}
+
+// searchDuckDuckGo runs the query, retrying once on a transient failure.
+// The final error is returned unwrapped enough that callers can still
+// detect errSearchRateLimited with errors.Is.
 func searchDuckDuckGo(ctx context.Context, client *http.Client, query string, maxResults int) ([]SearchResult, error) {
 	if maxResults <= 0 {
 		maxResults = 10
 	}
 
+	var lastErr error
+	for attempt := 1; attempt <= searchRetryAttempts; attempt++ {
+		results, err := searchDuckDuckGoOnce(ctx, client, query, maxResults)
+		if err == nil {
+			return results, nil
+		}
+		lastErr = err
+
+		if attempt == searchRetryAttempts || !isRetryable(err) {
+			break
+		}
+
+		slog.Debug("Retrying web search", "attempt", attempt, "error", err)
+		if err := sleepWithContext(ctx, searchRetryDelay); err != nil {
+			return nil, err
+		}
+	}
+
+	return nil, lastErr
+}
+
+// searchDuckDuckGoOnce performs a single request attempt.
+func searchDuckDuckGoOnce(ctx context.Context, client *http.Client, query string, maxResults int) ([]SearchResult, error) {
 	searchURL := ddgLiteEndpoint + url.QueryEscape(query)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
@@ -83,33 +149,55 @@ func searchDuckDuckGo(ctx context.Context, client *http.Client, query string, ma
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to execute search: %w", err)
+		return nil, markRetryable(fmt.Errorf("failed to execute search: %w", err))
 	}
 	defer resp.Body.Close()
 
 	// A 202 from DuckDuckGo is the anomaly-challenge interstitial, not a
 	// result page; report throttling rather than parsing it into an
-	// empty result set.
-	if resp.StatusCode == http.StatusAccepted {
-		return nil, errSearchRateLimited
+	// empty result set. 429 is the canonical rate-limit status and is
+	// treated the same in case DDG switches to it.
+	if resp.StatusCode == http.StatusAccepted || resp.StatusCode == http.StatusTooManyRequests {
+		return nil, markRetryable(errSearchRateLimited)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("search failed with status code: %d", resp.StatusCode)
+		err := &searchStatusError{statusCode: resp.StatusCode}
+		if resp.StatusCode >= http.StatusInternalServerError {
+			return nil, markRetryable(err)
+		}
+		return nil, err
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+		return nil, markRetryable(fmt.Errorf("failed to read response: %w", err))
 	}
 
 	content := string(body)
 	for _, marker := range ddgAnomalyMarkers {
 		if strings.Contains(content, marker) {
-			return nil, errSearchRateLimited
+			return nil, markRetryable(errSearchRateLimited)
 		}
 	}
 
 	return parseLiteSearchResults(content, maxResults)
+}
+
+// sleepWithContext waits for d unless the context is cancelled first.
+func sleepWithContext(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return ctx.Err()
+	}
+
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func setRandomizedHeaders(req *http.Request) {
@@ -136,18 +224,32 @@ func parseLiteSearchResults(htmlContent string, maxResults int) ([]SearchResult,
 	}
 
 	var results []SearchResult
+	seen := make(map[string]bool)
 	var currentResult *SearchResult
+
+	// flush appends the in-progress result, dropping empty and duplicate
+	// links so the same page is not reported twice.
+	flush := func() {
+		if currentResult == nil {
+			return
+		}
+		result := currentResult
+		currentResult = nil
+		if result.Link == "" || seen[result.Link] {
+			return
+		}
+		seen[result.Link] = true
+		result.Position = len(results) + 1
+		results = append(results, *result)
+	}
 
 	var traverse func(*html.Node)
 	traverse = func(n *html.Node) {
 		if n.Type == html.ElementNode {
 			if n.Data == "a" && hasClass(n, "result-link") {
-				if currentResult != nil && currentResult.Link != "" {
-					currentResult.Position = len(results) + 1
-					results = append(results, *currentResult)
-					if len(results) >= maxResults {
-						return
-					}
+				flush()
+				if len(results) >= maxResults {
+					return
 				}
 				currentResult = &SearchResult{Title: getTextContent(n)}
 				for _, attr := range n.Attr {
@@ -158,7 +260,7 @@ func parseLiteSearchResults(htmlContent string, maxResults int) ([]SearchResult,
 				}
 			}
 			if n.Data == "td" && hasClass(n, "result-snippet") && currentResult != nil {
-				currentResult.Snippet = getTextContent(n)
+				currentResult.Snippet = truncateRunes(getTextContent(n), maxSnippetRunes)
 			}
 		}
 		for c := n.FirstChild; c != nil; c = c.NextSibling {
@@ -171,9 +273,8 @@ func parseLiteSearchResults(htmlContent string, maxResults int) ([]SearchResult,
 
 	traverse(doc)
 
-	if currentResult != nil && currentResult.Link != "" && len(results) < maxResults {
-		currentResult.Position = len(results) + 1
-		results = append(results, *currentResult)
+	if len(results) < maxResults {
+		flush()
 	}
 
 	return results, nil
@@ -205,19 +306,33 @@ func getTextContent(n *html.Node) string {
 	return strings.TrimSpace(text.String())
 }
 
+// cleanDuckDuckGoURL unwraps DuckDuckGo's click-tracking redirect
+// (/l/?uddg=<encoded>) into the real destination. DDG emits the link as
+// protocol-relative, absolute, or root-relative depending on the page, so
+// match on the parameter instead of a fixed prefix. Links on other hosts
+// are returned untouched to avoid unwrapping unrelated URLs that happen
+// to carry a uddg query parameter.
 func cleanDuckDuckGoURL(rawURL string) string {
-	if strings.HasPrefix(rawURL, "//duckduckgo.com/l/?uddg=") {
-		if _, after, ok := strings.Cut(rawURL, "uddg="); ok {
-			encoded := after
-			if ampIdx := strings.Index(encoded, "&"); ampIdx != -1 {
-				encoded = encoded[:ampIdx]
-			}
-			if decoded, err := url.QueryUnescape(encoded); err == nil {
-				return decoded
-			}
-		}
+	if !strings.Contains(rawURL, "uddg=") {
+		return rawURL
 	}
-	return rawURL
+
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	host := parsed.Hostname()
+	if host != "" && host != "duckduckgo.com" && !strings.HasSuffix(host, ".duckduckgo.com") {
+		return rawURL
+	}
+
+	// Query already percent-decodes the value; do not unescape again or a
+	// destination containing its own escapes would be mangled.
+	decoded := parsed.Query().Get("uddg")
+	if decoded == "" {
+		return rawURL
+	}
+	return decoded
 }
 
 func formatSearchResults(results []SearchResult) string {

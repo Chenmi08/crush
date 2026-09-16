@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -127,12 +128,18 @@ func NewFetchTool(permissions permission.Service, workingDir string, client *htt
 				return fantasy.NewTextErrorResponse(fmt.Sprintf("Request failed with status code: %d", resp.StatusCode)), nil
 			}
 
-			body, err := io.ReadAll(io.LimitReader(resp.Body, MaxFetchSize))
+			// Read one byte past the limit so a response that exactly fills
+			// the buffer is not mistaken for a truncated one.
+			body, err := io.ReadAll(io.LimitReader(resp.Body, int64(MaxFetchSize)+1))
 			if err != nil {
 				return fantasy.NewTextErrorResponse("Failed to read response body: " + err.Error()), nil
 			}
+			sourceTruncated := len(body) > MaxFetchSize
 
 			content := string(body)
+			if sourceTruncated {
+				content = truncateUTF8(content, MaxFetchSize)
+			}
 
 			validUTF8 := utf8.ValidString(content)
 			if !validUTF8 {
@@ -178,15 +185,30 @@ func NewFetchTool(permissions permission.Service, workingDir string, client *htt
 					content = "<html>\n<body>\n" + body + "\n</body>\n</html>"
 				}
 			}
-			// truncate content if it exceeds max read size
-			if int64(len(content)) >= MaxFetchSize {
-				content = content[:MaxFetchSize]
-				content += fmt.Sprintf("\n\n[Content truncated to %d bytes]", MaxFetchSize)
+			// Truncate content if it exceeds the max read size. The notice is
+			// emitted whenever bytes were dropped, even if format conversion
+			// shrank the payload below the limit, so a partial document is
+			// never returned silently.
+			var truncated bool
+			content, truncated = truncateFetchContent(content, sourceTruncated)
+			if truncated {
+				slog.Debug("Fetch response truncated", "url", params.URL, "limit_bytes", MaxFetchSize)
 			}
 
 			return fantasy.NewTextResponse(content), nil
 		},
 	)
+}
+
+// truncateFetchContent caps content at MaxFetchSize bytes and appends a
+// notice when bytes were dropped. It reports whether a notice was added.
+func truncateFetchContent(content string, sourceTruncated bool) (string, bool) {
+	if !sourceTruncated && int64(len(content)) <= MaxFetchSize {
+		return content, false
+	}
+
+	content = truncateUTF8(content, MaxFetchSize)
+	return content + fmt.Sprintf("\n\n[Content truncated to %d bytes]", MaxFetchSize), true
 }
 
 func extractTextFromHTML(html string) (string, error) {

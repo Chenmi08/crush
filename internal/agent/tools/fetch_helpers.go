@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strings"
@@ -18,6 +19,10 @@ import (
 
 // BrowserUserAgent is a realistic browser User-Agent for better compatibility.
 const BrowserUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+// maxFetchConvertBytes bounds how much of a response FetchURLAndConvert
+// reads before giving up. It is a variable so tests can lower it.
+var maxFetchConvertBytes int64 = 5 * 1024 * 1024 // 5MB
 
 var multipleNewlinesRe = regexp.MustCompile(`\n{3,}`)
 
@@ -43,13 +48,19 @@ func FetchURLAndConvert(ctx context.Context, client *http.Client, url string) (s
 		return "", fmt.Errorf("request failed with status code: %d", resp.StatusCode)
 	}
 
-	maxSize := int64(5 * 1024 * 1024) // 5MB
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxSize))
+	// Read one byte past the limit so a response that exactly fills the
+	// buffer is not mistaken for a truncated one.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxFetchConvertBytes+1))
 	if err != nil {
 		return "", fmt.Errorf("failed to read response body: %w", err)
 	}
+	truncated := int64(len(body)) > maxFetchConvertBytes
 
 	content := string(body)
+	if truncated {
+		// Cut on a rune boundary so the result still validates as UTF-8.
+		content = truncateUTF8(content, int(maxFetchConvertBytes))
+	}
 
 	if !utf8.ValidString(content) {
 		return "", errors.New("response content is not valid UTF-8")
@@ -73,6 +84,11 @@ func FetchURLAndConvert(ctx context.Context, client *http.Client, url string) (s
 			content = formatted
 		}
 		// If formatting fails, keep original content.
+	}
+
+	if truncated {
+		slog.Debug("Fetched content exceeded size limit", "url", url, "limit_bytes", maxFetchConvertBytes)
+		content += fmt.Sprintf("\n\n[Content truncated to %d bytes]", maxFetchConvertBytes)
 	}
 
 	return content, nil
