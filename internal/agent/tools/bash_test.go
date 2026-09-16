@@ -211,3 +211,35 @@ func TestTruncateOutputEmoji(t *testing.T) {
 	require.True(t, utf8.ValidString(out), "truncated output must stay valid UTF-8")
 	require.Contains(t, out, "lines truncated")
 }
+
+func TestBlockFuncsExecFlags(t *testing.T) {
+	t.Parallel()
+
+	blocked := func(parts ...string) bool {
+		for _, fn := range blockFuncs() {
+			if fn(parts) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// rg --pre runs a command per match.
+	require.True(t, blocked("rg", "--pre", "cat", "pattern"), "rg --pre must be blocked")
+
+	// Every fd exec flag must be blocked, under both names fd ships as. Each
+	// flag needs its own blocker: ArgumentsBlocker requires all configured
+	// flags to be present.
+	flags := append([]string{"--exec=ls"}, fdExecFlags...)
+	for _, cmd := range fdCommands {
+		for _, flag := range flags {
+			require.True(t, blocked(cmd, flag, "true"), "%s %s must be blocked", cmd, flag)
+		}
+	}
+
+	// Plain searches and unrelated flags stay allowed.
+	require.False(t, blocked("rg", "pattern"))
+	require.False(t, blocked("rg", "--files", "-g", "*.go"))
+	require.False(t, blocked("fd", "pattern"))
+	require.False(t, blocked("fdfind", "-e", "go"))
+}

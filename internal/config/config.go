@@ -997,7 +997,14 @@ func filterSlice(data []string, mask []string, include bool) []string {
 	return filtered
 }
 
+// coderExcludedTools are hidden from the coder agent so that it searches
+// with shell tools (`rg`/`fd`) instead of the dedicated file tools. The task
+// agent keeps them: it is a read-only searcher and benefits from bounded,
+// .gitignore-aware output.
+var coderExcludedTools = []string{"glob", "grep", "ls"}
+
 func (c *Config) SetupAgents() {
+	// Global tool set, after any user-configured disabled_tools.
 	allowedTools := resolveAllowedTools(allToolNames(), c.Options.DisabledTools)
 
 	agents := map[string]Agent{
@@ -1007,7 +1014,7 @@ func (c *Config) SetupAgents() {
 			Description:  "An agent that helps with executing coding tasks.",
 			Model:        SelectedModelTypeLarge,
 			ContextPaths: c.Options.ContextPaths,
-			AllowedTools: allowedTools,
+			AllowedTools: filterSlice(allowedTools, coderExcludedTools, false),
 		},
 
 		AgentTask: {
@@ -1016,6 +1023,8 @@ func (c *Config) SetupAgents() {
 			Description:  "An agent that helps with searching for context and finding implementation details.",
 			Model:        SelectedModelTypeLarge,
 			ContextPaths: c.Options.ContextPaths,
+			// Derive from the global set rather than the coder's, so
+			// coder-only exclusions do not leak into the sub-agent.
 			AllowedTools: resolveReadOnlyTools(allowedTools),
 			// NO MCPs or LSPs by default
 			AllowedMCP: map[string][]string{},

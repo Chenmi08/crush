@@ -69,7 +69,10 @@ type bashDescriptionData struct {
 	Attribution     config.Attribution
 	ModelID         string
 	RgAvailable     bool
-	GhAvailable     bool
+	// FdCommand is the command name for fd ("fd" or "fdfind"), or empty when
+	// fd is not installed.
+	FdCommand   string
+	GhAvailable bool
 }
 
 var bannedCommands = []string{
@@ -154,6 +157,7 @@ func bashDescription(attribution *config.Attribution, modelID string) string {
 		Attribution:     *attribution,
 		ModelID:         modelID,
 		RgAvailable:     getRg() != "",
+		FdCommand:       getFd(),
 		GhAvailable:     ghAvailable,
 	}); err != nil {
 		// this should never happen.
@@ -162,8 +166,11 @@ func bashDescription(attribution *config.Attribution, modelID string) string {
 	return out.String()
 }
 
+// fdExecFlags make fd run an arbitrary command for every match.
+var fdExecFlags = []string{"-x", "-X", "--exec", "--exec-batch"}
+
 func blockFuncs() []shell.BlockFunc {
-	return []shell.BlockFunc{
+	blockers := []shell.BlockFunc{
 		shell.CommandsBlocker(bannedCommands),
 
 		// System package managers
@@ -191,7 +198,21 @@ func blockFuncs() []shell.BlockFunc {
 
 		// `go test -exec` can run arbitrary commands
 		shell.ArgumentsBlocker("go", []string{"test"}, []string{"-exec"}),
+
+		// rg --pre runs a command per match.
+		shell.ArgumentsBlocker("rg", nil, []string{"--pre"}),
 	}
+
+	// fd's exec flags each need their own blocker: ArgumentsBlocker requires
+	// every configured flag to be present, so passing them as alternatives
+	// would match nothing.
+	for _, cmd := range fdCommands {
+		for _, flag := range fdExecFlags {
+			blockers = append(blockers, shell.ArgumentsBlocker(cmd, nil, []string{flag}))
+		}
+	}
+
+	return blockers
 }
 
 func NewBashTool(permissions permission.Service, workingDir string, attribution *config.Attribution, modelID string) fantasy.AgentTool {

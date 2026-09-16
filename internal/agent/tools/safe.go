@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-var safeCommands = []string{
+var safeCommands = append([]string{
 	// Bash builtins and core utils
 	"cal",
 	"date",
@@ -39,6 +39,11 @@ var safeCommands = []string{
 	"which",
 	"whoami",
 
+	// Search tools. The coder's dedicated glob/grep/ls tools are excluded, so
+	// it searches with rg/fd through bash; auto-approving them avoids a
+	// prompt on every call. fd's exec flags are blocked in bash.go.
+	"rg",
+
 	// Git
 	"git blame",
 	"git branch",
@@ -56,7 +61,7 @@ var safeCommands = []string{
 	"git show",
 	"git status",
 	"git tag",
-}
+}, fdCommands...)
 
 var chainingMetacharacters = []string{
 	";",
