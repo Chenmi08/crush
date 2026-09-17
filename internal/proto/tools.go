@@ -92,12 +92,12 @@ type FetchParams struct {
 // FetchPermissionsParams represents the permission parameters for the fetch tool.
 type FetchPermissionsParams = tools.FetchPermissionsParams
 
-// AgenticFetchToolName is the name of the agentic_fetch tool.
-const AgenticFetchToolName = tools.AgenticFetchToolName
+// AgentToolName is the name of the sub-agent delegation tool.
+const AgentToolName = tools.AgentToolName
 
-// AgenticFetchPermissionsParams represents the permission parameters for the
-// agentic_fetch tool.
-type AgenticFetchPermissionsParams = tools.AgenticFetchPermissionsParams
+// AgentPermissionsParams represents the permission parameters for a
+// delegated sub-agent.
+type AgentPermissionsParams = tools.AgentPermissionsParams
 
 const GlobToolName = "glob"
 

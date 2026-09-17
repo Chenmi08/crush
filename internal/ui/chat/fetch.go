@@ -2,6 +2,7 @@ package chat
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/charmbracelet/crush/internal/agent/tools"
 	"github.com/charmbracelet/crush/internal/message"
@@ -119,7 +120,7 @@ func (w *WebFetchToolRenderContext) RenderTool(sty *styles.Styles, width int, op
 		return toolErrorContent(sty, &message.ToolResult{Content: "Invalid parameters"}, cappedWidth)
 	}
 
-	toolParams := []string{params.URL}
+	toolParams := []string{strings.Join(params.URLs, ", ")}
 	header := toolHeader(sty, opts.Status, "Fetch", cappedWidth, opts, toolParams...)
 	if opts.Compact {
 		return header

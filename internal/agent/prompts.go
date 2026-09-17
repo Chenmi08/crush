@@ -17,6 +17,9 @@ var taskPromptTmpl []byte
 //go:embed templates/plan.md.tpl
 var planPromptTmpl []byte
 
+//go:embed templates/research_prompt.md.tpl
+var researchPromptTmpl []byte
+
 //go:embed templates/initialize.md.tpl
 var initializePromptTmpl []byte
 
@@ -38,6 +41,14 @@ func taskPrompt(opts ...prompt.Option) (*prompt.Prompt, error) {
 
 func planPrompt(opts ...prompt.Option) (*prompt.Prompt, error) {
 	systemPrompt, err := prompt.NewPrompt("plan", string(planPromptTmpl), opts...)
+	if err != nil {
+		return nil, err
+	}
+	return systemPrompt, nil
+}
+
+func researchPrompt(opts ...prompt.Option) (*prompt.Prompt, error) {
+	systemPrompt, err := prompt.NewPrompt("research", string(researchPromptTmpl), opts...)
 	if err != nil {
 		return nil, err
 	}

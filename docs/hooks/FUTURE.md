@@ -85,7 +85,7 @@ envelopes keep working unchanged. No version bump required.
 ### Background
 
 Today hooks fire **only** on the top-level agent's tool calls. Sub-agents
-(`agent` task tool, `agentic_fetch`, future delegated loops) run without hook
+(`agent` tool and its research profile, future delegated loops) run without hook
 interception so a single delegated turn doesn't trigger the user's hook N times.
 
 The outer sub-agent tool call itself is hooked, so blanket policy like "never
@@ -98,7 +98,7 @@ the coder's side. The sub-agent's inner loop is the part that's exempt.
 - Redaction hooks that want to apply uniformly regardless of who called the
   tool.
 - Policy that cares about the _tool_ not the _caller_: "never fetch from this
-  domain, even in `agentic_fetch`."
+  domain, even inside a delegated research sub-agent."
 
 Until someone actually asks, don't ship this. YAGNI.
 

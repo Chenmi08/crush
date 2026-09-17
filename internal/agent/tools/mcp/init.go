@@ -702,6 +702,13 @@ func teardown(name string) {
 }
 
 func getOrRenewClient(ctx context.Context, cfg *config.ConfigStore, name string) (*ClientSession, error) {
+	// Built-in servers own their session lifecycle and never enter the
+	// shared registries, so they bypass the renewal machinery entirely.
+	if b, ok := builtinServers[name]; ok {
+		session, _, err := b.ensure(ctx, cfg)
+		return session, err
+	}
+
 	m := cfg.Config().MCP[name]
 	timeout := mcpTimeout(m)
 

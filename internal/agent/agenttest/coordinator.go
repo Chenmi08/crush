@@ -59,7 +59,7 @@ func NewCoordinator(
 	cfg.OverridePreferredModel(config.SelectedModelTypeSmall, selected)
 	cfg.SetupAgents()
 
-	// Keep buildTools light: no sub-agent or agentic-fetch construction.
+	// Keep buildTools light: no sub-agent construction.
 	coderCfg := cfg.Config().Agents[config.AgentCoder]
 	coderCfg.AllowedTools = nil
 	cfg.Config().Agents[config.AgentCoder] = coderCfg

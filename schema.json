@@ -295,6 +295,21 @@
             120
           ]
         },
+        "rate_limit": {
+          "type": "number",
+          "description": "Maximum tool calls per second sent to this MCP server",
+          "examples": [
+            2.5
+          ]
+        },
+        "rate_burst": {
+          "type": "integer",
+          "description": "Burst capacity for rate_limit",
+          "default": 1,
+          "examples": [
+            3
+          ]
+        },
         "sessionless": {
           "type": "boolean",
           "description": "Mark a sessionless MCP server (no Mcp-Session-Id) so Crush skips the subscriptions/listen stream it would otherwise reject. Leave unset to auto-detect known sessionless servers (e.g. GitHub MCP)",

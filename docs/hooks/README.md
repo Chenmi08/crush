@@ -192,7 +192,7 @@ stuff, and so on.
 > `pretooluse`, `PRETOOLUSE`, `pre_tool_use`, and `PRE_TOOL_USE` all work.
 
 **Scope**: `PreToolUse` only fires on the **top-level agent's** tool calls.
-Sub-agents (the `agent` task tool, `agentic_fetch`, etc.) run without hook
+Sub-agents (the `agent` tool, including its research profile) run without hook
 interception so a single delegated turn doesn't trigger your hook N times. The
 outer sub-agent tool call itself _is_ hooked, so policy like "never let the
 agent spawn sub-agents" still works.

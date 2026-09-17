@@ -6,6 +6,7 @@ import (
 	"slices"
 
 	"charm.land/fantasy"
+
 	"github.com/charmbracelet/crush/internal/agent/tools/mcp"
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/permission"
@@ -35,6 +36,29 @@ func GetMCPTools(permissions permission.Service, cfg *config.ConfigStore, wd str
 		}
 	}
 	return result
+}
+
+// BuiltinMCPTools returns the tools of a Crush-owned MCP server. Built-in
+// servers never enter the shared registry, so asking for one by name is the
+// only way to reach it — which is exactly what keeps it out of every agent's
+// tool list.
+func BuiltinMCPTools(ctx context.Context, permissions permission.Service, cfg *config.ConfigStore, wd, name string) ([]*Tool, error) {
+	defs, err := mcp.BuiltinTools(ctx, cfg, name)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]*Tool, 0, len(defs))
+	for _, def := range defs {
+		out = append(out, &Tool{
+			mcpName:     name,
+			tool:        def,
+			permissions: permissions,
+			workingDir:  wd,
+			cfg:         cfg,
+		})
+	}
+	return out, nil
 }
 
 // Tool is a tool from a MCP.

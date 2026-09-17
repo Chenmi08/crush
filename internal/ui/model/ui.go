@@ -1692,7 +1692,7 @@ func (m *UI) setSessionMessages(msgs []message.Message) tea.Cmd {
 		}
 	}
 
-	// Load nested tool calls for agent/agentic_fetch tools.
+	// Load nested tool calls for sub-agent delegations.
 	m.loadNestedToolCalls(items)
 	m.setMessagePlanFlags(items)
 
@@ -1746,7 +1746,8 @@ func (m *UI) handleConnectionEvent(msg workspace.ConnectionEvent) []tea.Cmd {
 	return cmds
 }
 
-// loadNestedToolCalls recursively loads nested tool calls for agent/agentic_fetch tools.
+// loadNestedToolCalls recursively loads nested tool calls for sub-agent
+// delegations.
 func (m *UI) loadNestedToolCalls(items []chat.MessageItem) {
 	for _, item := range items {
 		nestedContainer, ok := item.(chat.NestedToolContainer)

@@ -144,15 +144,15 @@ func TestPermissionRequestParamsTypeAssertable(t *testing.T) {
 			},
 		},
 		{
-			name:     "agentic_fetch",
-			toolName: tools.AgenticFetchToolName,
-			params: tools.AgenticFetchPermissionsParams{
+			name:     "agent",
+			toolName: tools.AgentToolName,
+			params: tools.AgentPermissionsParams{
 				URL:    "https://example.com",
 				Prompt: "summarize this page",
 			},
 			assert: func(t *testing.T, got any) {
-				v, ok := got.(tools.AgenticFetchPermissionsParams)
-				require.True(t, ok, "params must decode as tools.AgenticFetchPermissionsParams, got %T", got)
+				v, ok := got.(tools.AgentPermissionsParams)
+				require.True(t, ok, "params must decode as tools.AgentPermissionsParams, got %T", got)
 				require.Equal(t, "https://example.com", v.URL)
 				require.Equal(t, "summarize this page", v.Prompt)
 			},

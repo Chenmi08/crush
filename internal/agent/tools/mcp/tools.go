@@ -43,10 +43,7 @@ func RunTool(ctx context.Context, cfg *config.ConfigStore, name, toolName string
 	if err != nil {
 		return ToolResult{}, err
 	}
-	result, err := c.CallTool(ctx, &mcp.CallToolParams{
-		Name:      toolName,
-		Arguments: args,
-	})
+	result, err := callTool(ctx, limiterForServer(cfg, name), name, c, toolName, args)
 	if err != nil {
 		return ToolResult{}, err
 	}
@@ -106,6 +103,92 @@ func RunTool(ctx context.Context, cfg *config.ConfigStore, name, toolName string
 		Type:    "text",
 		Content: textContent,
 	}, nil
+}
+
+// limiterForServer resolves the shared limiter configured for an MCP
+// server, or nil when the server has no rate limit.
+func limiterForServer(cfg *config.ConfigStore, name string) *serverLimiter {
+	// Built-in servers carry their own configuration rather than reading it
+	// from the user's config.
+	if srv, ok := builtinConfig(name); ok {
+		return limiterFor(name, srv.RateLimit, srv.RateBurst)
+	}
+
+	if cfg == nil || cfg.Config() == nil {
+		return nil
+	}
+	srv, ok := cfg.Config().MCP[name]
+	if !ok {
+		return nil
+	}
+	return limiterFor(name, srv.RateLimit, srv.RateBurst)
+}
+
+// toolCaller is the part of ClientSession that callTool needs. Depending on
+// the interface rather than the concrete session keeps the retry policy
+// testable without a live MCP server.
+type toolCaller interface {
+	CallTool(ctx context.Context, params *mcp.CallToolParams) (*mcp.CallToolResult, error)
+}
+
+// callTool sends one tools/call, serialising through the server's shared
+// limiter when one is configured.
+//
+// A throttled response always backs off and retries. With a limiter the
+// whole server enters cooldown, so everything queued behind this call waits
+// with it; without one the call still sleeps, because an upstream rate limit
+// should cost latency rather than fail the request outright. Configuring a
+// rate limit must not be a prerequisite for surviving throttling.
+func callTool(ctx context.Context, lim *serverLimiter, server string, c toolCaller, toolName string, args map[string]any) (*mcp.CallToolResult, error) {
+	const maxAttempts = 3
+
+	var lastErr error
+	for attempt := range maxAttempts {
+		if lim != nil {
+			if err := lim.acquire(ctx); err != nil {
+				return nil, err
+			}
+		}
+
+		result, err := c.CallTool(ctx, &mcp.CallToolParams{
+			Name:      toolName,
+			Arguments: args,
+		})
+		if err == nil {
+			return result, nil
+		}
+		lastErr = err
+
+		if !isRateLimited(err) {
+			return nil, err
+		}
+
+		slog.Debug(
+			"MCP server throttled; backing off",
+			"server", server,
+			"tool", toolName,
+			"attempt", attempt+1,
+			"error", err,
+		)
+
+		// There is nothing left to retry after the final attempt, so do not
+		// make this caller — or, with a limiter, everyone queued behind it —
+		// wait for a backoff that will never be used.
+		if attempt == maxAttempts-1 {
+			break
+		}
+
+		if lim != nil {
+			lim.cooldown(defaultCooldown)
+			continue
+		}
+
+		if err := sleepCtx(ctx, defaultCooldown); err != nil {
+			return nil, err
+		}
+	}
+
+	return nil, lastErr
 }
 
 // RefreshTools gets the updated list of tools from the MCP and updates the

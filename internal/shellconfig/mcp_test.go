@@ -43,6 +43,18 @@ func TestMCPOAuthFlags(t *testing.T) {
 	require.Equal(t, float64(8085), m["oauth_callback_port"])
 }
 
+func TestMCPRateLimitFlags(t *testing.T) {
+	t.Parallel()
+
+	result := loadScript(t, `mcp add exa --type http --url "https://mcp.exa.ai/mcp" \
+  --rate-limit 2.5 \
+  --rate-burst 3`)
+
+	m := result["mcp"].(map[string]any)["exa"].(map[string]any)
+	require.Equal(t, 2.5, m["rate_limit"])
+	require.Equal(t, float64(3), m["rate_burst"])
+}
+
 func TestMCPUnknownSubcommand(t *testing.T) {
 	t.Parallel()
 

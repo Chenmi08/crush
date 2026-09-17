@@ -1,1 +1,5 @@
-Launch a new agent that has access to the following tools: glob, grep, ls, view. When you are searching for a keyword or file and are not confident that you will find the right match on the first try, use the agent tool to perform the search for you.
+Launch a sub-agent to work on a task in its own context window, so raw findings never fill yours.
+
+Profiles:
+- `context` (default): searches the codebase for context and implementation details. Use it when you are looking for a keyword or file and are not confident you will find the right match on the first try.
+- `research`: searches the web and answers with citations. Use it for anything that needs current information from outside the repository. Pass `url` to read one specific page instead of searching.

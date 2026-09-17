@@ -732,6 +732,10 @@ func TestMCPConfigEqualExhaustive(t *testing.T) {
 	// Fields intentionally excluded from the comparison.
 	excluded := map[string]bool{
 		"OAuthToken": true, // internally managed, refreshed out-of-band.
+		// Client-side throttling only: a change takes effect on the next
+		// tool call and never requires reconnecting the server.
+		"RateLimit": true,
+		"RateBurst": true,
 	}
 
 	typ := reflect.TypeOf(config.MCPConfig{})

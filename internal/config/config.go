@@ -225,6 +225,16 @@ type MCPConfig struct {
 	EnabledTools  []string          `json:"enabled_tools,omitempty" jsonschema:"description=Allow list of tools from this MCP server,example=get-library-doc"`
 	Timeout       int               `json:"timeout,omitempty" jsonschema:"description=Timeout in seconds for MCP server connections,default=10,example=30,example=60,example=120"`
 
+	// RateLimit caps how many tool calls per second Crush sends to this
+	// server. The limiter is shared process-wide across every agent,
+	// because an upstream quota is normally shared no matter which
+	// sub-agent issued the call. Nil disables client-side limiting.
+	RateLimit *float64 `json:"rate_limit,omitempty" jsonschema:"description=Maximum tool calls per second sent to this MCP server, shared across all agents,example=2.5"`
+
+	// RateBurst is the token bucket capacity for RateLimit: how many
+	// calls may go out back-to-back before the rate is enforced.
+	RateBurst int `json:"rate_burst,omitempty" jsonschema:"description=Burst capacity for rate_limit,default=1,example=3"`
+
 	// Sessionless marks a server that does not maintain an MCP session (it
 	// never issues a Mcp-Session-Id). When true, Crush omits the
 	// tools/prompts/resources list-changed handlers: the go-sdk opens a
@@ -679,11 +689,15 @@ type Agent struct {
 	//  if this is nil, all tools are available
 	AllowedTools []string `json:"allowed_tools,omitempty"`
 
-	// this tells us which MCPs are available for this agent
-	//  if this is empty all mcps are available
-	//  the string array is the list of tools from the AllowedMCP the agent has available
-	//  if the string array is nil, all tools from the AllowedMCP are available
-	AllowedMCP map[string][]string `json:"allowed_mcp,omitempty"`
+	// AllowAllMCP grants every tool from every connected MCP server.
+	// It takes precedence over AllowedMCP.
+	AllowAllMCP bool `json:"allow_all_mcp,omitempty" jsonschema:"description=Allow every tool from every connected MCP server,default=false"`
+
+	// AllowedMCP maps an MCP server name to the tools allowed from it. It
+	// is ignored when AllowAllMCP is set. The zero value grants nothing,
+	// which makes it the safe default; a nil or empty tool list means
+	// every tool from that server.
+	AllowedMCP map[string][]string `json:"allowed_mcp,omitempty" jsonschema:"description=Per-MCP-server tool allow list; ignored when allow_all_mcp is set"`
 
 	// Overrides the context paths for this agent
 	ContextPaths []string `json:"context_paths,omitempty"`
@@ -959,7 +973,6 @@ func allToolNames() []string {
 		"lsp_rename",
 		"lsp_replace_symbol",
 		"fetch",
-		"agentic_fetch",
 		"glob",
 		"grep",
 		"ls",
@@ -1035,6 +1048,9 @@ func (c *Config) SetupAgents() {
 			Model:        SelectedModelTypeLarge,
 			ContextPaths: c.Options.ContextPaths,
 			AllowedTools: filterSlice(allowedTools, coderExcludedTools, false),
+			// The coder is the top-level agent, so it sees every MCP the
+			// user configured.
+			AllowAllMCP: true,
 		},
 
 		AgentTask: {
@@ -1046,8 +1062,8 @@ func (c *Config) SetupAgents() {
 			// Derive from the global set rather than the coder's, so
 			// coder-only exclusions do not leak into the sub-agent.
 			AllowedTools: resolveReadOnlyTools(allowedTools),
-			// NO MCPs or LSPs by default
-			AllowedMCP: map[string][]string{},
+			// No MCPs by default: the zero value of AllowAllMCP and
+			// AllowedMCP grants nothing.
 		},
 
 		AgentPlan: {
@@ -1057,8 +1073,7 @@ func (c *Config) SetupAgents() {
 			Model:        SelectedModelTypeLarge,
 			ContextPaths: c.Options.ContextPaths,
 			AllowedTools: resolvePlanTools(allowedTools),
-			// NO MCPs or LSPs by default
-			AllowedMCP: map[string][]string{},
+			// No MCPs by default, as above.
 		},
 	}
 	c.Agents = agents

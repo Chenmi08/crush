@@ -553,8 +553,10 @@ func (p *Permissions) renderContent(width int) string {
 		return p.renderDownloadContent(width)
 	case tools.FetchToolName:
 		return p.renderFetchContent(width)
-	case tools.AgenticFetchToolName:
-		return p.renderAgenticFetchContent(width)
+	case tools.AgentToolName:
+		// Delegated sub-agents only prompt when they will reach the
+		// network, which is the research shape: URL plus prompt.
+		return p.renderWebResearchContent(width)
 	case tools.ViewToolName:
 		return p.renderViewContent(width)
 	case tools.LSToolName:
@@ -662,8 +664,10 @@ func (p *Permissions) renderFetchContent(width int) string {
 	return p.renderContentPanel(params.URL, width)
 }
 
-func (p *Permissions) renderAgenticFetchContent(width int) string {
-	params, ok := p.permission.Params.(tools.AgenticFetchPermissionsParams)
+// renderWebResearchContent renders a web-research delegation: the `agent`
+// tool's research profile.
+func (p *Permissions) renderWebResearchContent(width int) string {
+	params, ok := p.permission.Params.(tools.AgentPermissionsParams)
 	if !ok {
 		return ""
 	}

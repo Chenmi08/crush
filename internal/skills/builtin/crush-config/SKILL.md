@@ -117,6 +117,7 @@ mcp remove <name>                              # alias: rm
 
 Flags: `--command CMD`, `--args ARG` (repeatable), `--env KEY VALUE`
 (repeatable), `--url URL`, `--header KEY VALUE` (repeatable), `--timeout N`,
+`--rate-limit N`, `--rate-burst N`,
 `--disabled BOOL`, `--disabled-tools TOOL` (repeatable), `--enabled-tools TOOL`
 (repeatable), `--oauth BOOL`, `--oauth-client-id ID`, `--oauth-client-secret SECRET`,
 `--oauth-callback-port PORT`.

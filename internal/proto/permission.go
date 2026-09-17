@@ -118,8 +118,11 @@ func unmarshalToolParams(toolName string, raw json.RawMessage) (any, error) {
 			return nil, err
 		}
 		return params, nil
-	case AgenticFetchToolName:
-		var params AgenticFetchPermissionsParams
+	case AgentToolName:
+		// A delegated sub-agent only asks for permission when it is about
+		// to reach the network, which is the research profile's shape:
+		// an optional URL plus the prompt.
+		var params AgentPermissionsParams
 		if err := json.Unmarshal(raw, &params); err != nil {
 			return nil, err
 		}

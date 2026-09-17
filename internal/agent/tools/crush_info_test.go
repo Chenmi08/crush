@@ -182,7 +182,10 @@ func TestCrushInfo_DisabledTools(t *testing.T) {
 
 	cfg := config.NewTestStore(&config.Config{
 		Providers: csync.NewMap[string, config.ProviderConfig](),
-		Options:   &config.Options{DisabledTools: []string{"sourcegraph", "agentic_fetch"}},
+		// "agentic_fetch" is intentionally a name that no longer maps to a
+		// tool: a config written against an older release must keep working,
+		// and its disabled entry must still be reported verbatim.
+		Options: &config.Options{DisabledTools: []string{"sourcegraph", "agentic_fetch"}},
 	})
 
 	output := buildCrushInfo(cfg, nil, nil, nil, nil, nil)

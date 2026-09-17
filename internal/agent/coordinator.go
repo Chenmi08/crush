@@ -819,14 +819,6 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 		allTools = append(allTools, agentTool)
 	}
 
-	if slices.Contains(agent.AllowedTools, tools.AgenticFetchToolName) {
-		agenticFetchTool, err := c.agenticFetchTool(ctx, nil)
-		if err != nil {
-			return nil, err
-		}
-		allTools = append(allTools, agenticFetchTool)
-	}
-
 	// Get the model name for the agent
 	modelID := ""
 	if modelCfg, ok := c.cfg.Config().Models[agent.Model]; ok {
@@ -905,35 +897,15 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 		}
 	}
 
-	for _, tool := range tools.GetMCPTools(c.permissions, c.cfg, c.cfg.WorkingDir()) {
-		if agent.AllowedMCP == nil {
-			// No MCP restrictions
-			filteredTools = append(filteredTools, tool)
-			continue
-		}
-		if len(agent.AllowedMCP) == 0 {
-			// No MCPs allowed
-			slog.Debug("No MCPs allowed", "tool", tool.Name(), "agent", agent.Name)
-			break
-		}
-
-		for mcp, tools := range agent.AllowedMCP {
-			if mcp != tool.MCP() {
-				continue
-			}
-			if len(tools) == 0 || slices.Contains(tools, tool.MCPToolName()) {
-				filteredTools = append(filteredTools, tool)
-				break
-			}
-			slog.Debug("MCP not allowed", "tool", tool.Name(), "agent", agent.Name)
-		}
+	for _, tool := range mcpToolsFor(agent, tools.GetMCPTools(c.permissions, c.cfg, c.cfg.WorkingDir())) {
+		filteredTools = append(filteredTools, tool)
 	}
 	slices.SortFunc(filteredTools, func(a, b fantasy.AgentTool) int {
 		return strings.Compare(a.Info().Name, b.Info().Name)
 	})
 
 	// Wrap tools with hook interception for the top-level agent only.
-	// Sub-agents (the `agent` task tool, `agentic_fetch`, etc.) run
+	// Sub-agents (the `agent` task tool, the research profile, etc.) run
 	// without hook interception to avoid firing the user's hook N times
 	// per delegated turn. The top-level invocation of the sub-agent tool
 	// itself is still wrapped from the coder's side.

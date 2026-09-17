@@ -294,6 +294,8 @@ Flags:
       --url string               URL for HTTP/SSE servers
       --header key value         HTTP header (repeatable)
       --timeout int              startup timeout in seconds
+      --rate-limit float         max tool calls per second, shared by all agents
+      --rate-burst int           burst capacity for --rate-limit (default 1)
       --disabled bool            disable without removing
       --disabled-tools string       deny a server tool (repeatable)
       --enabled-tools string        allow only these server tools (repeatable)

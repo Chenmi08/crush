@@ -8,7 +8,7 @@ description: Use when the user wants to add, write, debug, or configure a Crush 
 Hooks are user-defined commands in `crush.json` that fire at specific points
 during execution, giving deterministic control over tool behavior. They run
 **before** permission checks and **only on the top-level agent's** tool calls —
-sub-agent calls (task tool, agentic_fetch, etc.) are not intercepted, though
+sub-agent calls (the agent tool, including its research profile) are not intercepted, though
 the sub-agent tool call itself is.
 
 For the full reference, see `docs/hooks/README.md`. This skill covers what you

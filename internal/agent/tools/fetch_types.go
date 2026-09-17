@@ -1,8 +1,5 @@
 package tools
 
-// AgenticFetchToolName is the name of the agentic fetch tool.
-const AgenticFetchToolName = "agentic_fetch"
-
 // WebFetchToolName is the name of the web_fetch tool.
 const WebFetchToolName = "web_fetch"
 
@@ -12,21 +9,21 @@ const WebSearchToolName = "web_search"
 // LargeContentThreshold is the size threshold for saving content to a file.
 const LargeContentThreshold = 50000 // 50KB
 
-// AgenticFetchParams defines the parameters for the agentic fetch tool.
-type AgenticFetchParams struct {
-	URL    string `json:"url,omitempty" description:"The URL to fetch content from (optional - if not provided, the agent will search the web)"`
-	Prompt string `json:"prompt" description:"The prompt describing what information to find or extract"`
-}
-
-// AgenticFetchPermissionsParams defines the permission parameters for the agentic fetch tool.
-type AgenticFetchPermissionsParams struct {
+// AgentPermissionsParams defines the permission parameters for a delegated
+// sub-agent. A sub-agent only asks for permission when it will reach the
+// network, so these are always the research shape: an optional URL plus the
+// prompt describing what to find.
+type AgentPermissionsParams struct {
 	URL    string `json:"url,omitempty"`
 	Prompt string `json:"prompt"`
 }
 
 // WebFetchParams defines the parameters for the web_fetch tool.
 type WebFetchParams struct {
-	URL string `json:"url" description:"The URL to fetch content from"`
+	URLs []string `json:"urls" description:"URLs to read. Batch every URL you need into a single call: one call costs one Exa request no matter how many URLs it carries, while separate calls are rate limited."`
+	// MaxCharacters bounds how much text is extracted per page when a page
+	// is read through Exa.
+	MaxCharacters int `json:"max_characters,omitempty" description:"Characters to extract per page when a page is read through Exa (default 20000). Raise it for long documents."`
 }
 
 // WebSearchParams defines the parameters for the web_search tool.
