@@ -705,6 +705,10 @@ func getOrRenewClient(ctx context.Context, cfg *config.ConfigStore, name string)
 	// Built-in servers own their session lifecycle and never enter the
 	// shared registries, so they bypass the renewal machinery entirely.
 	if b, ok := builtinServers[name]; ok {
+		if builtinDisabled(cfg, name) {
+			b.close()
+			return nil, errBuiltinDisabled(name)
+		}
 		session, _, err := b.ensure(ctx, cfg)
 		return session, err
 	}

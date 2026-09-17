@@ -205,11 +205,13 @@ var optionSpecs = map[string]optionSpec{
 	"auto-summarize":       {jsonKey: "disable_auto_summarize", kind: optBool, inverted: true},
 	"provider-auto-update": {jsonKey: "disable_provider_auto_update", kind: optBool, inverted: true},
 	"default-providers":    {jsonKey: "disable_default_providers", kind: optBool, inverted: true},
+	"exa":                  {jsonKey: "disable_exa", kind: optBool, inverted: true},
 
 	// String fields.
 	"notifications":  {jsonKey: "notifications", kind: optString},
 	"data-directory": {jsonKey: "data_directory", kind: optString},
 	"initialize-as":  {jsonKey: "initialize_as", kind: optString},
+	"exa-api-key":    {jsonKey: "exa_api_key", kind: optString},
 
 	// Integer fields, in seconds.
 	"request-timeout": {jsonKey: "request_timeout", kind: optInt},

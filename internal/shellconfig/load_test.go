@@ -241,6 +241,8 @@ func TestLoadShellConfig_Option(t *testing.T) {
 	dir := t.TempDir()
 	script := `option data-directory .crush
 option metrics false
+option exa false
+option exa-api-key exa-test-key
 option debug`
 	path := filepath.Join(dir, "crushrc")
 
@@ -253,6 +255,8 @@ option debug`
 	opts := result["options"].(map[string]any)
 	require.Equal(t, ".crush", opts["data_directory"])
 	require.Equal(t, true, opts["disable_metrics"])
+	require.Equal(t, true, opts["disable_exa"])
+	require.Equal(t, "exa-test-key", opts["exa_api_key"])
 	require.Equal(t, true, opts["debug"])
 }
 

@@ -480,9 +480,12 @@ Boolean Keys:
   auto-summarize                 automatically summarize long conversations
   provider-auto-update           update the provider catalog automatically
   default-providers              include built-in providers
+  exa                            use the built-in Exa web search backend
   attribution-generated-with     add the Generated with Crush line
 
 String Keys:
+  exa-api-key string               Exa API key for the built-in web search;
+                                   falls back to $EXA_API_KEY when unset
   data-directory string            directory for project data and state
   initialize-as string             context filename created by crush init
   notifications string             notification style: auto, native, osc, bell,
@@ -507,6 +510,7 @@ List Keys:
 option progress false
 option skill-path ./skills
 option attribution-trailer-style assisted-by
+option exa-api-key "$EXA_API_KEY"
 ```
 
 #### `option reset`

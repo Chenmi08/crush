@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"iter"
 	"log/slog"
@@ -36,7 +37,7 @@ func Tools() iter.Seq2[string, []*Tool] {
 func RunTool(ctx context.Context, cfg *config.ConfigStore, name, toolName string, input string) (ToolResult, error) {
 	var args map[string]any
 	if err := json.Unmarshal([]byte(input), &args); err != nil {
-		return ToolResult{}, fmt.Errorf("error parsing parameters: %s", err)
+		return ToolResult{}, fmt.Errorf("error parsing parameters: %w", err)
 	}
 
 	c, err := getOrRenewClient(ctx, cfg, name)
@@ -48,7 +49,19 @@ func RunTool(ctx context.Context, cfg *config.ConfigStore, name, toolName string
 		return ToolResult{}, err
 	}
 
+	return toolResultFromCall(result)
+}
+
+// toolResultFromCall converts a successful MCP response into a ToolResult.
+// A response with IsError set is a tool-originated failure (an upstream
+// 402, a 429 that outlasted the retries, and the like) carried in the
+// content rather than as a transport error; it is returned as an error so
+// callers can fall back instead of feeding the model a dead end.
+func toolResultFromCall(result *mcp.CallToolResult) (ToolResult, error) {
 	if len(result.Content) == 0 {
+		if result.IsError {
+			return ToolResult{}, errors.New("tool reported an error")
+		}
 		return ToolResult{Type: "text", Content: ""}, nil
 	}
 
@@ -78,6 +91,12 @@ func RunTool(ctx context.Context, cfg *config.ConfigStore, name, toolName string
 	}
 
 	textContent := strings.Join(textParts, "\n")
+	if result.IsError {
+		if textContent == "" {
+			textContent = "tool reported an error"
+		}
+		return ToolResult{}, errors.New(textContent)
+	}
 
 	// We need to make sure the data is base64
 	// when using something like docker + playwright the data was not returned correctly.
@@ -110,7 +129,7 @@ func RunTool(ctx context.Context, cfg *config.ConfigStore, name, toolName string
 func limiterForServer(cfg *config.ConfigStore, name string) *serverLimiter {
 	// Built-in servers carry their own configuration rather than reading it
 	// from the user's config.
-	if srv, ok := builtinConfig(name); ok {
+	if srv, ok := builtinEffectiveConfig(name); ok {
 		return limiterFor(name, srv.RateLimit, srv.RateBurst)
 	}
 

@@ -184,8 +184,11 @@ option reset <list-key>    # clear a list option back to empty
   are still rejected).
 - **Boolean keys phrased positively** (stored as the negated field): `metrics`,
   `auto-summarize`, `provider-auto-update`,
-  `default-providers`. Example: `option metrics false` disables metrics.
-- **String keys**: `data-directory`, `initialize-as`, `notifications`.
+  `default-providers`, `exa` (off skips the built-in Exa search backend and
+  uses DuckDuckGo instead). Example: `option metrics false` disables metrics.
+- **String keys**: `data-directory`, `initialize-as`, `notifications`,
+  `exa-api-key` (Exa API key for the built-in web search backend; falls back to
+  `$EXA_API_KEY` when unset).
 - **Attribution keys**: `attribution-trailer-style` (`none`, `co-authored-by`,
   `assisted-by`) and `attribution-generated-with` (boolean).
 - **UI settings**: `option ui compact BOOL`, `option ui diff unified|split`,
@@ -352,6 +355,8 @@ The `$schema` property enables IDE autocomplete but is optional.
 | `permissions allow view ls`          | `permissions.allowed_tools = ["view","ls"]`            |
 | `permissions deny bash`              | `options.disabled_tools = ["bash"]`                    |
 | `option skill-path ./skills`         | `options.skills_paths = ["./skills"]`                  |
+| `option exa-api-key "$EXA_API_KEY"`  | `options.exa_api_key = "$EXA_API_KEY"`                 |
+| `option exa false`                   | `options.disable_exa = true`                           |
 | `option metrics false`               | `options.disable_metrics = true`                       |
 | `option request-timeout 300`          | `options.request_timeout = 300`                        |
 | `option attribution-trailer-style none` | `options.attribution.trailer_style = "none"`        |

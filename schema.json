@@ -606,6 +606,18 @@
             300,
             0
           ]
+        },
+        "exa_api_key": {
+          "type": "string",
+          "description": "Exa API key for the built-in web search backend. Falls back to the EXA_API_KEY environment variable when unset. Supports $VAR and $(cmd) expansion",
+          "examples": [
+            "$EXA_API_KEY"
+          ]
+        },
+        "disable_exa": {
+          "type": "boolean",
+          "description": "Disable the built-in Exa web search backend so research uses DuckDuckGo and local fetching instead",
+          "default": false
         }
       },
       "additionalProperties": false,

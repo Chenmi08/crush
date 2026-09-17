@@ -5,8 +5,10 @@ import (
 	"encoding/base64"
 	"testing"
 
-	"github.com/charmbracelet/crush/internal/config"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/require"
+
+	"github.com/charmbracelet/crush/internal/config"
 )
 
 func TestEnsureRawBytes(t *testing.T) {
@@ -114,4 +116,36 @@ func TestFilterTools(t *testing.T) {
 		result := filterTools(config.MCPConfig{EnabledTools: []string{"non_existent"}}, tools)
 		require.Len(t, result, 0)
 	})
+}
+
+// TestToolResultFromCallIsError pins the contract that a tool-originated
+// failure carried in the MCP content (isError) becomes an error rather
+// than a normal result, which is what lets callers fall back.
+func TestToolResultFromCallIsError(t *testing.T) {
+	t.Parallel()
+
+	result, err := toolResultFromCall(&mcp.CallToolResult{
+		IsError: true,
+		Content: []mcp.Content{&mcp.TextContent{Text: "Payment required: no credits"}},
+	})
+	require.ErrorContains(t, err, "Payment required")
+	require.Empty(t, result)
+
+	result, err = toolResultFromCall(&mcp.CallToolResult{IsError: true})
+	require.ErrorContains(t, err, "tool reported an error")
+	require.Empty(t, result)
+
+	// An error carrying only non-text content still needs a message.
+	result, err = toolResultFromCall(&mcp.CallToolResult{
+		IsError: true,
+		Content: []mcp.Content{&mcp.ImageContent{Data: []byte("x"), MIMEType: "image/png"}},
+	})
+	require.ErrorContains(t, err, "tool reported an error")
+	require.Empty(t, result)
+
+	result, err = toolResultFromCall(&mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{Text: "search results"}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "search results", result.Content)
 }

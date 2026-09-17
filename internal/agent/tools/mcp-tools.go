@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"slices"
 
 	"charm.land/fantasy"
@@ -69,10 +70,19 @@ type Tool struct {
 	permissions     permission.Service
 	workingDir      string
 	providerOptions fantasy.ProviderOptions
+	// fallback runs when this MCP call fails; nil disables it.
+	fallback fantasy.AgentTool
 }
 
 func (m *Tool) SetProviderOptions(opts fantasy.ProviderOptions) {
 	m.providerOptions = opts
+}
+
+// SetFallback sets a tool to run when this MCP tool's call fails, so a
+// failing backend can degrade instead of returning an error the model
+// cannot act on. Nil disables it.
+func (m *Tool) SetFallback(t fantasy.AgentTool) {
+	m.fallback = t
 }
 
 func (m *Tool) ProviderOptions() fantasy.ProviderOptions {
@@ -151,7 +161,10 @@ func (m *Tool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.ToolRe
 
 	result, err := mcp.RunTool(ctx, m.cfg, m.mcpName, m.tool.Name, params.Input)
 	if err != nil {
-		return fantasy.NewTextErrorResponse(err.Error()), nil
+		if m.fallback == nil {
+			return fantasy.NewTextErrorResponse(err.Error()), nil
+		}
+		return m.runFallback(ctx, params, err), nil
 	}
 
 	switch result.Type {
@@ -172,4 +185,42 @@ func (m *Tool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.ToolRe
 	default:
 		return fantasy.NewTextResponse(result.Content), nil
 	}
+}
+
+// runFallback runs the fallback tool after an MCP call failed, for example
+// when the upstream account is out of credit or throttling outlasts the
+// retries. A fallback that fails is reported as a failure; on success its
+// results are prefixed with a note naming what failed and what answered.
+func (m *Tool) runFallback(ctx context.Context, params fantasy.ToolCall, mcpErr error) fantasy.ToolResponse {
+	fallbackName := m.fallback.Info().Name
+	slog.Debug(
+		"MCP tool failed; falling back",
+		"tool", m.Name(),
+		"fallback", fallbackName,
+		"error", mcpErr,
+	)
+
+	resp, err := m.fallback.Run(ctx, params)
+	if err != nil {
+		return fallbackFailedResponse(mcpErr, fallbackName, err.Error())
+	}
+	// Fallback tools report their own failures in-band, so a nil error is
+	// not proof of success.
+	if resp.IsError {
+		return fallbackFailedResponse(mcpErr, fallbackName, resp.Content)
+	}
+
+	resp.Content = fmt.Sprintf(
+		"[%s failed: %s; used %s instead.]\n\n%s",
+		m.MCPToolName(), mcpErr, fallbackName, resp.Content,
+	)
+	return resp
+}
+
+// fallbackFailedResponse keeps the original failure alongside the
+// fallback's, since the original is usually the one worth reporting.
+func fallbackFailedResponse(mcpErr error, fallbackName, detail string) fantasy.ToolResponse {
+	return fantasy.NewTextErrorResponse(
+		fmt.Sprintf("%s; fallback %s failed: %s", mcpErr, fallbackName, detail),
+	)
 }

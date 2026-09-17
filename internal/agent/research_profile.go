@@ -168,8 +168,8 @@ func (c *coordinator) researchTools(ctx context.Context, tmpDir string, client *
 		tools.NewViewTool(c.lspManager, c.permissions, c.filetracker, nil, tmpDir),
 	}
 
-	searchTools := c.builtinSearchTools(ctx)
-	if len(searchTools) == 0 {
+	exaTools := c.builtinSearchTools(ctx)
+	if len(exaTools) == 0 {
 		// The backend is unreachable, so the fallback fetcher gets no
 		// configuration and reads every page directly rather than retrying
 		// an endpoint that just failed.
@@ -178,6 +178,18 @@ func (c *coordinator) researchTools(ctx context.Context, tmpDir string, client *
 			tools.NewWebFetchTool(nil, tmpDir, client, nil),
 		}
 		return append(fallback, base...)
+	}
+
+	// The backend can connect and still fail per call: credits exhausted,
+	// throttling that outlasts the retries, a dropped connection. Attach
+	// DuckDuckGo as a per-call fallback so the sub-agent degrades instead
+	// of receiving an error it cannot act on. The fallback is not
+	// registered as a tool, so the model still sees one search tool.
+	fallback := tools.NewExaSearchFallback(client)
+	searchTools := make([]fantasy.AgentTool, 0, len(exaTools))
+	for _, tool := range exaTools {
+		tool.SetFallback(fallback)
+		searchTools = append(searchTools, tool)
 	}
 
 	research := tools.WithExaBudget(budget, researchSearchToolNames, searchTools)
@@ -190,14 +202,14 @@ func (c *coordinator) researchTools(ctx context.Context, tmpDir string, client *
 // DuckDuckGo. web_fetch_exa is excluded on purpose: the routed web_fetch tool
 // calls it internally, so the sub-agent cannot bypass the internal-address
 // check by fetching a page itself.
-func (c *coordinator) builtinSearchTools(ctx context.Context) []fantasy.AgentTool {
+func (c *coordinator) builtinSearchTools(ctx context.Context) []*tools.Tool {
 	all, err := tools.BuiltinMCPTools(ctx, c.permissions, c.cfg, c.cfg.WorkingDir(), mcp.ExaServerName)
 	if err != nil {
 		slog.Debug("Built-in search backend unavailable", "error", err)
 		return nil
 	}
 
-	var out []fantasy.AgentTool
+	var out []*tools.Tool
 	for _, tool := range all {
 		if slices.Contains(researchSearchToolNames, tool.MCPToolName()) {
 			out = append(out, tool)
