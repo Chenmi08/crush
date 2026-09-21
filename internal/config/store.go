@@ -208,7 +208,7 @@ func (s *ConfigStore) RefetchHyperProvider(ctx context.Context) error {
 	// token after OAuth re-authentication.
 	freshClient := realHyperClient{
 		baseURL:    hyperp.BaseURL(),
-		resolveKey: func() string { return resolveHyperAPIKey(s.Config()) },
+		resolveKey: func() string { return ResolveHyperAPIKey(s.Config()) },
 	}
 	hyperSyncer.SetClient(freshClient)
 

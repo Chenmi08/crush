@@ -16,6 +16,13 @@ import (
 // list is generated from the agent's AllowedTools rather than hard-coded,
 // so the prompt can never promise a tool the user disabled.
 func TestPlanPromptListsConfiguredTools(t *testing.T) {
+	// Point the global config locations at throwaway directories so the
+	// test is hermetic: config.Init merges the developer's global crush
+	// config (which may disable tools like the LSP lookups or question),
+	// which would otherwise change the advertised tool list.
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
 	env := testEnv(t)
 
 	// Minimal hermetic config so config.Init and the prompt build both

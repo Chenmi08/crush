@@ -1,6 +1,6 @@
 Execute shell commands; long-running commands automatically move to background and return a shell ID.
 
-Banned commands ({{ .BannedCommands }}) return an error - explain to the user instead of retrying. Safe read-only commands execute without prompts. Output is truncated beyond {{ .MaxOutputLength }} characters.
+Banned commands ({{ .BannedCommands }}) return an error - explain to the user instead of retrying. Safe read-only commands execute without prompts. Output is truncated beyond {{ .MaxOutputLength }} characters. The truncation marker names a file holding the complete output - read it with the view tool when the omitted middle matters.
 
 - Use the dedicated View/Edit tools instead of `cat`/`sed` for reading and editing files.
 - Chain commands with ';' or '&&'; avoid newlines except in quoted strings. Each call runs in an independent shell (no state persists between calls).
