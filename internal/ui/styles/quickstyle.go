@@ -60,19 +60,22 @@ type quickStyleOpts struct {
 	plan              color.Color
 	planMoreSubtle    color.Color
 
-	// Diff view. Inserted (positive) and deleted (negative) lines. The
-	// gutter (line-number column) uses the darker gutter background
-	// while the code and symbol columns use the lighter one.
+	// Diff view. Inserted (positive) and deleted (negative) lines. Each
+	// line paints two background bands: the gutter (line-number column)
+	// uses the darker gutter background, and the code band, which the
+	// sign column sits inside, uses the lighter one. The foreground is
+	// ink for everything outside the code itself, that is the signs and
+	// the line numbers.
 	//
 	// All six are optional: unset foregrounds default to the success and
 	// destructive hues, and unset backgrounds blend the foreground over
 	// bgBase (see deriveDiffColors).
-	insertFg       color.Color // diff insert symbols and line numbers.
-	insertBg       color.Color // diff insert code and symbol background.
-	insertGutterBg color.Color // diff insert line-number background.
-	deleteFg       color.Color // diff delete symbols and line numbers.
-	deleteBg       color.Color // diff delete code and symbol background.
-	deleteGutterBg color.Color // diff delete line-number background.
+	diffInsertFg       color.Color // diff insert signs and line-number ink.
+	diffInsertCodeBg   color.Color // diff insert code and sign band background.
+	diffInsertGutterBg color.Color // diff insert line-number band background.
+	diffDeleteFg       color.Color // diff delete signs and line-number ink.
+	diffDeleteCodeBg   color.Color // diff delete code and sign band background.
+	diffDeleteGutterBg color.Color // diff delete line-number band background.
 
 	// Buttons. Backgrounds for each button state; the foregrounds are
 	// derived from onPrimary / fgBase.
@@ -123,23 +126,23 @@ const (
 // success and destructive hues, and backgrounds blend the foreground
 // over bgBase.
 func (o *quickStyleOpts) deriveDiffColors() {
-	if o.insertFg == nil {
-		o.insertFg = o.success
+	if o.diffInsertFg == nil {
+		o.diffInsertFg = o.success
 	}
-	if o.deleteFg == nil {
-		o.deleteFg = o.destructive
+	if o.diffDeleteFg == nil {
+		o.diffDeleteFg = o.destructive
 	}
-	if o.insertBg == nil && o.insertFg != nil && o.bgBase != nil {
-		o.insertBg = blendTint(o.insertFg, o.bgBase, diffInsertCodeBlend)
+	if o.diffInsertCodeBg == nil && o.diffInsertFg != nil && o.bgBase != nil {
+		o.diffInsertCodeBg = blendTint(o.diffInsertFg, o.bgBase, diffInsertCodeBlend)
 	}
-	if o.insertGutterBg == nil && o.insertFg != nil && o.bgBase != nil {
-		o.insertGutterBg = blendTint(o.insertFg, o.bgBase, diffInsertGutterBlend)
+	if o.diffInsertGutterBg == nil && o.diffInsertFg != nil && o.bgBase != nil {
+		o.diffInsertGutterBg = blendTint(o.diffInsertFg, o.bgBase, diffInsertGutterBlend)
 	}
-	if o.deleteBg == nil && o.deleteFg != nil && o.bgBase != nil {
-		o.deleteBg = blendTint(o.deleteFg, o.bgBase, diffDeleteCodeBlend)
+	if o.diffDeleteCodeBg == nil && o.diffDeleteFg != nil && o.bgBase != nil {
+		o.diffDeleteCodeBg = blendTint(o.diffDeleteFg, o.bgBase, diffDeleteCodeBlend)
 	}
-	if o.deleteGutterBg == nil && o.deleteFg != nil && o.bgBase != nil {
-		o.deleteGutterBg = blendTint(o.deleteFg, o.bgBase, diffDeleteGutterBlend)
+	if o.diffDeleteGutterBg == nil && o.diffDeleteFg != nil && o.bgBase != nil {
+		o.diffDeleteGutterBg = blendTint(o.diffDeleteFg, o.bgBase, diffDeleteGutterBlend)
 	}
 }
 
@@ -675,23 +678,23 @@ func quickStyle(o quickStyleOpts) Styles {
 		},
 		InsertLine: diffview.LineStyle{
 			LineNumber: lipgloss.NewStyle().
-				Foreground(o.insertFg).
-				Background(o.insertGutterBg),
+				Foreground(o.diffInsertFg).
+				Background(o.diffInsertGutterBg),
 			Symbol: lipgloss.NewStyle().
-				Foreground(o.insertFg).
-				Background(o.insertBg),
+				Foreground(o.diffInsertFg).
+				Background(o.diffInsertCodeBg),
 			Code: lipgloss.NewStyle().
-				Background(o.insertBg),
+				Background(o.diffInsertCodeBg),
 		},
 		DeleteLine: diffview.LineStyle{
 			LineNumber: lipgloss.NewStyle().
-				Foreground(o.deleteFg).
-				Background(o.deleteGutterBg),
+				Foreground(o.diffDeleteFg).
+				Background(o.diffDeleteGutterBg),
 			Symbol: lipgloss.NewStyle().
-				Foreground(o.deleteFg).
-				Background(o.deleteBg),
+				Foreground(o.diffDeleteFg).
+				Background(o.diffDeleteCodeBg),
 			Code: lipgloss.NewStyle().
-				Background(o.deleteBg),
+				Background(o.diffDeleteCodeBg),
 		},
 		Filename: diffview.LineStyle{
 			LineNumber: lipgloss.NewStyle().
