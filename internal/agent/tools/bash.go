@@ -216,7 +216,7 @@ func blockFuncs() []shell.BlockFunc {
 	return blockers
 }
 
-func NewBashTool(permissions permission.Service, workingDir, spillDir string, attribution *config.Attribution, modelID string) fantasy.AgentTool {
+func NewBashTool(permissions permission.Service, workingDir, spillDir string, attribution *config.Attribution, modelID string, dangerousCommands []string) fantasy.AgentTool {
 	return fantasy.NewAgentTool(
 		BashToolName,
 		string(bashDescription(attribution, modelID)),
@@ -228,10 +228,17 @@ func NewBashTool(permissions permission.Service, workingDir, spillDir string, at
 			// Determine working directory
 			execWorkingDir := cmp.Or(params.WorkingDir, workingDir)
 
-			isSafeReadOnly := false
-			cmdLower := strings.ToLower(params.Command)
+			// Dangerous commands are checked before the read-only shortcut: a
+			// configured dangerous command must never be silently approved by
+			// the safe-command list (e.g. `git branch -D` matches the
+			// "git branch" safe prefix). They always fall through to a
+			// permission request below, with Dangerous set so a session grant
+			// can't approve them.
+			dangerous := isDangerousCommand(params.Command, dangerousCommands)
 
-			if !containsCommandChaining(params.Command) {
+			isSafeReadOnly := false
+			if !dangerous && !containsCommandChaining(params.Command) {
+				cmdLower := strings.ToLower(params.Command)
 				for _, safe := range safeCommands {
 					if strings.HasPrefix(cmdLower, safe) {
 						if len(cmdLower) == len(safe) || cmdLower[len(safe)] == ' ' || cmdLower[len(safe)] == '-' {
@@ -257,6 +264,7 @@ func NewBashTool(permissions permission.Service, workingDir, spillDir string, at
 						Action:      "execute",
 						Description: fmt.Sprintf("Execute command: %s", params.Command),
 						Params:      BashPermissionsParams(params),
+						Dangerous:   dangerous,
 					},
 				)
 				if err != nil {

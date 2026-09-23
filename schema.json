@@ -635,6 +635,17 @@
           },
           "type": "array",
           "description": "List of tools that don't require permission prompts"
+        },
+        "dangerous_commands": {
+          "items": {
+            "type": "string",
+            "examples": [
+              "git push",
+              "git branch -d"
+            ]
+          },
+          "type": "array",
+          "description": "Commands that always require a fresh permission prompt even when the session has allowed bash"
         }
       },
       "additionalProperties": false,

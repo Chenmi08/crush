@@ -43,6 +43,12 @@ type CreatePermissionRequest struct {
 	Action      string `json:"action"`
 	Params      any    `json:"params"`
 	Path        string `json:"path"`
+	// Dangerous marks a destructive or irreversible operation (e.g. rm -rf,
+	// git push) that a one-time "allow for session" grant must never silently
+	// approve. Such requests always fall through to a fresh prompt; only
+	// YOLO mode, the configured allow-list, and PreToolUse hook approval can
+	// skip them.
+	Dangerous bool `json:"dangerous,omitempty"`
 }
 
 type PermissionNotification struct {
@@ -245,17 +251,23 @@ func (s *permissionService) Request(ctx context.Context, opts CreatePermissionRe
 		Params:      opts.Params,
 	}
 
-	if _, ok := s.sessionPermissions.Get(PermissionKey{
-		SessionID: permission.SessionID,
-		ToolName:  permission.ToolName,
-		Action:    permission.Action,
-		Path:      permission.Path,
-	}); ok {
-		s.notificationBroker.Publish(pubsub.CreatedEvent, PermissionNotification{
-			ToolCallID: opts.ToolCallID,
-			Granted:    true,
-		})
-		return true, nil
+	// A session grant ("allow for session") covers the tool/action/path key.
+	// Dangerous requests are exempt from it: a single session grant must not
+	// silently approve destructive operations, so they always fall through
+	// to a fresh prompt below.
+	if !opts.Dangerous {
+		if _, ok := s.sessionPermissions.Get(PermissionKey{
+			SessionID: permission.SessionID,
+			ToolName:  permission.ToolName,
+			Action:    permission.Action,
+			Path:      permission.Path,
+		}); ok {
+			s.notificationBroker.Publish(pubsub.CreatedEvent, PermissionNotification{
+				ToolCallID: opts.ToolCallID,
+				Granted:    true,
+			})
+			return true, nil
+		}
 	}
 
 	s.activeRequestMu.Lock()

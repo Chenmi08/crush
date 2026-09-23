@@ -422,15 +422,17 @@ Flags:
 ### permissions
 
 Configure tool permissions. `allow` skips approval prompts; `deny` hides tools
-from the agent entirely.
+from the agent entirely; `dangerous` marks shell commands that always require
+a fresh approval prompt even when the session has already allowed `bash`.
 
 ```text
 Usage:
   permissions [command]
 
 Available Commands:
-  allow     Allow tools without prompting
-  deny      Hide tools from the agent
+  allow       Allow tools without prompting
+  deny        Hide tools from the agent
+  dangerous   Always prompt for matching shell commands
 ```
 
 #### `permissions allow`
@@ -449,6 +451,27 @@ Hide one or more tools from the agent so they cannot be called.
 ```text
 Usage:
   permissions deny <tool> [<tool> ...]
+```
+
+#### `permissions dangerous`
+
+Mark shell command patterns that always require a fresh approval prompt, even
+when the session has already allowed `bash` with "allow for session". A
+one-time session grant can never silently approve these. Entries are
+command-name patterns; multi-word commands must be quoted.
+
+```text
+Usage:
+  permissions dangerous <command> [<command> ...]
+```
+
+The command name part of an entry is matched in order; option tokens after it
+must all be present (order-independent), with combined short flags expanded.
+Configure just the command name to catch every invocation, or include options
+to narrow it:
+
+```bash
+permissions dangerous "git push" "git branch -d" rm
 ```
 
 ```bash

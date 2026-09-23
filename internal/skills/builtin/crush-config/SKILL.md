@@ -166,10 +166,22 @@ hook add PreToolUse --matcher "^bash$" --command ".crush/hooks/no-haskell.sh" --
 ```bash
 permissions allow <tool> [<tool> ...]   # tools that skip permission prompts
 permissions deny <tool> [<tool> ...]    # hide tools from the agent entirely
+permissions dangerous <cmd> [<cmd> ...] # always prompt for matching shell commands
 ```
 
 `deny` is the inverse of `allow`: it writes `options.disabled_tools`. A denied
 tool is hidden from the agent, not merely prompted for.
+
+`dangerous` writes `permissions.dangerous_commands`: shell command patterns
+that always require a fresh approval prompt, even when the session has
+already allowed `bash` with "allow for session". A one-time session grant can
+never silently approve these. The command-name part of an entry is matched in
+order; option tokens after it must all be present (order-independent), with
+combined short flags expanded. Multi-word entries must be quoted:
+
+```bash
+permissions dangerous "git push" "git branch -d" rm
+```
 
 ### options
 
@@ -354,6 +366,7 @@ The `$schema` property enables IDE autocomplete but is optional.
 | `hook add PreToolUse --command C`    | append to `hooks.PreToolUse[]`                         |
 | `permissions allow view ls`          | `permissions.allowed_tools = ["view","ls"]`            |
 | `permissions deny bash`              | `options.disabled_tools = ["bash"]`                    |
+| `permissions dangerous "git push"`   | `permissions.dangerous_commands = ["git push"]`        |
 | `option skill-path ./skills`         | `options.skills_paths = ["./skills"]`                  |
 | `option exa-api-key "$EXA_API_KEY"`  | `options.exa_api_key = "$EXA_API_KEY"`                 |
 | `option exa false`                   | `options.disable_exa = true`                           |

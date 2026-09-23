@@ -395,6 +395,12 @@ const (
 
 type Permissions struct {
 	AllowedTools []string `json:"allowed_tools,omitempty" jsonschema:"description=List of tools that don't require permission prompts,example=bash,example=view"`
+	// DangerousCommands lists shell command patterns that always require a
+	// fresh permission prompt even when the session has already allowed
+	// bash, so a one-time "allow for session" grant can't silently approve
+	// them. Entries are command-name prefixes, e.g. "git push" or
+	// "git branch -d".
+	DangerousCommands []string `json:"dangerous_commands,omitempty" jsonschema:"description=Commands that always require a fresh permission prompt even when the session has allowed bash,example=git push,example=git branch -d"`
 }
 
 type TrailerStyle string

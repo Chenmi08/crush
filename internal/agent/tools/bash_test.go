@@ -87,10 +87,12 @@ type recordingPermissionService struct {
 	*pubsub.Broker[permission.PermissionRequest]
 	requestCount int
 	allow        bool
+	lastRequest  *permission.CreatePermissionRequest
 }
 
 func (m *recordingPermissionService) Request(ctx context.Context, req permission.CreatePermissionRequest) (bool, error) {
 	m.requestCount++
+	m.lastRequest = &req
 	return m.allow, nil
 }
 
@@ -117,7 +119,7 @@ func (m *recordingPermissionService) SubscribeNotifications(ctx context.Context)
 func newBashToolForTest(workingDir string) fantasy.AgentTool {
 	permissions := &mockBashPermissionService{Broker: pubsub.NewBroker[permission.PermissionRequest]()}
 	attribution := &config.Attribution{TrailerStyle: config.TrailerStyleNone}
-	return NewBashTool(permissions, workingDir, workingDir, attribution, "test-model")
+	return NewBashTool(permissions, workingDir, workingDir, attribution, "test-model", nil)
 }
 
 func newBashToolWithRecordingPerms(workingDir string, allow bool) (fantasy.AgentTool, *recordingPermissionService) {
@@ -126,7 +128,7 @@ func newBashToolWithRecordingPerms(workingDir string, allow bool) (fantasy.Agent
 		allow:  allow,
 	}
 	attribution := &config.Attribution{TrailerStyle: config.TrailerStyleNone}
-	return NewBashTool(perms, workingDir, workingDir, attribution, "test-model"), perms
+	return NewBashTool(perms, workingDir, workingDir, attribution, "test-model", nil), perms
 }
 
 func TestBashTool_ChainedCommandsRequirePermission(t *testing.T) {
@@ -166,6 +168,48 @@ func TestBashTool_ChainedCommandsDenied(t *testing.T) {
 
 	require.Equal(t, 1, perms.requestCount)
 	require.Contains(t, resp.Content, "User denied permission")
+}
+
+// TestBashTool_DangerousCommandBeatsSafeReadonly verifies the core fix: a
+// configured dangerous command must beat the safe-readonly shortcut. Even
+// though `git branch -D` matches the "git branch" safe prefix, it has to go
+// through the permission service (flagged dangerous), never run silently.
+func TestBashTool_DangerousCommandBeatsSafeReadonly(t *testing.T) {
+	workingDir := t.TempDir()
+	perms := &recordingPermissionService{
+		Broker: pubsub.NewBroker[permission.PermissionRequest](),
+		allow:  true,
+	}
+	attribution := &config.Attribution{TrailerStyle: config.TrailerStyleNone}
+	tool := NewBashTool(perms, workingDir, workingDir, attribution, "test-model",
+		[]string{"git branch -D", "git tag -d"})
+	ctx := context.WithValue(context.Background(), SessionIDContextKey, "test-session")
+
+	// `git branch -D` matches the "git branch" safe prefix AND the configured
+	// dangerous entry. It must request permission, not run silently.
+	resp := runBashTool(t, tool, ctx, BashParams{
+		Description: "delete branch",
+		Command:     "git branch -D feature",
+	})
+
+	require.False(t, resp.IsError)
+	require.Equal(t, 1, perms.requestCount,
+		"dangerous command matching a safe prefix must request permission")
+	require.NotNil(t, perms.lastRequest)
+	require.True(t, perms.lastRequest.Dangerous,
+		"configured dangerous command must be flagged dangerous")
+
+	// A genuinely read-only git branch invocation that is not configured
+	// dangerous stays on the safe-readonly path (no permission request).
+	perms.requestCount = 0
+	resp = runBashTool(t, tool, ctx, BashParams{
+		Description: "list branches",
+		Command:     "git branch --list",
+	})
+
+	require.False(t, resp.IsError)
+	require.Equal(t, 0, perms.requestCount,
+		"non-dangerous safe command should stay on the read-only path")
 }
 
 func runBashTool(t *testing.T, tool fantasy.AgentTool, ctx context.Context, params BashParams) fantasy.ToolResponse {

@@ -842,9 +842,16 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 		RequireRead: c.cfg.Config().Options.RequireReadBeforeWrite,
 	}
 
+	// Commands that always require a fresh permission prompt even when the
+	// session has allowed bash (permissions.dangerous_commands).
+	var dangerousCommands []string
+	if perms := c.cfg.Config().Permissions; perms != nil {
+		dangerousCommands = perms.DangerousCommands
+	}
+
 	allTools = append(
 		allTools,
-		tools.NewBashTool(c.permissions, c.cfg.WorkingDir(), c.cfg.Config().Options.DataDirectory, c.cfg.Config().Options.Attribution, modelID),
+		tools.NewBashTool(c.permissions, c.cfg.WorkingDir(), c.cfg.Config().Options.DataDirectory, c.cfg.Config().Options.Attribution, modelID, dangerousCommands),
 		tools.NewCrushInfoTool(c.cfg, c.lspManager, c.allSkills, c.sessions, c.skillTracker),
 		tools.NewCrushLogsTool(logFile),
 		tools.NewJobOutputTool(c.cfg.Config().Options.DataDirectory),

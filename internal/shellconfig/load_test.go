@@ -210,6 +210,28 @@ func TestLoadShellConfig_PermissionsDeny(t *testing.T) {
 		"deny must not create a permissions section")
 }
 
+// TestLoadShellConfig_PermissionsDangerous verifies that `permissions
+// dangerous` writes to permissions.dangerous_commands, deduplicating
+// repeated entries and preserving multi-word command patterns.
+func TestLoadShellConfig_PermissionsDangerous(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	script := `permissions dangerous "git push" "git branch -d" rm rm`
+	path := filepath.Join(dir, "crushrc")
+
+	jsonBytes, err := LoadShellConfig(t.Context(), path, []byte(script))
+	require.NoError(t, err)
+
+	var result map[string]any
+	require.NoError(t, json.Unmarshal(jsonBytes, &result))
+
+	perms := result["permissions"].(map[string]any)
+	dangerous := perms["dangerous_commands"].([]any)
+	require.Equal(t, []any{"git push", "git branch -d", "rm"}, dangerous,
+		"dangerous_commands should hold unique patterns in order")
+}
+
 // TestLoadShellConfig_Hook verifies the hook builtin.
 func TestLoadShellConfig_Hook(t *testing.T) {
 	t.Parallel()
