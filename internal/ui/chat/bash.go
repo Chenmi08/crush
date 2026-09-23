@@ -61,14 +61,27 @@ func (b *BashToolRenderContext) RenderTool(sty *styles.Styles, width int, opts *
 	}
 
 	if meta.Background {
-		description := cmp.Or(meta.Description, params.Command)
-		content := "Command: " + params.Command + "\n" + opts.Result.Content
+		// The reported command is what actually ran (a PreToolUse hook may
+		// have rewritten it), so prefer it over the tool call's original.
+		cmd := params.Command
+		if meta.Command != "" {
+			cmd = meta.Command
+		}
+		description := cmp.Or(meta.Description, cmd)
+		content := "Command: " + cmd + "\n" + opts.Result.Content
 		return renderJobTool(sty, opts, cappedWidth, "Start", meta.ShellID, description, content)
 	}
 
 	// Regular bash command. The command is always rendered expanded
 	// (newlines preserved); expansion only controls the output body.
 	cmd := params.Command
+	// Prefer the command the bash tool reports it executed: a PreToolUse
+	// hook may have rewritten the input before execution, so the tool
+	// call's original input would be misleading. When there is no result
+	// yet the reported command is empty and the original is shown.
+	if meta.Command != "" {
+		cmd = meta.Command
+	}
 	cmd = strings.ReplaceAll(cmd, "\t", "    ")
 	cmd = common.StripBashDisplayPrefix(cmd, b.workingDir)
 	if highlighted, err := common.SyntaxHighlightLexerName(sty, cmd, "bash", nil); err == nil {

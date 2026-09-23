@@ -44,8 +44,12 @@ type BashResponseMetadata struct {
 	Output           string `json:"output"`
 	Description      string `json:"description"`
 	WorkingDirectory string `json:"working_directory"`
-	Background       bool   `json:"background,omitempty"`
-	ShellID          string `json:"shell_id,omitempty"`
+	// Command is the command that was actually executed. It can differ
+	// from the tool call's original input when a PreToolUse hook rewrote
+	// it, so the UI can display what really ran.
+	Command    string `json:"command,omitempty"`
+	Background bool   `json:"background,omitempty"`
+	ShellID    string `json:"shell_id,omitempty"`
 }
 
 const (
@@ -307,8 +311,9 @@ func NewBashTool(permissions permission.Service, workingDir, spillDir string, at
 						EndTime:          time.Now().UnixMilli(),
 						Output:           stdout,
 						Description:      params.Description,
-						Background:       params.RunInBackground,
 						WorkingDirectory: bgShell.WorkingDir,
+						Command:          params.Command,
+						Background:       params.RunInBackground,
 					}
 					if stdout == "" {
 						return fantasy.WithResponseMetadata(fantasy.NewTextResponse(BashNoOutput), metadata), nil
@@ -323,6 +328,7 @@ func NewBashTool(permissions permission.Service, workingDir, spillDir string, at
 					EndTime:          time.Now().UnixMilli(),
 					Description:      params.Description,
 					WorkingDirectory: bgShell.WorkingDir,
+					Command:          params.Command,
 					Background:       true,
 					ShellID:          bgShell.ID,
 				}
@@ -391,8 +397,9 @@ func NewBashTool(permissions permission.Service, workingDir, spillDir string, at
 					EndTime:          time.Now().UnixMilli(),
 					Output:           stdout,
 					Description:      params.Description,
-					Background:       params.RunInBackground,
 					WorkingDirectory: bgShell.WorkingDir,
+					Command:          params.Command,
+					Background:       params.RunInBackground,
 				}
 				if stdout == "" {
 					return fantasy.WithResponseMetadata(fantasy.NewTextResponse(BashNoOutput), metadata), nil
@@ -407,6 +414,7 @@ func NewBashTool(permissions permission.Service, workingDir, spillDir string, at
 				EndTime:          time.Now().UnixMilli(),
 				Description:      params.Description,
 				WorkingDirectory: bgShell.WorkingDir,
+				Command:          params.Command,
 				Background:       true,
 				ShellID:          bgShell.ID,
 			}

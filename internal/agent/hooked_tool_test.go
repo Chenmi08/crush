@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"charm.land/fantasy"
@@ -11,22 +12,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fakeTool records the context it was invoked with so tests can assert on
-// values stamped onto it by the hookedTool decorator.
+// fakeTool records the context and tool call it was invoked with, so
+// tests can assert on values the hookedTool decorator stamped onto them.
 type fakeTool struct {
-	name   string
-	called bool
-	gotCtx context.Context
-	resp   fantasy.ToolResponse
+	name    string
+	called  bool
+	gotCtx  context.Context
+	gotCall fantasy.ToolCall
+	resp    fantasy.ToolResponse
 }
 
 func (f *fakeTool) Info() fantasy.ToolInfo {
 	return fantasy.ToolInfo{Name: f.name}
 }
 
-func (f *fakeTool) Run(ctx context.Context, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
+func (f *fakeTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	f.called = true
 	f.gotCtx = ctx
+	f.gotCall = call
 	return f.resp, nil
 }
 
@@ -111,6 +114,28 @@ func TestHookedTool_DenySkipsInnerTool(t *testing.T) {
 	require.False(t, inner.called, "denied call must not reach the inner tool")
 	require.True(t, resp.IsError)
 	require.Contains(t, resp.Content, "blocked")
+}
+
+func TestHookedTool_RewritePassesUpdatedInput(t *testing.T) {
+	t.Parallel()
+
+	inner := &fakeTool{name: "bash", resp: fantasy.NewTextResponse("ok")}
+	runner := newRunner(t, `echo '{"decision":"allow","updated_input":{"command":"rtk cat foo.go"}}'`)
+	tool := newHookedTool(inner, runner)
+
+	_, err := tool.Run(t.Context(), fantasy.ToolCall{
+		ID:    "call-4",
+		Name:  "bash",
+		Input: `{"command":"cat foo.go"}`,
+	})
+	require.NoError(t, err)
+	require.True(t, inner.called, "rewritten call must reach the inner tool")
+
+	// The inner tool must receive the merged, rewritten input, so the
+	// command it actually executes is the rewritten one.
+	var input map[string]any
+	require.NoError(t, json.Unmarshal([]byte(inner.gotCall.Input), &input))
+	require.Equal(t, "rtk cat foo.go", input["command"], "inner tool must run the rewritten command")
 }
 
 func TestWrapToolsWithHooks(t *testing.T) {
