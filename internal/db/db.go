@@ -132,6 +132,9 @@ func Prepare(ctx context.Context, db DBTX) (*Queries, error) {
 	if q.renameSessionStmt, err = db.PrepareContext(ctx, renameSession); err != nil {
 		return nil, fmt.Errorf("error preparing query RenameSession: %w", err)
 	}
+	if q.setSessionChannelStmt, err = db.PrepareContext(ctx, setSessionChannel); err != nil {
+		return nil, fmt.Errorf("error preparing query SetSessionChannel: %w", err)
+	}
 	if q.updateMessageStmt, err = db.PrepareContext(ctx, updateMessage); err != nil {
 		return nil, fmt.Errorf("error preparing query UpdateMessage: %w", err)
 	}
@@ -329,6 +332,11 @@ func (q *Queries) Close() error {
 			err = fmt.Errorf("error closing renameSessionStmt: %w", cerr)
 		}
 	}
+	if q.setSessionChannelStmt != nil {
+		if cerr := q.setSessionChannelStmt.Close(); cerr != nil {
+			err = fmt.Errorf("error closing setSessionChannelStmt: %w", cerr)
+		}
+	}
 	if q.updateMessageStmt != nil {
 		if cerr := q.updateMessageStmt.Close(); cerr != nil {
 			err = fmt.Errorf("error closing updateMessageStmt: %w", cerr)
@@ -424,6 +432,7 @@ type Queries struct {
 	listUserMessagesBySessionStmt        *sql.Stmt
 	recordFileReadStmt                   *sql.Stmt
 	renameSessionStmt                    *sql.Stmt
+	setSessionChannelStmt                *sql.Stmt
 	updateMessageStmt                    *sql.Stmt
 	updateSessionDisabledSkillsStmt      *sql.Stmt
 	updateSessionStmt                    *sql.Stmt
@@ -470,6 +479,7 @@ func (q *Queries) WithTx(tx *sql.Tx) *Queries {
 		listUserMessagesBySessionStmt:        q.listUserMessagesBySessionStmt,
 		recordFileReadStmt:                   q.recordFileReadStmt,
 		renameSessionStmt:                    q.renameSessionStmt,
+		setSessionChannelStmt:                q.setSessionChannelStmt,
 		updateMessageStmt:                    q.updateMessageStmt,
 		updateSessionDisabledSkillsStmt:      q.updateSessionDisabledSkillsStmt,
 		updateSessionStmt:                    q.updateSessionStmt,

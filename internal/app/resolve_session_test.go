@@ -68,6 +68,10 @@ func (m *mockSessionService) SetDisabledSkills(context.Context, string, []string
 	return nil
 }
 
+func (m *mockSessionService) SetChannel(_ context.Context, sessionID, channel string) (session.Session, error) {
+	return session.Session{ID: sessionID, Channel: channel}, nil
+}
+
 func (m *mockSessionService) Rename(context.Context, string, string) error {
 	return nil
 }

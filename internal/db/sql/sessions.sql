@@ -53,7 +53,14 @@ SET
     summary_message_id = ?,
     cost = ?,
     todos = ?,
-    disabled_skills = ?
+    disabled_skills = ?,
+    channel = ?
+WHERE id = ?
+RETURNING *;
+
+-- name: SetSessionChannel :one
+UPDATE sessions
+SET channel = ?
 WHERE id = ?
 RETURNING *;
 

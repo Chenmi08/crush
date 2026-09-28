@@ -96,6 +96,7 @@ type Session struct {
 	// of (and independent from) the global options.disabled_skills
 	// default a new session is seeded from.
 	DisabledSkills []string
+	Channel        string
 	CreatedAt      int64
 	UpdatedAt      int64
 	// Totals carries cumulative token usage for the whole session. It
@@ -113,6 +114,7 @@ type Service interface {
 	List(ctx context.Context) ([]Session, error)
 	Save(ctx context.Context, session Session) (Session, error)
 	SetDisabledSkills(ctx context.Context, id string, names []string) error
+	SetChannel(ctx context.Context, sessionID, channel string) (Session, error)
 	UpdateTitleAndUsage(ctx context.Context, sessionID, title string, tokens SessionTokens, cost float64) error
 	Rename(ctx context.Context, id string, title string) error
 	Delete(ctx context.Context, id string) error
@@ -281,6 +283,10 @@ func (s *service) Save(ctx context.Context, session Session) (Session, error) {
 			String: disabledSkillsJSON,
 			Valid:  disabledSkillsJSON != "",
 		},
+		Channel: sql.NullString{
+			String: session.Channel,
+			Valid:  session.Channel != "",
+		},
 	})
 	if err != nil {
 		return Session{}, err
@@ -293,16 +299,34 @@ func (s *service) Save(ctx context.Context, session Session) (Session, error) {
 	return session, nil
 }
 
+func (s *service) SetChannel(ctx context.Context, sessionID, channel string) (Session, error) {
+	dbSession, err := s.q.SetSessionChannel(ctx, db.SetSessionChannelParams{
+		ID: sessionID,
+		Channel: sql.NullString{
+			String: channel,
+			Valid:  channel != "",
+		},
+	})
+	if err != nil {
+		return Session{}, err
+	}
+	session := s.fromDBItem(dbSession)
+	s.applyEstimatedUsageState(&session)
+	s.Publish(pubsub.UpdatedEvent, session)
+	return session, nil
+}
+
 // UpdateTitleAndUsage updates only the title and usage fields atomically.
 // This is safer than fetching, modifying, and saving the entire session.
 // tokens are added to the session's cumulative counters. The context
-// prompt counter keeps the previous title-call behavior of excluding
-// cache reads.
+// prompt counter counts every prompt token sent to the provider,
+// including cache reads and cache creation, so it matches the per-turn
+// accounting in the agent.
 func (s *service) UpdateTitleAndUsage(ctx context.Context, sessionID, title string, tokens SessionTokens, cost float64) error {
 	if err := s.q.UpdateSessionTitleAndUsage(ctx, db.UpdateSessionTitleAndUsageParams{
 		ID:                  sessionID,
 		Title:               title,
-		PromptTokens:        tokens.InputTokens + tokens.CacheCreationTokens,
+		PromptTokens:        tokens.TotalPromptTokens(),
 		CompletionTokens:    tokens.OutputTokens,
 		TotalInputTokens:    tokens.InputTokens,
 		TotalOutputTokens:   tokens.OutputTokens,
@@ -431,6 +455,7 @@ func (s *service) fromDBItem(item db.Session) Session {
 		Cost:             item.Cost,
 		Todos:            todos,
 		DisabledSkills:   disabledSkills,
+		Channel:          item.Channel.String,
 		CreatedAt:        item.CreatedAt,
 		UpdatedAt:        item.UpdatedAt,
 		Totals: SessionTokens{

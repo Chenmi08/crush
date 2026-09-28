@@ -25,6 +25,7 @@ type Session struct {
 	Todos            []Todo  `json:"todos,omitempty"`
 	// DisabledSkills carries the session's per-session skill opt-outs.
 	DisabledSkills  []string `json:"disabled_skills,omitempty"`
+	Channel         string   `json:"channel,omitempty"`
 	CreatedAt       int64    `json:"created_at"`
 	UpdatedAt       int64    `json:"updated_at"`
 	IsBusy          bool     `json:"is_busy"`

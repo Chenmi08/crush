@@ -731,7 +731,8 @@ func TestMCPConfigEqualExhaustive(t *testing.T) {
 
 	// Fields intentionally excluded from the comparison.
 	excluded := map[string]bool{
-		"OAuthToken": true, // internally managed, refreshed out-of-band.
+		"OAuthToken":   true, // internally managed, refreshed out-of-band.
+		"ChannelReply": true, // read live from config at reply time, not baked into the session.
 		// Client-side throttling only: a change takes effect on the next
 		// tool call and never requires reconnecting the server.
 		"RateLimit": true,

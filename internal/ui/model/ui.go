@@ -1156,6 +1156,8 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, handleMCPToolsEvent(m.com.Workspace, msg.Payload.Name)
 		case mcp.EventResourcesListChanged:
 			return m, handleMCPResourcesEvent(m.com.Workspace, msg.Payload.Name)
+		case mcp.EventChannelMessage:
+			return m, m.handleChannelMessage(msg.Payload)
 		}
 	case pubsub.Event[permission.PermissionRequest]:
 		if cmd := m.openPermissionsDialog(msg.Payload); cmd != nil {
@@ -3289,6 +3291,11 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 			m.detailsOpen = !m.detailsOpen
 			m.updateLayoutAndSize()
 			return true
+		case key.Matches(msg, m.keyMap.Chat.ToggleSidebar):
+			if m.canToggleSidebar() {
+				cmds = append(cmds, m.toggleCompactMode())
+				return true
+			}
 		case key.Matches(msg, m.keyMap.Chat.EndFollow):
 			if m.state == uiChat && m.hasSession() {
 				if cmd := m.chat.ScrollToBottomAndSelectLast(); cmd != nil {
@@ -4018,15 +4025,15 @@ func (m *UI) Draw(scr uv.Screen, area uv.Rectangle) *tea.Cursor {
 // mouseMode determines the Bubble Tea mouse reporting mode to request for
 // the current frame. When mouse support is disabled via configuration, no
 // mouse mode is requested so the terminal emulator (or tmux) can handle
-// text selection, copy/paste, and scrolling natively. Inline editors need
-// motion events even without a button pressed (e.g. for hover/drag), so
-// they use MouseModeAllMotion; everything else only needs click/drag
-// tracking via MouseModeCellMotion.
-func mouseMode(enabled, inlineActive bool) tea.MouseMode {
+// text selection, copy/paste, and scrolling natively. Inline editors and
+// hoverable dialogs need motion events even without a button pressed (e.g.
+// for hover/drag), so they use MouseModeAllMotion; everything else only
+// needs click/drag tracking via MouseModeCellMotion.
+func mouseMode(enabled, wantsMotion bool) tea.MouseMode {
 	switch {
 	case !enabled:
 		return tea.MouseModeNone
-	case inlineActive:
+	case wantsMotion:
 		return tea.MouseModeAllMotion
 	default:
 		return tea.MouseModeCellMotion
@@ -4062,7 +4069,7 @@ func (m *UI) View() tea.View {
 	if !m.isTransparent {
 		v.BackgroundColor = m.com.Styles.Background
 	}
-	v.MouseMode = mouseMode(m.mouseEnabled, m.activeInline != nil)
+	v.MouseMode = mouseMode(m.mouseEnabled, m.activeInline != nil || m.dialog.HandlesHover())
 	v.ReportFocus = m.caps.ReportFocusEvents
 	v.WindowTitle = "crush " + home.Short(m.com.Workspace.WorkingDir())
 
@@ -4155,6 +4162,10 @@ func (m *UI) ShortHelp() []key.Binding {
 			commands,
 			k.Models,
 		)
+
+		if m.canToggleSidebar() {
+			binds = append(binds, k.Chat.ToggleSidebar)
+		}
 
 		switch m.focus {
 		case uiFocusEditor:
@@ -4276,6 +4287,9 @@ func (m *UI) FullHelp() [][]key.Binding {
 		)
 		if hasSession {
 			mainBinds = append(mainBinds, k.Chat.NewSession, k.Chat.EndFollow)
+		}
+		if m.canToggleSidebar() {
+			mainBinds = append(mainBinds, k.Chat.ToggleSidebar)
 		}
 
 		binds = append(binds, mainBinds)
@@ -4429,9 +4443,31 @@ func (m *UI) toggleCompactMode() tea.Cmd {
 		return util.ReportError(err)
 	}
 
+	var cmds []tea.Cmd
+	if m.forceCompactMode && m.focus == uiFocusSidebar {
+		// The sidebar is going away, so focus the editor again to keep key
+		// events routed somewhere useful.
+		m.sidebarScrollbarVisible = false
+		if m.activeInline != nil {
+			m.focusActiveInline(uiFocusEditor)
+		} else {
+			m.focus = uiFocusEditor
+			cmds = append(cmds, m.textarea.Focus())
+		}
+	}
+
 	m.updateLayoutAndSize()
 
-	return nil
+	return tea.Batch(cmds...)
+}
+
+// canToggleSidebar reports whether the sidebar can be shown right now, i.e.
+// a chat session is active and the terminal is large enough for the full
+// layout.
+func (m *UI) canToggleSidebar() bool {
+	return m.state == uiChat && m.hasSession() &&
+		m.width >= compactModeWidthBreakpoint &&
+		m.height >= compactModeHeightBreakpoint
 }
 
 // updateLayoutAndSize updates the layout and sizes of UI components.
@@ -5548,6 +5584,41 @@ func (m *UI) openThemeEditorDialog(themeName string) {
 	m.dialog.OpenDialog(themeDialog)
 }
 
+// ensureSession makes sure a session is active, creating one if none is. It
+// returns a command that loads the freshly created session (nil when a session
+// already existed) and an error if creation failed. It mutates UI state, so
+// callers must run on the Update goroutine.
+func (m *UI) ensureSession() (tea.Cmd, error) {
+	if m.hasSession() {
+		return nil, nil
+	}
+	newSession, err := m.com.Workspace.CreateSession(context.Background(), "New Session")
+	if err != nil {
+		return nil, err
+	}
+	if m.forceCompactMode {
+		m.isCompact = true
+	}
+	var cmd tea.Cmd
+	if newSession.ID != "" {
+		// Apply any skill choices made on the landing page before the
+		// session becomes current, so its very first run already sees
+		// them. A failure aborts the send rather than silently falling
+		// back to the global default.
+		disabled, pending, err := m.applyPendingSkills(context.Background(), newSession.ID)
+		if err != nil {
+			return nil, err
+		}
+		if pending {
+			newSession.DisabledSkills = disabled
+		}
+		m.session = &newSession
+		cmd = m.loadSession(newSession.ID)
+	}
+	m.setState(uiChat, m.focus)
+	return cmd, nil
+}
+
 // sendMessage sends a message with the given content and attachments.
 func (m *UI) sendMessage(content string, attachments ...message.Attachment) tea.Cmd {
 	return m.sendMessageInternal(content, false, attachments...)
@@ -5566,30 +5637,12 @@ func (m *UI) sendMessageInternal(content string, hidden bool, attachments ...mes
 	m.setPlanReadyPending("")
 
 	var cmds []tea.Cmd
-	if !m.hasSession() {
-		newSession, err := m.com.Workspace.CreateSession(context.Background(), "New Session")
-		if err != nil {
-			return util.ReportError(err)
-		}
-		if m.forceCompactMode {
-			m.isCompact = true
-		}
-		if newSession.ID != "" {
-			// Apply any skill choices made on the landing page before the
-			// session becomes current, so its very first run already sees
-			// them. A failure aborts the send rather than silently falling
-			// back to the global default.
-			disabled, pending, err := m.applyPendingSkills(context.Background(), newSession.ID)
-			if err != nil {
-				return util.ReportError(err)
-			}
-			if pending {
-				newSession.DisabledSkills = disabled
-			}
-			m.session = &newSession
-			cmds = append(cmds, m.loadSession(newSession.ID))
-		}
-		m.setState(uiChat, m.focus)
+	loadCmd, err := m.ensureSession()
+	if err != nil {
+		return util.ReportError(err)
+	}
+	if loadCmd != nil {
+		cmds = append(cmds, loadCmd)
 	}
 
 	ctx := context.Background()
@@ -5631,6 +5684,53 @@ func (m *UI) sendMessageInternal(content string, hidden bool, attachments ...mes
 		return agentRunSubmittedMsg{}
 	})
 	return tea.Batch(cmds...)
+}
+
+// handleChannelMessage injects a channel event pushed by an MCP server into a
+// session so the agent reacts to it on its next turn. The rendered <channel>
+// element is already validated and escaped by the mcp package. If no session is
+// active yet, one is created so a pushed event is never silently dropped; if the
+// agent is busy, AgentRun enqueues the message and it is picked up on the next
+// step.
+//
+// Injection is skipped entirely when the workspace routes channel events
+// itself (client/server mode): the server injects each event exactly once,
+// and injecting here as well would duplicate the turn once per attached
+// client. The injected turn still reaches this client through the normal
+// session/message event stream.
+func (m *UI) handleChannelMessage(ev mcp.Event) tea.Cmd {
+	if m.com.Workspace.RoutesChannelEvents() {
+		return nil
+	}
+	if ev.ChannelMessage == "" || !m.com.Workspace.AgentIsReady() {
+		return nil
+	}
+	loadCmd, err := m.ensureSession()
+	if err != nil {
+		slog.Debug("Failed to create session for channel message", "error", err)
+		return nil
+	}
+	if !m.hasSession() {
+		slog.Debug("Channel message dropped: no active session after ensureSession", "channel", ev.Name)
+		return loadCmd
+	}
+	// The coordinator sets the channel binding during the turn
+	// (syncSessionChannel), so there is no need to write it here —
+	// doing so would race with the coordinator's own write and
+	// publish a duplicate session update.
+	sessionID := m.session.ID
+	channel := ev.Name
+	content := ev.ChannelMessage
+	runCmd := func() tea.Msg {
+		if err := m.com.Workspace.AgentRunChannel(context.Background(), channel, sessionID, content); err != nil {
+			slog.Debug("Failed to inject channel message", "error", err, "session", sessionID)
+		}
+		return nil
+	}
+	if loadCmd != nil {
+		return tea.Batch(loadCmd, runCmd)
+	}
+	return runCmd
 }
 
 // runShellCommand executes a shell command server-side without triggering
