@@ -203,6 +203,33 @@ func mcpEventTypeToProto(t mcp.EventType) proto.MCPEventType {
 
 func sessionToProto(s session.Session) proto.Session {
 	return proto.Session{
+		ID:                  s.ID,
+		ParentSessionID:     s.ParentSessionID,
+		Title:               s.Title,
+		SummaryMessageID:    s.SummaryMessageID,
+		MessageCount:        s.MessageCount,
+		PromptTokens:        s.PromptTokens,
+		CompletionTokens:    s.CompletionTokens,
+		TotalInputTokens:    s.Totals.InputTokens,
+		TotalOutputTokens:   s.Totals.OutputTokens,
+		CacheReadTokens:     s.Totals.CacheReadTokens,
+		CacheCreationTokens: s.Totals.CacheCreationTokens,
+		Cost:                s.Cost,
+		Todos:               todosToProto(s.Todos),
+		DisabledSkills:      s.DisabledSkills,
+		Channel:             s.Channel,
+		CreatedAt:           s.CreatedAt,
+		UpdatedAt:           s.UpdatedAt,
+	}
+}
+
+// protoToSession converts a wire-level proto.Session into the domain
+// session.Session. Fields that exist only on the wire (computed-on-read
+// signals like IsBusy, and any future presence counters) are
+// intentionally dropped: session.Session models persisted state, not
+// transient runtime signals.
+func protoToSession(s proto.Session) session.Session {
+	return session.Session{
 		ID:               s.ID,
 		ParentSessionID:  s.ParentSessionID,
 		Title:            s.Title,
@@ -211,11 +238,17 @@ func sessionToProto(s session.Session) proto.Session {
 		PromptTokens:     s.PromptTokens,
 		CompletionTokens: s.CompletionTokens,
 		Cost:             s.Cost,
-		Todos:            todosToProto(s.Todos),
+		Todos:            protoToTodos(s.Todos),
 		DisabledSkills:   s.DisabledSkills,
 		Channel:          s.Channel,
 		CreatedAt:        s.CreatedAt,
 		UpdatedAt:        s.UpdatedAt,
+		Totals: session.SessionTokens{
+			InputTokens:         s.TotalInputTokens,
+			OutputTokens:        s.TotalOutputTokens,
+			CacheReadTokens:     s.CacheReadTokens,
+			CacheCreationTokens: s.CacheCreationTokens,
+		},
 	}
 }
 
@@ -251,6 +284,21 @@ func todosToProto(todos []session.Todo) []proto.Todo {
 		out[i] = proto.Todo{
 			Content:    t.Content,
 			Status:     string(t.Status),
+			ActiveForm: t.ActiveForm,
+		}
+	}
+	return out
+}
+
+func protoToTodos(todos []proto.Todo) []session.Todo {
+	if len(todos) == 0 {
+		return nil
+	}
+	out := make([]session.Todo, len(todos))
+	for i, t := range todos {
+		out[i] = session.Todo{
+			Content:    t.Content,
+			Status:     session.TodoStatus(t.Status),
 			ActiveForm: t.ActiveForm,
 		}
 	}

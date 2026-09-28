@@ -1281,6 +1281,12 @@ func protoToSession(s proto.Session) session.Session {
 		Channel:          s.Channel,
 		CreatedAt:        s.CreatedAt,
 		UpdatedAt:        s.UpdatedAt,
+		Totals: session.SessionTokens{
+			InputTokens:         s.TotalInputTokens,
+			OutputTokens:        s.TotalOutputTokens,
+			CacheReadTokens:     s.CacheReadTokens,
+			CacheCreationTokens: s.CacheCreationTokens,
+		},
 	}
 }
 
@@ -1396,19 +1402,23 @@ func protoToFiles(files []proto.File) []history.File {
 
 func sessionToProto(s session.Session) proto.Session {
 	return proto.Session{
-		ID:               s.ID,
-		ParentSessionID:  s.ParentSessionID,
-		Title:            s.Title,
-		SummaryMessageID: s.SummaryMessageID,
-		MessageCount:     s.MessageCount,
-		PromptTokens:     s.PromptTokens,
-		CompletionTokens: s.CompletionTokens,
-		Cost:             s.Cost,
-		Todos:            todosToProto(s.Todos),
-		DisabledSkills:   s.DisabledSkills,
-		Channel:          s.Channel,
-		CreatedAt:        s.CreatedAt,
-		UpdatedAt:        s.UpdatedAt,
+		ID:                  s.ID,
+		ParentSessionID:     s.ParentSessionID,
+		Title:               s.Title,
+		SummaryMessageID:    s.SummaryMessageID,
+		MessageCount:        s.MessageCount,
+		PromptTokens:        s.PromptTokens,
+		CompletionTokens:    s.CompletionTokens,
+		Cost:                s.Cost,
+		Todos:               todosToProto(s.Todos),
+		DisabledSkills:      s.DisabledSkills,
+		Channel:             s.Channel,
+		CreatedAt:           s.CreatedAt,
+		UpdatedAt:           s.UpdatedAt,
+		TotalInputTokens:    s.Totals.InputTokens,
+		TotalOutputTokens:   s.Totals.OutputTokens,
+		CacheReadTokens:     s.Totals.CacheReadTokens,
+		CacheCreationTokens: s.Totals.CacheCreationTokens,
 	}
 }
 

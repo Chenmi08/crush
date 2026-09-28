@@ -350,14 +350,19 @@ func (c *controllerV1) handleGetWorkspaceSessionMessages(w http.ResponseWriter, 
 func (c *controllerV1) handlePutWorkspaceSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
-	var sess session.Session
-	if err := json.NewDecoder(r.Body).Decode(&sess); err != nil {
+	// Clients send the wire shape (proto.Session), not the domain type:
+	// session.Session has no JSON tags, so decoding straight into it would
+	// silently drop every snake_case field except id, title, cost, todos
+	// and channel — wiping per-session disabled skills and token counters
+	// on a rename.
+	var in proto.Session
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		c.server.logError(r, "Failed to decode request", "error", err)
 		jsonError(w, http.StatusBadRequest, "failed to decode request")
 		return
 	}
 
-	saved, err := c.backend.SaveSession(r.Context(), id, sess)
+	saved, err := c.backend.SaveSession(r.Context(), id, protoToSession(in))
 	if err != nil {
 		c.handleError(w, r, err)
 		return

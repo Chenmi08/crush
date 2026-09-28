@@ -87,6 +87,16 @@ func (s *stubSessions) SetDisabledSkills(_ context.Context, id string, names []s
 	return errors.New("not found")
 }
 
+func (s *stubSessions) Save(_ context.Context, sess session.Session) (session.Session, error) {
+	for i := range s.all {
+		if s.all[i].ID == sess.ID {
+			s.all[i] = sess
+			return sess, nil
+		}
+	}
+	return session.Session{}, errors.New("not found")
+}
+
 // buildBusyWorkspace returns a controller wired to a backend that owns
 // a single workspace whose AgentCoordinator reports the named session
 // as busy.
@@ -171,6 +181,55 @@ func TestPutWorkspaceSessionDisabledSkills(t *testing.T) {
 	other, err := c.backend.GetSession(t.Context(), ws.ID, "s2")
 	require.NoError(t, err)
 	require.Empty(t, other.DisabledSkills)
+}
+
+// TestPutWorkspaceSessionPreservesFields verifies the update handler
+// decodes the wire shape (proto.Session) so a rename keeps per-session
+// disabled skills and token counters instead of zeroing them.
+func TestPutWorkspaceSessionPreservesFields(t *testing.T) {
+	t.Parallel()
+
+	c, ws := buildMultiSessionWorkspace(t, "s1")
+
+	body, err := json.Marshal(proto.Session{
+		ID:                  "s1",
+		Title:               "renamed",
+		PromptTokens:        111,
+		CompletionTokens:    222,
+		TotalInputTokens:    333,
+		TotalOutputTokens:   444,
+		CacheReadTokens:     555,
+		CacheCreationTokens: 666,
+		Cost:                7,
+		DisabledSkills:      []string{"alpha"},
+		Channel:             "webhook",
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPut,
+		"/v1/workspaces/"+ws.ID+"/sessions/s1", bytes.NewReader(body))
+	req.SetPathValue("id", ws.ID)
+	req.SetPathValue("sid", "s1")
+	rec := httptest.NewRecorder()
+	c.handlePutWorkspaceSession(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var got proto.Session
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	require.Equal(t, "renamed", got.Title)
+	require.Equal(t, []string{"alpha"}, got.DisabledSkills)
+	require.Equal(t, "webhook", got.Channel)
+	require.Equal(t, int64(333), got.TotalInputTokens)
+	require.Equal(t, int64(444), got.TotalOutputTokens)
+	require.Equal(t, int64(555), got.CacheReadTokens)
+	require.Equal(t, int64(666), got.CacheCreationTokens)
+
+	// The persisted session carries the same fields back out.
+	saved, err := c.backend.GetSession(t.Context(), ws.ID, "s1")
+	require.NoError(t, err)
+	require.Equal(t, []string{"alpha"}, saved.DisabledSkills)
+	require.Equal(t, int64(333), saved.Totals.InputTokens)
+	require.Equal(t, int64(666), saved.Totals.CacheCreationTokens)
 }
 
 func TestSessionGetIncludesIsBusy(t *testing.T) {

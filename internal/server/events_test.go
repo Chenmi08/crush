@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/crush/internal/message"
 	"github.com/charmbracelet/crush/internal/proto"
 	"github.com/charmbracelet/crush/internal/pubsub"
+	"github.com/charmbracelet/crush/internal/session"
 	"github.com/charmbracelet/crush/internal/skills"
 	"github.com/stretchr/testify/require"
 )
@@ -280,3 +281,30 @@ func TestMessageToProtoPrismModel(t *testing.T) {
 }
 
 func ptrFloat(v float64) *float64 { return &v }
+
+// TestSessionProtoRoundTripPreservesFields verifies the server session
+// conversions carry per-session disabled skills, the channel binding,
+// and the cumulative token totals in both directions.
+func TestSessionProtoRoundTripPreservesFields(t *testing.T) {
+	t.Parallel()
+
+	sess := session.Session{
+		ID:             "s1",
+		Title:          "t",
+		DisabledSkills: []string{"alpha"},
+		Channel:        "webhook",
+		Totals: session.SessionTokens{
+			InputTokens:         100,
+			OutputTokens:        200,
+			CacheReadTokens:     300,
+			CacheCreationTokens: 400,
+		},
+	}
+
+	round := protoToSession(sessionToProto(sess))
+	require.Equal(t, sess.ID, round.ID)
+	require.Equal(t, sess.Title, round.Title)
+	require.Equal(t, sess.DisabledSkills, round.DisabledSkills)
+	require.Equal(t, sess.Channel, round.Channel)
+	require.Equal(t, sess.Totals, round.Totals)
+}
