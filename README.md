@@ -924,7 +924,9 @@ your explicit model fields win on conflicts.
 ## Logging
 
 Sometimes you need to look at logs. Luckily, Crush logs all sorts of
-stuff. Logs are stored in `./.crush/logs/crush.log` relative to the project.
+stuff. Logs are stored per project under the consolidated data root,
+e.g. `~/.local/share/crush/projects/<hash>/logs/crush.log`, where `<hash>`
+is derived from the project's git working tree root.
 
 The CLI also contains some helper commands to make perusing recent logs easier:
 

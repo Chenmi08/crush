@@ -263,7 +263,8 @@ func TestConfig_setDefaults(t *testing.T) {
 		require.NotNil(t, cfg.Models)
 		require.NotNil(t, cfg.LSP)
 		require.NotNil(t, cfg.MCP)
-		require.Equal(t, filepath.Join(workingDir, ".crush"), cfg.Options.DataDirectory)
+		require.Equal(t, DefaultProjectDataDir(workingDir), cfg.Options.DataDirectory)
+		require.True(t, filepath.IsAbs(cfg.Options.DataDirectory))
 		require.Equal(t, "AGENTS.md", cfg.Options.InitializeAs)
 		// DiffMode is deliberately left empty: the permissions dialog treats
 		// the zero value as "pick split or unified based on terminal width".
@@ -361,12 +362,35 @@ func TestConfig_setDefaults(t *testing.T) {
 		require.Equal(t, filepath.Join(workingDir, "state"), cfg.Options.DataDirectory)
 	})
 
-	t.Run("does not adopt .crush from a parent project", func(t *testing.T) {
+	t.Run("projectDirHash is deterministic and normalized", func(t *testing.T) {
+		// A fixed input must produce a fixed output so a regression in
+		// the hash cannot pass by comparing the code against itself.
+		const want = "e3af8a7251583e76"
+		require.Equal(t, want, projectDirHash("/workspace/project"))
+
+		// A trailing separator must hash to the same directory.
+		require.Equal(t, projectDirHash("/workspace/project"), projectDirHash("/workspace/project"+string(os.PathSeparator)))
+	})
+
+	t.Run("data directory hash is stable across path spellings", func(t *testing.T) {
+		workingDir := t.TempDir()
+
+		cfg := &Config{}
+		cfg.setDefaults(workingDir, "")
+		base := cfg.Options.DataDirectory
+
+		// A trailing separator must hash to the same directory.
+		cfg = &Config{}
+		cfg.setDefaults(workingDir+string(os.PathSeparator), "")
+		require.Equal(t, base, cfg.Options.DataDirectory)
+	})
+
+	t.Run("ignores any .crush in a parent directory", func(t *testing.T) {
 		parent := t.TempDir()
 
-		// .crush in the parent: it should not be reused by the child
-		// because there is no git context joining them.
-		require.NoError(t, os.Mkdir(filepath.Join(parent, defaultDataDirectory), 0o755))
+		// A stray .crush in the parent must not be adopted or referenced
+		// by the child project.
+		require.NoError(t, os.Mkdir(filepath.Join(parent, ".crush"), 0o755))
 
 		child := filepath.Join(parent, "child")
 		require.NoError(t, os.Mkdir(child, 0o755))
@@ -374,54 +398,32 @@ func TestConfig_setDefaults(t *testing.T) {
 		cfg := &Config{}
 		cfg.setDefaults(child, "")
 
-		require.Equal(
-			t,
-			filepath.Clean(filepath.Join(child, defaultDataDirectory)),
-			filepath.Clean(cfg.Options.DataDirectory),
-		)
+		require.Equal(t, DefaultProjectDataDir(child), cfg.Options.DataDirectory)
+		require.NotContains(t, cfg.Options.DataDirectory, parent)
 	})
 
-	t.Run("does not climb out of git worktree to find .crush", func(t *testing.T) {
+	t.Run("subdirectories of a worktree share one data directory", func(t *testing.T) {
 		if _, err := exec.LookPath("git"); err != nil {
 			t.Skip("git not available")
 		}
 
-		parent := t.TempDir()
-
-		// Stray .crush above the worktree root.
-		require.NoError(t, os.Mkdir(filepath.Join(parent, defaultDataDirectory), 0o755))
-
-		worktree := filepath.Join(parent, "worktree")
-		require.NoError(t, os.Mkdir(worktree, 0o755))
-
-		sub := filepath.Join(worktree, "pkg")
-		require.NoError(t, os.Mkdir(sub, 0o755))
-
-		// Make worktree a real git repo so the boundary detection
-		// resolves to it, mirroring what happens with linked worktrees
-		// in real usage.
+		worktree := t.TempDir()
 		gitInit := exec.CommandContext(t.Context(), "git", "init", "-q")
 		gitInit.Dir = worktree
 		require.NoError(t, gitInit.Run())
 
-		cfg := &Config{}
-		cfg.setDefaults(sub, "")
+		sub1 := filepath.Join(worktree, "pkg", "a")
+		sub2 := filepath.Join(worktree, "pkg", "b")
+		require.NoError(t, os.MkdirAll(sub1, 0o755))
+		require.NoError(t, os.MkdirAll(sub2, 0o755))
 
-		// Resolve symlinks because TempDir on macOS sits under /var
-		// which is a symlink to /private/var. The data directory has
-		// not been created yet, so resolve its parent and join.
-		gotDir, gotName := filepath.Split(cfg.Options.DataDirectory)
-		gotEvalDir, err := filepath.EvalSymlinks(filepath.Clean(gotDir))
-		require.NoError(t, err)
-		gotEval := filepath.Join(gotEvalDir, gotName)
+		cfg1 := &Config{}
+		cfg1.setDefaults(sub1, "")
+		cfg2 := &Config{}
+		cfg2.setDefaults(sub2, "")
 
-		strayEval, err := filepath.EvalSymlinks(filepath.Join(parent, defaultDataDirectory))
-		require.NoError(t, err)
-		require.NotEqual(t, strayEval, gotEval, "must not adopt parent .crush")
-
-		subEval, err := filepath.EvalSymlinks(sub)
-		require.NoError(t, err)
-		require.Equal(t, filepath.Join(subEval, defaultDataDirectory), gotEval)
+		require.Equal(t, cfg1.Options.DataDirectory, cfg2.Options.DataDirectory)
+		require.Equal(t, DefaultProjectDataDir(sub1), cfg1.Options.DataDirectory)
 	})
 }
 

@@ -3,6 +3,8 @@ package config
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -598,11 +600,11 @@ func (c *Config) setDefaults(workingDir, dataDir string) {
 	if dataDir != "" {
 		c.Options.DataDirectory = dataDir
 	} else if c.Options.DataDirectory == "" {
-		if path, ok := fsext.LookupClosestBounded(workingDir, projectBoundary(workingDir), defaultDataDirectory); ok {
-			c.Options.DataDirectory = path
-		} else {
-			c.Options.DataDirectory = filepath.Join(workingDir, defaultDataDirectory)
-		}
+		// Default to a consolidated per-project data directory keyed by
+		// the project boundary (git working tree root when detectable),
+		// so all Crush state lives under one root instead of scattered
+		// .crush directories inside each project.
+		c.Options.DataDirectory = DefaultProjectDataDir(workingDir)
 	}
 	c.Options.DataDirectory = filepath.Clean(filepathext.SmartJoin(workingDir, c.Options.DataDirectory))
 	if c.Providers == nil {
@@ -1298,6 +1300,23 @@ func GlobalWorkspaceDir() string {
 	return filepath.Dir(GlobalConfigData())
 }
 
+// DefaultProjectsRoot returns the consolidated root directory under which
+// each project's data directory is stored, keyed by a hash of the project
+// boundary. It derives from the global data directory so it follows the
+// existing CRUSH_GLOBAL_DATA and XDG_DATA_HOME overrides without adding a
+// new configuration surface.
+func DefaultProjectsRoot() string {
+	return filepath.Join(GlobalWorkspaceDir(), "projects")
+}
+
+// DefaultProjectDataDir returns the default per-project data directory for
+// a working directory: a directory under DefaultProjectsRoot keyed by a
+// hash of the project boundary (the git working tree root when one can be
+// detected, otherwise the working directory itself).
+func DefaultProjectDataDir(workingDir string) string {
+	return filepath.Join(DefaultProjectsRoot(), projectDirHash(projectBoundary(workingDir)))
+}
+
 func assignIfNil[T any](ptr **T, val T) {
 	if *ptr == nil {
 		*ptr = &val
@@ -1368,6 +1387,28 @@ func projectBoundary(dir string) string {
 		return dir
 	}
 	return abs
+}
+
+// projectDirHash returns a stable, low-collision hash of a project
+// boundary path, used to key a project's data directory under
+// DefaultProjectsRoot. The path is normalized before hashing so that
+// equivalent spellings of the same directory (e.g. trailing separators)
+// produce the same hash; on Windows the path is lowercased because the
+// filesystem is case-insensitive. Symlinks are resolved so the same
+// physical directory reached through different paths (for example /tmp
+// vs /private/tmp on macOS) maps to the same project directory. The path
+// normally exists (a working directory or git worktree root), so a failed
+// resolution falls back to the cleaned path.
+func projectDirHash(dir string) string {
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = resolved
+	}
+	p := filepath.ToSlash(filepath.Clean(dir))
+	if runtime.GOOS == "windows" {
+		p = strings.ToLower(p)
+	}
+	sum := sha256.Sum256([]byte(p))
+	return hex.EncodeToString(sum[:8])
 }
 
 // GlobalSkillsDirs returns the default directories for Agent Skills.

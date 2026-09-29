@@ -21,9 +21,8 @@ import (
 )
 
 const (
-	appName              = "crush"
-	defaultDataDirectory = ".crush"
-	defaultInitializeAs  = "AGENTS.md"
+	appName             = "crush"
+	defaultInitializeAs = "AGENTS.md"
 )
 
 var defaultContextPaths = []string{
@@ -484,7 +483,9 @@ type Options struct {
 	// the SQLite database and workspace overrides. Relative paths are
 	// resolved against the working directory; absolute paths are used
 	// verbatim. After defaulting the stored value is always absolute.
-	DataDirectory             string       `json:"data_directory,omitempty" jsonschema:"description=Directory for storing application data. Relative paths are resolved against the working directory; absolute paths are used as-is.,default=.crush,example=.crush"`
+	// When unset, it defaults to a hashed per-project directory under
+	// the consolidated projects root (DefaultProjectsRoot).
+	DataDirectory             string       `json:"data_directory,omitempty" jsonschema:"description=Directory for storing application data. Relative paths are resolved against the working directory; absolute paths are used as-is. Defaults to a hashed per-project directory under the consolidated projects root.,example=/abs/path"`
 	DisabledTools             []string     `json:"disabled_tools,omitempty" jsonschema:"description=List of built-in tools to disable and hide from the agent,example=bash,example=sourcegraph"`
 	RequireReadBeforeWrite    bool         `json:"require_read_before_write,omitempty" jsonschema:"description=Require a prior read with the view tool before write\\, edit\\, or multiedit can modify a file. When false\\, files may be modified without a prior read unless they changed on disk since the last read,default=false"`
 	DisableProviderAutoUpdate bool         `json:"disable_provider_auto_update,omitempty" jsonschema:"description=Disable providers auto-update,default=false"`

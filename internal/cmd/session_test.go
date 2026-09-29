@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/charmbracelet/crush/internal/config"
 	"github.com/stretchr/testify/require"
 )
 
@@ -29,6 +30,8 @@ func TestSessionSetupFromSubdirectoryUsesProjectDataDir(t *testing.T) {
 	require.NoError(t, err)
 	defer cleanup()
 
-	require.Equal(t, filepath.Join(root, ".crush"), svc.cfg.Config().Options.DataDirectory)
+	// The data directory is the hashed project directory under the
+	// consolidated projects root, keyed by the git worktree root.
+	require.Equal(t, config.DefaultProjectDataDir(root), svc.cfg.Config().Options.DataDirectory)
 	require.NoDirExists(t, filepath.Join(sub, ".crush"))
 }

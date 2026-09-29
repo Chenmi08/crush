@@ -226,7 +226,7 @@ func runStats(cmd *cobra.Command, _ []string) error {
 		}
 	}
 	if outputDataDir == "" {
-		outputDataDir = ".crush"
+		outputDataDir = config.DefaultProjectDataDir(cwd)
 	}
 
 	htmlPath := filepath.Join(outputDataDir, "stats/index.html")
@@ -244,8 +244,24 @@ func runStats(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
-// crawlForStats crawls a directory recursively looking for .crush/crush.db files.
+// crawlForStats crawls a directory recursively looking for crush.db files
+// belonging to Crush projects. It recognizes the consolidated per-project
+// layout under the projects root (root/<hash>/crush.db, labeled with the
+// real project path from projects.json when known) as well as the legacy
+// scattered layout (project/.crush/crush.db) so explicit crawls of older
+// trees still work.
 func crawlForStats(ctx context.Context, rootDir string) ([]ProjectStats, error) {
+	projectsRoot := config.DefaultProjectsRoot()
+
+	// Map data directories to their project paths so consolidated hash
+	// directories can be labeled with the real project path.
+	projectPaths := map[string]string{}
+	if list, err := projects.List(); err == nil {
+		for _, p := range list {
+			projectPaths[filepath.Clean(p.DataDir)] = p.Path
+		}
+	}
+
 	var dbPaths []struct {
 		dbPath     string
 		projectDir string
@@ -261,16 +277,28 @@ func crawlForStats(ctx context.Context, rootDir string) ([]ProjectStats, error) 
 			return filepath.SkipDir
 		}
 
-		// Look for .crush/crush.db pattern
+		// Look for crush.db inside a project data directory.
 		if !d.IsDir() && d.Name() == "crush.db" {
 			dir := filepath.Dir(path)
-			if filepath.Base(dir) == ".crush" {
-				projectDir := filepath.Dir(dir)
-				dbPaths = append(dbPaths, struct {
-					dbPath     string
-					projectDir string
-				}{dbPath: path, projectDir: projectDir})
+			var projectDir string
+			switch {
+			case filepath.Dir(dir) == projectsRoot:
+				// Consolidated layout: root/<hash>/crush.db. Prefer the
+				// real project path; fall back to the hash directory.
+				projectDir = projectPaths[filepath.Clean(dir)]
+				if projectDir == "" {
+					projectDir = dir
+				}
+			case filepath.Base(dir) == ".crush":
+				// Legacy layout: project/.crush/crush.db.
+				projectDir = filepath.Dir(dir)
+			default:
+				return nil
 			}
+			dbPaths = append(dbPaths, struct {
+				dbPath     string
+				projectDir string
+			}{dbPath: path, projectDir: projectDir})
 		}
 
 		return nil

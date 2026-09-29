@@ -509,7 +509,10 @@ Boolean Keys:
 String Keys:
   exa-api-key string               Exa API key for the built-in web search;
                                    falls back to $EXA_API_KEY when unset
-  data-directory string            directory for project data and state
+  data-directory string            directory for project data and state;
+                                   defaults to a hashed per-project directory
+                                   under the consolidated projects root
+                                   (e.g. ~/.local/share/crush/projects/)
   initialize-as string             context filename created by crush init
   notifications string             notification style: auto, native, osc, bell,
                                    or disabled
