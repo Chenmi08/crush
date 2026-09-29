@@ -118,6 +118,9 @@ type Service interface {
 	UpdateTitleAndUsage(ctx context.Context, sessionID, title string, tokens SessionTokens, cost float64) error
 	Rename(ctx context.Context, id string, title string) error
 	Delete(ctx context.Context, id string) error
+	MCPDisabledServers(ctx context.Context) ([]string, error)
+	SetMCPServerDisabled(ctx context.Context, name string, disabled bool) error
+	MCPServersEnabled(ctx context.Context) ([]string, error)
 
 	// Agent tool session management
 	CreateAgentToolSessionID(messageID, toolCallID string) string
@@ -527,6 +530,41 @@ func unmarshalDisabledSkills(data string) ([]string, error) {
 		return nil, err
 	}
 	return normalizeDisabledSkills(names), nil
+}
+
+// MCPDisabledServers returns the MCP servers disabled for this
+// repository. The database is scoped to the project, so the override set
+// is shared by every session in the repository, including sub-agent
+// sessions. New repositories start empty and follow the config.
+func (s *service) MCPDisabledServers(ctx context.Context) ([]string, error) {
+	return s.q.ListMCPDisabledServers(ctx)
+}
+
+// SetMCPServerDisabled adds or removes a repository-scoped MCP override.
+// Enabling a config-disabled server also records an enabled override so the
+// runtime start survives a restart; the override is removed when the server
+// is disabled again.
+func (s *service) SetMCPServerDisabled(ctx context.Context, name string, disabled bool) error {
+	var err error
+	if disabled {
+		err = s.q.InsertMCPDisabledServer(ctx, name)
+	} else {
+		err = s.q.DeleteMCPDisabledServer(ctx, name)
+	}
+	if err != nil {
+		return err
+	}
+	if disabled {
+		return s.q.DeleteMCPEnabledServer(ctx, name)
+	}
+	return s.q.InsertMCPEnabledServer(ctx, name)
+}
+
+// MCPServersEnabled returns the MCP servers with a repository-scoped
+// enabled override: config-disabled servers the user enabled for this
+// repository. Startup force-starts them so the override survives restarts.
+func (s *service) MCPServersEnabled(ctx context.Context) ([]string, error) {
+	return s.q.ListMCPEnabledServers(ctx)
 }
 
 // NewService creates a session service. Options are optional so existing
