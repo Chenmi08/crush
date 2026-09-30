@@ -154,6 +154,10 @@ func (w *testWorkspace) WorkingDir() string {
 	return "/tmp/crush-test"
 }
 
+func (w *testWorkspace) GitBranch() string {
+	return ""
+}
+
 // SetSessionDisabledSkills records the call instead of talking to a backend.
 func (w *testWorkspace) SetSessionDisabledSkills(_ context.Context, sessionID string, names []string) error {
 	w.skillsMu.Lock()

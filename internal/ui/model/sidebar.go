@@ -359,7 +359,8 @@ func (m *UI) updateSidebarScrollState() {
 	cache := &m.sidebarSections
 	titleKey := sidebarHashString(sidebarHashInt(sidebarHashSeed, contentWidth), m.session.Title)
 	cwd := m.com.Workspace.WorkingDir()
-	cwdKey := sidebarHashString(sidebarHashInt(sidebarHashSeed, contentWidth), cwd)
+	branch := m.com.Workspace.GitBranch()
+	cwdKey := sidebarHashString(sidebarHashString(sidebarHashInt(sidebarHashSeed, contentWidth), branch), cwd)
 	logoKey := sidebarHashBool(sidebarHashInt(sidebarHashSeed, contentWidth), height < logoHeightBreakpoint)
 	logoKey = sidebarHashBool(logoKey, m.com.IsHyper())
 	modelKey := m.sidebarModelInfoKey(contentWidth)
@@ -395,7 +396,7 @@ func (m *UI) updateSidebarScrollState() {
 			return t.Sidebar.SessionTitle.Width(contentWidth).MaxHeight(2).Render(m.session.Title)
 		})
 		cwdLine := cache.cwd.get(cwdKey, func() string {
-			return common.PrettyPath(t, cwd, contentWidth)
+			return common.PrettyPathWithBranch(t, cwd, branch, contentWidth)
 		})
 		sidebarLogo = m.sidebarLogo
 		if height < logoHeightBreakpoint {

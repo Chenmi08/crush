@@ -172,8 +172,21 @@ func renderHeaderDetails(
 	metadata = dot + metadata
 
 	const dirTrimLimit = 4
-	cwd := fsext.DirTrim(fsext.PrettyPath(com.Workspace.WorkingDir()), dirTrimLimit)
-	cwd = t.Header.WorkingDir.Render(cwd)
+	workingDir := com.Workspace.WorkingDir()
+	cwd := t.Header.WorkingDir.Render(fsext.DirTrim(fsext.PrettyPath(workingDir), dirTrimLimit))
+
+	branch := com.Workspace.GitBranch()
+	if branch != "" {
+		// Reserve space for the dot separator between branch and path and
+		// at least some of the path.
+		branchSep := t.Header.Separator.Render(" • ")
+		metadataWidth := lipgloss.Width(metadata)
+		maxBranchWidth := max(0, availWidth-metadataWidth-lipgloss.Width(cwd)-lipgloss.Width(branchSep))
+		if maxBranchWidth > 0 {
+			truncBranch := ansi.Truncate(branch, maxBranchWidth, "…")
+			cwd = t.Header.GitBranch.Render(truncBranch) + branchSep + cwd
+		}
+	}
 
 	result := cwd + metadata
 	return ansi.Truncate(result, max(0, availWidth), "…")
