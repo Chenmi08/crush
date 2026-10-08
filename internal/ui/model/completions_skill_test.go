@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/crush/internal/ui/attachments"
 	"github.com/charmbracelet/crush/internal/ui/completions"
 	"github.com/charmbracelet/crush/internal/ui/dialog"
+	"github.com/charmbracelet/crush/internal/ui/styles"
 	"github.com/stretchr/testify/require"
 )
 
@@ -19,10 +20,7 @@ func newSkillTestUI() *UI {
 	u := newTestUI()
 	u.dialog = dialog.NewOverlay()
 	u.attachments = attachments.New(
-		attachments.NewRenderer(
-			lipgloss.NewStyle(), lipgloss.NewStyle(), lipgloss.NewStyle(),
-			lipgloss.NewStyle(), lipgloss.NewStyle(), lipgloss.NewStyle(),
-		),
+		attachments.NewRenderer(styles.AttachmentStyles{}),
 		attachments.Keymap{},
 	)
 	u.completions = completions.New(lipgloss.NewStyle(), lipgloss.NewStyle(), lipgloss.NewStyle())
@@ -165,10 +163,7 @@ func TestHasSkillAttachment(t *testing.T) {
 	t.Parallel()
 
 	atts := attachments.New(
-		attachments.NewRenderer(
-			lipgloss.NewStyle(), lipgloss.NewStyle(), lipgloss.NewStyle(),
-			lipgloss.NewStyle(), lipgloss.NewStyle(), lipgloss.NewStyle(),
-		),
+		attachments.NewRenderer(styles.AttachmentStyles{}),
 		attachments.Keymap{},
 	)
 	require.True(t, atts.Update(message.Attachment{FilePath: "grilling"}))

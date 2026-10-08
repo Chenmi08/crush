@@ -373,8 +373,8 @@ func (w *AppWorkspace) WorkingDir() string {
 	return w.store.WorkingDir()
 }
 
-func (w *AppWorkspace) GitBranch() string {
-	return gitutil.CurrentBranch(w.store.WorkingDir())
+func (w *AppWorkspace) GitBranch(context.Context) (string, error) {
+	return gitutil.CurrentBranch(w.store.WorkingDir()), nil
 }
 
 func (w *AppWorkspace) Resolver() config.VariableResolver {

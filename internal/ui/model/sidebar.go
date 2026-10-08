@@ -359,7 +359,7 @@ func (m *UI) updateSidebarScrollState() {
 	cache := &m.sidebarSections
 	titleKey := sidebarHashString(sidebarHashInt(sidebarHashSeed, contentWidth), m.session.Title)
 	cwd := m.com.Workspace.WorkingDir()
-	branch := m.com.Workspace.GitBranch()
+	branch := m.gitBranch
 	cwdKey := sidebarHashString(sidebarHashString(sidebarHashInt(sidebarHashSeed, contentWidth), branch), cwd)
 	logoKey := sidebarHashBool(sidebarHashInt(sidebarHashSeed, contentWidth), height < logoHeightBreakpoint)
 	logoKey = sidebarHashBool(logoKey, m.com.IsHyper())

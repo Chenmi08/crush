@@ -154,8 +154,8 @@ func (w *testWorkspace) WorkingDir() string {
 	return "/tmp/crush-test"
 }
 
-func (w *testWorkspace) GitBranch() string {
-	return ""
+func (w *testWorkspace) GitBranch(context.Context) (string, error) {
+	return "", nil
 }
 
 // SetSessionDisabledSkills records the call instead of talking to a backend.
