@@ -1062,6 +1062,30 @@ func TestSessionProtoRoundTripPreservesTotalsAndSkills(t *testing.T) {
 	require.Equal(t, sess.Totals, round.Totals)
 }
 
+// TestTranslateEvent_PermissionNotification verifies that the
+// notification's session ID survives the proto-to-domain translation,
+// keeping it available for session-scoped consumers.
+func TestTranslateEvent_PermissionNotification(t *testing.T) {
+	t.Parallel()
+
+	w := NewClientWorkspace(nil, proto.Workspace{})
+	ev := pubsub.Event[proto.PermissionNotification]{
+		Type: pubsub.CreatedEvent,
+		Payload: proto.PermissionNotification{
+			SessionID:  "s1",
+			ToolCallID: "tc-1",
+			Granted:    true,
+		},
+	}
+
+	out := w.translateEvent(ev)
+	got, ok := out.(pubsub.Event[permission.PermissionNotification])
+	require.True(t, ok, "expected pubsub.Event[permission.PermissionNotification], got %T", out)
+	require.Equal(t, "s1", got.Payload.SessionID)
+	require.Equal(t, "tc-1", got.Payload.ToolCallID)
+	require.True(t, got.Payload.Granted)
+}
+
 // TestClientWorkspace_GitBranch verifies that GitBranch asks the server and
 // returns what it reports. Caching and scheduling are the TUI's business, so
 // nothing here pretends otherwise.
@@ -1108,7 +1132,6 @@ func TestClientWorkspace_GitBranchServerError(t *testing.T) {
 
 	ws := NewClientWorkspace(c, proto.Workspace{ID: "ws-1"})
 	t.Cleanup(ws.Shutdown)
-
 	_, err = ws.GitBranch(t.Context())
 	require.Error(t, err)
 }

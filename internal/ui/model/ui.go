@@ -329,6 +329,11 @@ type UI struct {
 	sendProgressBar    bool
 	progressBarEnabled bool
 
+	// turnOutcome is the result of the last agent turn (done or error),
+	// reported to the terminal until the user has seen it. See
+	// trackTurnOutcome.
+	turnOutcome tea.ProgramState
+
 	// caps hold different terminal capabilities that we query for.
 	caps common.Capabilities
 
@@ -510,11 +515,19 @@ type UI struct {
 	// like promptQueueGen it lets a stale in-flight probe result be
 	// discarded and re-fetched instead of clobbering newer state.
 	busyFetchGen uint64
-	pillsView    string
+	// probedSessionBusy is the last busy probe of probedSession, covering
+	// runs this client did not start.
+	probedSession     string
+	probedSessionBusy bool
+	pillsView         string
 
 	// Todo spinner
 	todoSpinner    spinner.Model
 	todoIsSpinning bool
+
+	// pending is the turn this client sent; the placeholder items in the
+	// chat are derived from it by syncPendingItem.
+	pending pendingTurn
 
 	// preThemeStyles stores the styles before a theme preview so we can revert.
 	preThemeStyles *styles.Styles
@@ -911,6 +924,7 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.beginFrameUpdate()
 	// Update terminal capabilities
 	m.caps.Update(msg)
+	m.trackTurnOutcome(msg)
 	switch msg := msg.(type) {
 	case tea.EnvMsg:
 		// Is this Windows Terminal?
@@ -933,6 +947,7 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, cmd)
 		}
 	case pubsub.Event[notify.RunComplete]:
+		m.endPendingTurn(msg.Payload.SessionID)
 		if cmd := m.handlePlanHandoff(msg.Payload); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
@@ -952,6 +967,12 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, cmd)
 		}
 	case agentRunSubmittedMsg:
+		if msg.err != nil {
+			// The run never started, so no terminal event is coming to
+			// retire its spinner.
+			m.endPendingTurn(msg.sessionID)
+			cmds = append(cmds, util.ReportError(msg.err))
+		}
 		// A prompt was just accepted (run started or enqueued): fetch the
 		// authoritative busy/queue state to confirm the optimistic values
 		// sendMessage wrote.
@@ -975,6 +996,7 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if cmd := m.resetPlanModeState(); cmd != nil {
 				cmds = append(cmds, cmd)
 			}
+			m.turnOutcome = ""
 		}
 		m.setState(uiChat, m.focus)
 		m.session = msg.session
@@ -1801,6 +1823,13 @@ func (m *UI) setSessionMessages(msgs []message.Message) tea.Cmd {
 	if cmd := m.chat.SetMessages(items...); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
+	// SetMessages rebuilds the items from stored messages, which cannot
+	// include the placeholder. Put it back when this session is still
+	// waiting on one, so switching away and back does not lose the
+	// spinner for the rest of the turn.
+	if m.syncPendingItem() {
+		m.chat.SetAnimationsAllowed(true)
+	}
 	m.chat.SelectLast()
 	return tea.Sequence(cmds...)
 }
@@ -1924,6 +1953,11 @@ func (m *UI) setMessagePlanFlags(items []chat.MessageItem) {
 func (m *UI) appendSessionMessage(msg message.Message) tea.Cmd {
 	var cmds []tea.Cmd
 
+	// The real message carries its own spinner from here on.
+	if msg.Role == message.Assistant && m.pending.sessionID == msg.SessionID {
+		m.handOffPendingTurn()
+	}
+
 	existing := m.chat.MessageItem(msg.ID)
 	if existing != nil {
 		// message already exists, skip
@@ -1945,6 +1979,10 @@ func (m *UI) appendSessionMessage(msg message.Message) tea.Cmd {
 			return nil
 		}
 		m.lastUserMessageTime = msg.CreatedAt
+		// This is the prompt the echo stood in for.
+		if m.pending.echo != nil && m.pending.sessionID == msg.SessionID {
+			m.dropPendingEcho()
+		}
 		items := chat.ExtractMessageItems(m.com.Styles, &msg, nil, m.com.Workspace.WorkingDir())
 		m.chat.AppendMessages(items...)
 		m.chat.ScrollToBottom()
@@ -4208,7 +4246,7 @@ func (m *UI) View() tea.View {
 		if content, cursor, ok := m.frames.get(key); ok {
 			v.Content = content
 			v.Cursor = cursor
-			m.applyProgressBar(&v)
+			m.applyTerminalStatus(&v)
 			return v
 		}
 	}
@@ -4224,14 +4262,16 @@ func (m *UI) View() tea.View {
 	if cacheable {
 		m.storeFrame(key, v.Content, v.Cursor)
 	}
-	m.applyProgressBar(&v)
+	m.applyTerminalStatus(&v)
 
 	return v
 }
 
-// applyProgressBar attaches the terminal progress bar while the agent is
-// busy. Kept outside the frame cache so the randomized value stays fresh.
-func (m *UI) applyProgressBar(v *tea.View) {
+// applyTerminalStatus attaches the program status, and the terminal progress
+// bar while the agent is busy. Kept outside the frame cache so the
+// randomized progress value stays fresh.
+func (m *UI) applyTerminalStatus(v *tea.View) {
+	v.ProgramStatus = m.programStatus()
 	if m.progressBarEnabled && m.sendProgressBar && m.isAgentBusy() {
 		// HACK: use a random percentage to prevent ghostty from hiding it
 		// after a timeout.
@@ -5517,6 +5557,94 @@ func (m *UI) isAgentBusy() bool {
 	return m.agentBusyCache.val
 }
 
+// pendingTurn is a turn this client sent that has not yet ended. It lives
+// until the run's RunComplete (or a failure to start it) arrives.
+type pendingTurn struct {
+	// sessionID is the session running the turn; empty when none.
+	sessionID string
+	// echo shows the prompt until the stored user message replaces it.
+	echo chat.MessageItem
+	// spinner is the placeholder, kept so moving it keeps its animation.
+	spinner chat.MessageItem
+	// handedOff records that an assistant message now carries the spinner.
+	handedOff bool
+}
+
+// showPendingTurn shows the prompt and the turn spinner for sessionID,
+// ahead of the agent storing the message and publishing it back. Reports
+// whether a placeholder was added.
+func (m *UI) showPendingTurn(sessionID, prompt string, attachments []message.Attachment) bool {
+	m.pending = pendingTurn{sessionID: sessionID}
+	if prompt != "" || len(attachments) > 0 {
+		m.pending.echo = chat.NewPendingUserItem(m.com.Styles, prompt, attachments)
+	}
+	return m.syncPendingItem()
+}
+
+// dropPendingEcho removes the prompt echo, having been given the stored
+// message that supersedes it.
+func (m *UI) dropPendingEcho() {
+	m.pending.echo = nil
+	m.chat.RemoveMessage(chat.PendingUserID)
+}
+
+// handOffPendingTurn drops the placeholder for the assistant message that
+// now carries the spinner, without ending the turn.
+func (m *UI) handOffPendingTurn() {
+	m.pending.handedOff = true
+	m.pending.spinner = nil
+	m.syncPendingItem()
+}
+
+// endPendingTurn retires the pending items and the clock for sessionID, if
+// that is the session currently running a turn.
+func (m *UI) endPendingTurn(sessionID string) {
+	common.StopTurn(sessionID)
+	if m.pending.sessionID == sessionID {
+		m.pending = pendingTurn{}
+		m.syncPendingItem()
+	}
+}
+
+// turnInFlight reports whether a prompt sent to sessionID now would queue
+// behind a running turn rather than start one.
+func (m *UI) turnInFlight(sessionID string) bool {
+	if m.pending.sessionID == sessionID {
+		return true
+	}
+	if m.probedSession == sessionID && m.probedSessionBusy {
+		return true
+	}
+	return m.chat.HasLiveSpinner()
+}
+
+// syncPendingItem makes the chat match the pending turn, adding or removing
+// the prompt echo and the placeholder spinner as needed, and reports whether
+// it added the spinner. It is idempotent, so callers may run it on any path
+// that could have changed either the pending turn or the items in view.
+func (m *UI) syncPendingItem() bool {
+	if m.pending.sessionID == "" || m.pending.sessionID != m.currentSessionID() {
+		m.chat.RemoveMessage(chat.PendingUserID)
+		m.chat.RemoveMessage(chat.PendingAssistantID)
+		return false
+	}
+	if m.pending.echo != nil && m.chat.MessageItem(chat.PendingUserID) == nil {
+		m.chat.AppendMessages(m.pending.echo)
+	}
+	if m.pending.handedOff {
+		m.chat.RemoveMessage(chat.PendingAssistantID)
+		return false
+	}
+	if m.chat.MessageItem(chat.PendingAssistantID) != nil {
+		return false
+	}
+	if m.pending.spinner == nil {
+		m.pending.spinner = chat.NewPendingAssistantItem(m.com.Styles, m.pending.sessionID)
+	}
+	m.chat.AppendMessages(m.pending.spinner)
+	return true
+}
+
 // hasSession returns true if there is an active session with a valid ID.
 func (m *UI) hasSession() bool {
 	return m.session != nil && m.session.ID != ""
@@ -5758,11 +5886,9 @@ func (m *UI) sendMessageInternal(content string, hidden bool, attachments ...mes
 		return util.ReportError(err)
 	}
 
-	// Start the turn timer.
-	common.StartTurn()
-
 	// Any new prompt supersedes a pending, unconfirmed plan.
 	m.setPlanReadyPending("")
+	m.turnOutcome = ""
 
 	var cmds []tea.Cmd
 	loadCmd, err := m.ensureSession()
@@ -5771,6 +5897,24 @@ func (m *UI) sendMessageInternal(content string, hidden bool, attachments ...mes
 	}
 	if loadCmd != nil {
 		cmds = append(cmds, loadCmd)
+	}
+
+	// A queued prompt belongs in the queue pill and keeps the running
+	// turn's spinner and clock. A fresh turn gets its own, from now.
+	sessionID := m.currentSessionID()
+	queued := m.turnInFlight(sessionID)
+	// Loading an idle session freezes ghost spinners; sending unfreezes.
+	m.chat.SetAnimationsAllowed(true)
+	if !queued {
+		common.StartTurn(sessionID)
+		echo := content
+		echoAttachments := attachments
+		if hidden {
+			echo, echoAttachments = "", nil
+		}
+		if m.showPendingTurn(sessionID, echo, echoAttachments) {
+			m.chat.ScrollToBottom()
+		}
 	}
 
 	ctx := context.Background()
@@ -5782,8 +5926,8 @@ func (m *UI) sendMessageInternal(content string, hidden bool, attachments ...mes
 		return nil
 	})
 
-	// Capture session ID to avoid race with main goroutine updating m.session.
-	sessionID := m.session.ID
+	// sessionID is captured above, before the commands below run, so it
+	// cannot race the main goroutine updating m.session.
 	// Optimistically mark the agent busy: the prompt we are about to submit
 	// either starts a run or is enqueued behind one. This keeps esc pressed
 	// right after enter routing to cancelAgent instead of reading a stale
@@ -5803,13 +5947,10 @@ func (m *UI) sendMessageInternal(content string, hidden bool, attachments ...mes
 			runCtx = message.WithHiddenUserMessage(runCtx)
 		}
 		err := m.com.Workspace.AgentRun(runCtx, sessionID, content, attachments...)
-		if err != nil && !errors.Is(err, context.Canceled) {
-			return util.InfoMsg{
-				Type: util.InfoTypeError,
-				Msg:  fmt.Sprintf("%v", err),
-			}
+		if errors.Is(err, context.Canceled) {
+			err = nil
 		}
-		return agentRunSubmittedMsg{}
+		return agentRunSubmittedMsg{sessionID: sessionID, err: err}
 	})
 	return tea.Batch(cmds...)
 }
@@ -5935,6 +6076,7 @@ func (m *UI) runShellCommandInternal(command string, isFirstMessage bool) tea.Cm
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.bangCancel = cancel
+	m.turnOutcome = ""
 
 	cmds = append(cmds, func() tea.Msg {
 		resp, err := m.com.Workspace.AgentRunShellCommand(ctx, sessionID, command, contentWidth, onProgress, isFirstMessage)
@@ -6393,7 +6535,6 @@ func (m *UI) handleAgentNotification(n notify.Notification) tea.Cmd {
 	var cmds []tea.Cmd
 	switch n.Type {
 	case notify.TypeAgentFinished:
-		common.StopTurn()
 		cmds = append(cmds, m.sendNotification(notification.Notification{
 			Title:   "Crush is waiting...",
 			Message: fmt.Sprintf("Agent's turn completed in \"%s\"", n.SessionTitle),
@@ -6408,6 +6549,7 @@ func (m *UI) handleAgentNotification(n notify.Notification) tea.Cmd {
 	case notify.TypeAgentError:
 		// Terminal edge like TypeAgentFinished; fall through to the
 		// busy/queue refresh below.
+		m.endPendingTurn(n.SessionID)
 	case notify.TypeReAuthenticate:
 		return m.handleReAuthenticate(n.ProviderID)
 	case notify.TypeAWSSSOAuth:
@@ -6500,6 +6642,7 @@ func (m *UI) newSession() tea.Cmd {
 	}
 
 	planCmd := m.resetPlanModeState()
+	m.turnOutcome = ""
 	m.session = nil
 	m.sidebarOffset = 0
 	m.sessionFiles = nil

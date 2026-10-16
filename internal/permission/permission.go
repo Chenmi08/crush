@@ -52,6 +52,7 @@ type CreatePermissionRequest struct {
 }
 
 type PermissionNotification struct {
+	SessionID  string `json:"session_id"`
 	ToolCallID string `json:"tool_call_id"`
 	Granted    bool   `json:"granted"`
 	Denied     bool   `json:"denied"`
@@ -84,6 +85,11 @@ type Service interface {
 	// already been resolved or is unknown.
 	Deny(permission PermissionRequest) bool
 	Request(ctx context.Context, opts CreatePermissionRequest) (bool, error)
+	// ActiveRequest returns the request that is currently awaiting a
+	// decision, or false when no request is pending. A request is only
+	// reported while it can still be resolved; a request whose waiter
+	// was cancelled is not returned.
+	ActiveRequest() (PermissionRequest, bool)
 	AutoApproveSession(sessionID string)
 	SetSkipRequests(skip bool)
 	SkipRequests() bool
@@ -143,6 +149,7 @@ func (s *permissionService) resolve(permission PermissionRequest, granted, denie
 	}
 
 	s.notificationBroker.Publish(pubsub.CreatedEvent, PermissionNotification{
+		SessionID:  permission.SessionID,
 		ToolCallID: permission.ToolCallID,
 		Granted:    granted,
 		Denied:     denied,
@@ -201,6 +208,7 @@ func (s *permissionService) Request(ctx context.Context, opts CreatePermissionRe
 	// and audit subscribers see the outcome.
 	if hookApproved(ctx, opts.ToolCallID) {
 		s.notificationBroker.Publish(pubsub.CreatedEvent, PermissionNotification{
+			SessionID:  opts.SessionID,
 			ToolCallID: opts.ToolCallID,
 			Granted:    true,
 		})
@@ -212,6 +220,7 @@ func (s *permissionService) Request(ctx context.Context, opts CreatePermissionRe
 
 	// tell the UI that a permission was requested
 	s.notificationBroker.Publish(pubsub.CreatedEvent, PermissionNotification{
+		SessionID:  opts.SessionID,
 		ToolCallID: opts.ToolCallID,
 	})
 
@@ -221,6 +230,7 @@ func (s *permissionService) Request(ctx context.Context, opts CreatePermissionRe
 
 	if autoApprove {
 		s.notificationBroker.Publish(pubsub.CreatedEvent, PermissionNotification{
+			SessionID:  opts.SessionID,
 			ToolCallID: opts.ToolCallID,
 			Granted:    true,
 		})
@@ -263,6 +273,7 @@ func (s *permissionService) Request(ctx context.Context, opts CreatePermissionRe
 			Path:      permission.Path,
 		}); ok {
 			s.notificationBroker.Publish(pubsub.CreatedEvent, PermissionNotification{
+				SessionID:  opts.SessionID,
 				ToolCallID: opts.ToolCallID,
 				Granted:    true,
 			})
@@ -287,6 +298,24 @@ func (s *permissionService) Request(ctx context.Context, opts CreatePermissionRe
 	case granted := <-respCh:
 		return granted, nil
 	}
+}
+
+// ActiveRequest returns the request that is currently awaiting a
+// decision. The active pointer can outlive the waiter that published
+// it (Request leaves it behind when its context is cancelled), so a
+// request is only reported while its ID is still registered in
+// pendingRequests, i.e. while Grant/Deny can actually resolve it.
+func (s *permissionService) ActiveRequest() (PermissionRequest, bool) {
+	s.activeRequestMu.Lock()
+	active := s.activeRequest
+	s.activeRequestMu.Unlock()
+	if active == nil {
+		return PermissionRequest{}, false
+	}
+	if _, ok := s.pendingRequests.Get(active.ID); !ok {
+		return PermissionRequest{}, false
+	}
+	return *active, true
 }
 
 func (s *permissionService) AutoApproveSession(sessionID string) {

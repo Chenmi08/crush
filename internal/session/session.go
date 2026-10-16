@@ -567,6 +567,20 @@ func (s *service) MCPServersEnabled(ctx context.Context) ([]string, error) {
 	return s.q.ListMCPEnabledServers(ctx)
 }
 
+// HasMCPOverride reports whether the named MCP server has a
+// repository-scoped override, which takes precedence over the config.
+func HasMCPOverride(ctx context.Context, s Service, name string) (bool, error) {
+	disabled, err := s.MCPDisabledServers(ctx)
+	if err != nil {
+		return false, err
+	}
+	enabled, err := s.MCPServersEnabled(ctx)
+	if err != nil {
+		return false, err
+	}
+	return slices.Contains(disabled, name) || slices.Contains(enabled, name), nil
+}
+
 // NewService creates a session service. Options are optional so existing
 // callers keep working; see [WithDefaultDisabledSkills].
 func NewService(q *db.Queries, conn *sql.DB, opts ...Option) Service {
