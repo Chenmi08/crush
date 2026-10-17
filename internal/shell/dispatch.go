@@ -200,8 +200,10 @@ func dispatchShebang(ctx context.Context, scriptPath string, probe []byte, args 
 	cmd.Stderr = hc.Stderr
 	isolateProcess(cmd)
 	// The shebang path spawns a process directly, so it needs the same
-	// backend wrapping as the ordinary exec path.
-	cleanup, err := sandbox.WrapCommand(ctx, policy, cmd)
+	// backend wrapping as the ordinary exec path, including exit
+	// classification: a runner failure after start must be distinguishable
+	// from a policy denial.
+	run, cleanup, err := sandbox.BeginRun(ctx, policy, cmd)
 	if err != nil {
 		hc := interp.HandlerCtx(ctx)
 		fmt.Fprintf(hc.Stderr, "crush: %s: %v\n", scriptPath, err)
@@ -210,6 +212,9 @@ func dispatchShebang(ctx context.Context, scriptPath string, probe []byte, args 
 	if cleanup != nil {
 		defer cleanup()
 	}
+	if run != nil {
+		cmd.Stderr = run.StderrTee(hc.Stderr)
+	}
 
 	if err := cmd.Run(); err != nil {
 		var exitErr *exec.ExitError
@@ -217,6 +222,13 @@ func dispatchShebang(ctx context.Context, scriptPath string, probe []byte, args 
 			code := exitErr.ExitCode()
 			if code < 0 {
 				code = 1
+			}
+			if run != nil {
+				if d := run.DiagnoseClassified(code); d.Class != "" {
+					if msg := d.ModelMessage(); msg != "" {
+						fmt.Fprintf(hc.Stderr, "crush: %s\n", msg)
+					}
+				}
 			}
 			return interp.ExitStatus(uint8(code))
 		}

@@ -29,7 +29,7 @@ func processGroupExecHandler(killTimeout time.Duration, policy *sandbox.Policy) 
 		// run unconfined.
 		if policy != nil && policy.Mode != sandbox.ModeDangerFullAccess {
 			hc := interp.HandlerCtx(ctx)
-			_, err := sandbox.WrapCommand(ctx, policy, &exec.Cmd{Args: args})
+			_, _, err := sandbox.BeginRun(ctx, policy, &exec.Cmd{Args: args})
 			if err != nil {
 				fmt.Fprintf(hc.Stderr, "crush: %v\n", err)
 				return interp.ExitStatus(126)

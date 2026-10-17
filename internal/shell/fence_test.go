@@ -290,3 +290,61 @@ func TestFence_GoCoreutilsDisabledUnderPolicy(t *testing.T) {
 		require.True(t, found)
 	}
 }
+
+// TestFence_ExitClassificationDistinguishesRunnerFailure verifies the wiring
+// end to end through the interpreter: a command whose sandbox runner fails
+// after start produces the runner-failure vocabulary, not a bare exit status.
+// The policy denial vocabulary is covered by the kernel-backed tests in the
+// sandbox package.
+func TestFence_ExitClassificationDistinguishesRunnerFailure(t *testing.T) {
+	policy := fencePolicy(t)
+	// Point the workspace at a path that does not exist, so bwrap fails after
+	// the process has started.
+	broken := *policy
+	broken.Workspace += "/vanished"
+
+	var stderr bytes.Buffer
+	// /bin/echo is a real binary, so the exec handler wraps it; the builtin
+	// echo would never reach the backend.
+	err := Run(t.Context(), RunOptions{
+		Command: "/bin/echo should-not-run",
+		Cwd:     t.TempDir(),
+		Env:     os.Environ(),
+		Stderr:  &stderr,
+		Policy:  &broken,
+	})
+	require.Error(t, err)
+	out := stderr.String()
+	require.Contains(t, out, "bwrap: Can't chdir", "the runner's own diagnostic must be preserved")
+	require.Contains(t, out, "sandbox-runner-failed",
+		"the backend's classification must be surfaced to the caller")
+	require.Contains(t, out, "rather than retrying or requesting sandbox escalation")
+	require.NotContains(t, out, "sandbox-denied",
+		"a runner failure must never be reported as a policy denial")
+}
+
+// TestFence_ExitClassificationDenialVocabulary verifies the other half of the
+// contract: a confined command the kernel refuses is classified as a policy
+// denial, distinct from a runner failure.
+func TestFence_ExitClassificationDenialVocabulary(t *testing.T) {
+	policy := fencePolicy(t)
+
+	var stderr bytes.Buffer
+	// /etc is read-only under the ro-bind; /bin/rm is a real binary so the
+	// command reaches the backend.
+	err := Run(t.Context(), RunOptions{
+		Command: "/bin/echo x > /etc/sbx-denial-probe",
+		Cwd:     policy.Workspace,
+		Env:     os.Environ(),
+		Stderr:  &stderr,
+		Policy:  policy,
+	})
+	require.Error(t, err)
+	out := stderr.String()
+	require.Contains(t, out, sandbox.Marker,
+		"the interpreter-level refusal carries the shared marker")
+	require.Contains(t, out, "reason=outside-writable-roots")
+	require.Contains(t, out, "remedy=")
+	require.NotContains(t, out, "sandbox-runner-failed",
+		"a denial must never be reported as a runner failure")
+}

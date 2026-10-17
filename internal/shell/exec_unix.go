@@ -63,14 +63,21 @@ func processGroupExecHandler(killTimeout time.Duration, policy *sandbox.Policy) 
 		isolateProcess(&cmd)
 
 		// Every child process goes through the selected backend, so the
-		// boundary covers the command and everything it starts.
-		cleanup, wrapErr := sandbox.WrapCommand(ctx, policy, &cmd)
+		// boundary covers the command and everything it starts. The run
+		// records which backend wrapped the command and tees its stderr, so
+		// a non-zero exit can be classified against that backend's own
+		// signatures: a runner failure and a policy denial must be
+		// distinguishable, or the model escalates around a broken sandbox.
+		run, cleanup, wrapErr := sandbox.BeginRun(ctx, policy, &cmd)
 		if wrapErr != nil {
 			fmt.Fprintf(hc.Stderr, "crush: %v\n", wrapErr)
 			return interp.ExitStatus(126)
 		}
 		if cleanup != nil {
 			defer cleanup()
+		}
+		if run != nil {
+			cmd.Stderr = run.StderrTee(hc.Stderr)
 		}
 
 		err = cmd.Start()
@@ -91,7 +98,22 @@ func processGroupExecHandler(killTimeout time.Duration, policy *sandbox.Policy) 
 			err = cmd.Wait()
 		}
 
-		return exitStatusFromError(ctx, hc.Stderr, err)
+		exitErr := exitStatusFromError(ctx, hc.Stderr, err)
+		if run != nil {
+			// The sandbox runner may fail after the process has started
+			// (chdir to a vanished workspace, an unappliable profile, an
+			// exec the helper could not perform). Classify against the
+			// backend's own signatures and surface the distinct model-facing
+			// vocabulary, checked before the plain exit status is returned.
+			if code := sandbox.ExitCode(exitErr); code != 0 && !sandbox.IsInterrupt(exitErr) {
+				if d := run.DiagnoseClassified(code); d.Class != "" {
+					if msg := d.ModelMessage(); msg != "" {
+						fmt.Fprintf(hc.Stderr, "crush: %s\n", msg)
+					}
+				}
+			}
+		}
+		return exitErr
 	}
 }
 

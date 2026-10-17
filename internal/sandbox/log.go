@@ -20,3 +20,9 @@ func LogDenial(d Denial) {
 		"protected", d.Protected,
 	)
 }
+
+// slogInfo logs at info level. A tiny indirection so callers above do not each
+// import slog.
+func slogInfo(msg string, args ...any) {
+	slog.Info(msg, args...)
+}
