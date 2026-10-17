@@ -169,3 +169,8 @@ func TestApproval_HookAndSessionGrantsDoNotBypassBoundary(t *testing.T) {
 	require.True(t, resp.IsError)
 	require.Contains(t, resp.Content, sandbox.Marker)
 }
+
+// sandboxAttribution returns the attribution used by tool tests.
+func sandboxAttribution() *config.Attribution {
+	return &config.Attribution{TrailerStyle: config.TrailerStyleNone}
+}

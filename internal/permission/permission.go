@@ -194,6 +194,12 @@ func (s *permissionService) GrantPersistent(permission PermissionRequest) bool {
 	// lost to a Deny would still leave an auto-approve entry behind,
 	// silently flipping later denied calls to allowed.
 	return s.resolve(permission, true, false, func() {
+		// An escalation widens the sandbox for exactly one call, so it is
+		// deliberately not recorded as a session grant: "allow for session"
+		// must not turn into a standing permission to leave the sandbox.
+		if permission.Escalation {
+			return
+		}
 		s.sessionPermissions.Set(PermissionKey{
 			SessionID: permission.SessionID,
 			ToolName:  permission.ToolName,
@@ -286,10 +292,10 @@ func (s *permissionService) Request(ctx context.Context, opts CreatePermissionRe
 	}
 
 	// A session grant ("allow for session") covers the tool/action/path key.
-	// Dangerous requests are exempt from it: a single session grant must not
-	// silently approve destructive operations, so they always fall through
-	// to a fresh prompt below.
-	if !opts.Dangerous {
+	// Dangerous requests and escalation requests are exempt from it: a single
+	// session grant must not silently approve destructive operations or
+	// leaving the sandbox, so both always fall through to a fresh prompt.
+	if !opts.Dangerous && !opts.Escalation {
 		if _, ok := s.sessionPermissions.Get(PermissionKey{
 			SessionID: permission.SessionID,
 			ToolName:  permission.ToolName,

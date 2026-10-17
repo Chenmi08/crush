@@ -540,6 +540,13 @@ states that it is unsandboxed.
 still applies. Disabling the sandbox requires `--no-sandbox` (or `sandbox mode
 danger-full-access`) and prints a warning.
 
+**Escalation.** The confined tools (`bash`, `write`, `edit`, `multiedit`,
+`download`) accept `sandbox_permissions` paired with a `justification`. The
+requested mode must be strictly wider than the mode in effect, and approval
+applies to exactly one call: it is never recorded as a session grant and never
+carries to the next call. A denied escalation leaves the operation denied and
+tells the model to stop and explain rather than work around the boundary.
+
 **Project configuration.** A repository's `crushrc` or `crush.json` may add
 write denials and exclusions but may not widen the mode, add a writable root,
 or disable the sandbox. A project attempt to widen is rejected at load with the

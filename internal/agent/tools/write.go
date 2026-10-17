@@ -27,12 +27,14 @@ var writeDescription string
 type WriteParams struct {
 	FilePath string `json:"file_path" description:"The path to the file to write"`
 	Content  string `json:"content" description:"The content to write to the file"`
+	EscalationParams
 }
 
 type WritePermissionsParams struct {
 	FilePath   string `json:"file_path"`
 	OldContent string `json:"old_content,omitempty"`
 	NewContent string `json:"new_content,omitempty"`
+	EscalationParams
 }
 
 type WriteResponseMetadata struct {
@@ -53,7 +55,7 @@ func NewWriteTool(
 ) fantasy.AgentTool {
 	return fantasy.NewAgentTool(
 		WriteToolName,
-		writeDescription,
+		withSandboxNote(writeDescription),
 		func(ctx context.Context, params WriteParams, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 			if params.FilePath == "" {
 				return fantasy.NewTextErrorResponse("file_path is required"), nil
@@ -64,7 +66,20 @@ func NewWriteTool(
 				return fantasy.ToolResponse{}, fmt.Errorf("session_id is required")
 			}
 
+			escalation, err := parseEscalation(params.EscalationParams)
+			if err != nil {
+				return fantasy.NewTextErrorResponse(err.Error()), nil
+			}
+
 			filePath := filepathext.SmartJoin(workingDir, params.FilePath)
+
+			ctx, denied, err := applyEscalation(ctx, permissions, WriteToolName, escalation, call)
+			if err != nil {
+				return fantasy.ToolResponse{}, err
+			}
+			if denied != nil {
+				return *denied, nil
+			}
 
 			// The sandbox fence runs before any filesystem mutation so a
 			// refused write leaves no directory or file behind.
@@ -72,8 +87,8 @@ func NewWriteTool(
 				return resp, nil
 			}
 
-			fileInfo, err := os.Stat(filePath)
-			if err == nil {
+			fileInfo, statErr := os.Stat(filePath)
+			if statErr == nil {
 				if fileInfo.IsDir() {
 					return fantasy.NewTextErrorResponse(fmt.Sprintf("Path is a directory, not a file: %s", filePath)), nil
 				}
@@ -92,8 +107,8 @@ func NewWriteTool(
 				if readErr == nil && string(oldContent) == params.Content {
 					return fantasy.NewTextErrorResponse(fmt.Sprintf("File %s already contains the exact content. No changes made.", filePath)), nil
 				}
-			} else if !os.IsNotExist(err) {
-				return fantasy.ToolResponse{}, fmt.Errorf("error checking file: %w", err)
+			} else if !os.IsNotExist(statErr) {
+				return fantasy.ToolResponse{}, fmt.Errorf("error checking file: %w", statErr)
 			}
 
 			dir := filepath.Dir(filePath)
@@ -115,8 +130,9 @@ func NewWriteTool(
 				strings.TrimPrefix(filePath, workingDir),
 			)
 
-			p, err := permissions.Request(
+			p, err := requestPermission(
 				ctx,
+				permissions,
 				sandboxedRequest(ctx, permission.CreatePermissionRequest{
 					SessionID:   sessionID,
 					Path:        fsext.PathOrPrefix(filePath, workingDir),

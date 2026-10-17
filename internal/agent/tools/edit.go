@@ -27,12 +27,14 @@ type EditParams struct {
 	OldString  string `json:"old_string" description:"The text to replace"`
 	NewString  string `json:"new_string" description:"The text to replace it with"`
 	ReplaceAll bool   `json:"replace_all,omitempty" description:"Replace all occurrences of old_string (default false)"`
+	EscalationParams
 }
 
 type EditPermissionsParams struct {
 	FilePath   string `json:"file_path"`
 	OldContent string `json:"old_content,omitempty"`
 	NewContent string `json:"new_content,omitempty"`
+	EscalationParams
 }
 
 type EditResponseMetadata struct {
@@ -66,13 +68,26 @@ func NewEditTool(
 ) fantasy.AgentTool {
 	return fantasy.NewAgentTool(
 		EditToolName,
-		editDescription,
+		withSandboxNote(editDescription),
 		func(ctx context.Context, params EditParams, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 			if params.FilePath == "" {
 				return fantasy.NewTextErrorResponse("file_path is required"), nil
 			}
 
+			escalation, err := parseEscalation(params.EscalationParams)
+			if err != nil {
+				return fantasy.NewTextErrorResponse(err.Error()), nil
+			}
+
 			params.FilePath = filepathext.SmartJoin(workingDir, params.FilePath)
+
+			ctx, denied, err := applyEscalation(ctx, permissions, EditToolName, escalation, call)
+			if err != nil {
+				return fantasy.ToolResponse{}, err
+			}
+			if denied != nil {
+				return *denied, nil
+			}
 
 			// Refuse an out-of-policy write before any branch can create a
 			// parent directory, so a denied call leaves no filesystem trace.
@@ -81,7 +96,6 @@ func NewEditTool(
 			}
 
 			var response fantasy.ToolResponse
-			var err error
 
 			editCtx := editContext{
 				ctx:         ctx,
@@ -145,8 +159,9 @@ func createNewFile(edit editContext, filePath, content string, call fantasy.Tool
 		content,
 		strings.TrimPrefix(filePath, edit.workingDir),
 	)
-	p, err := edit.permissions.Request(
+	p, err := requestPermission(
 		edit.ctx,
+		edit.permissions,
 		sandboxedRequest(edit.ctx, permission.CreatePermissionRequest{
 			SessionID:   sessionID,
 			Path:        fsext.PathOrPrefix(filePath, edit.workingDir),
@@ -345,8 +360,9 @@ func deleteContent(edit editContext, filePath, oldString string, replaceAll bool
 		strings.TrimPrefix(filePath, edit.workingDir),
 	)
 
-	p, err := edit.permissions.Request(
+	p, err := requestPermission(
 		edit.ctx,
+		edit.permissions,
 		sandboxedRequest(edit.ctx, permission.CreatePermissionRequest{
 			SessionID:   sessionID,
 			Path:        fsext.PathOrPrefix(filePath, edit.workingDir),
@@ -418,8 +434,9 @@ func replaceContent(edit editContext, filePath, oldString, newString string, rep
 		strings.TrimPrefix(filePath, edit.workingDir),
 	)
 
-	p, err := edit.permissions.Request(
+	p, err := requestPermission(
 		edit.ctx,
+		edit.permissions,
 		sandboxedRequest(edit.ctx, permission.CreatePermissionRequest{
 			SessionID:   sessionID,
 			Path:        fsext.PathOrPrefix(filePath, edit.workingDir),

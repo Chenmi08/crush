@@ -22,12 +22,14 @@ type DownloadParams struct {
 	URL      string `json:"url" description:"The URL to download from"`
 	FilePath string `json:"file_path" description:"The local file path where the downloaded content should be saved"`
 	Timeout  int    `json:"timeout,omitempty" description:"Optional timeout in seconds (max 600)"`
+	EscalationParams
 }
 
 type DownloadPermissionsParams struct {
 	URL      string `json:"url"`
 	FilePath string `json:"file_path"`
 	Timeout  int    `json:"timeout,omitempty"`
+	EscalationParams
 }
 
 const DownloadToolName = "download"
@@ -64,7 +66,7 @@ func NewDownloadTool(permissions permission.Service, workingDir string, client *
 	}
 	return fantasy.NewParallelAgentTool(
 		DownloadToolName,
-		downloadDescription(),
+		withSandboxNote(downloadDescription()),
 		func(ctx context.Context, params DownloadParams, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 			if params.URL == "" {
 				return fantasy.NewTextErrorResponse("URL parameter is required"), nil
@@ -78,7 +80,20 @@ func NewDownloadTool(permissions permission.Service, workingDir string, client *
 				return fantasy.NewTextErrorResponse("URL must start with http:// or https://"), nil
 			}
 
+			escalation, err := parseEscalation(params.EscalationParams)
+			if err != nil {
+				return fantasy.NewTextErrorResponse(err.Error()), nil
+			}
+
 			filePath := filepathext.SmartJoin(workingDir, params.FilePath)
+
+			ctx, denied, err := applyEscalation(ctx, permissions, DownloadToolName, escalation, call)
+			if err != nil {
+				return fantasy.ToolResponse{}, err
+			}
+			if denied != nil {
+				return *denied, nil
+			}
 
 			// Refuse an out-of-policy write before the download starts, so a
 			// denied call does not fetch anything or create directories.
@@ -94,8 +109,9 @@ func NewDownloadTool(permissions permission.Service, workingDir string, client *
 				return fantasy.ToolResponse{}, fmt.Errorf("session ID is required for downloading files")
 			}
 
-			p, err := permissions.Request(
+			p, err := requestPermission(
 				ctx,
+				permissions,
 				sandboxedRequest(ctx, permission.CreatePermissionRequest{
 					SessionID:   sessionID,
 					Path:        filePath,

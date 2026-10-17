@@ -65,7 +65,7 @@ func checkSandboxWrite(ctx context.Context, toolName, path string) fantasy.ToolR
 	d.Tool = toolName
 	d.EscalationHint = true
 	sandbox.LogDenial(d)
-	resp := fantasy.NewTextErrorResponse(d.Error())
+	resp := fantasy.NewTextErrorResponse(escalationDenialHint(d))
 	// A policy denial is a hard stop for this call: retrying with another
 	// tool cannot succeed because the boundary is shared.
 	resp.StopTurn = true
@@ -145,4 +145,36 @@ func (c commandPolicy) SandboxState() (sandboxed bool, mode string) {
 		return false, ""
 	}
 	return c.Sandboxed, string(c.Policy.Mode)
+}
+
+// escalationApprovalKey marks a context whose tool call was approved to leave
+// the sandbox. It carries the tool call ID so the approval cannot leak to
+// another call.
+type escalationApprovalKey struct{}
+
+// withEscalationApproval records that this exact tool call was approved to
+// widen the sandbox.
+func withEscalationApproval(ctx context.Context, toolCallID string) context.Context {
+	return context.WithValue(ctx, escalationApprovalKey{}, toolCallID)
+}
+
+// escalationApproved reports whether this exact tool call carries an
+// escalation approval.
+func escalationApproved(ctx context.Context, toolCallID string) bool {
+	if toolCallID == "" {
+		return false
+	}
+	approved, _ := ctx.Value(escalationApprovalKey{}).(string)
+	return approved == toolCallID
+}
+
+// requestPermission asks the permission service for approval, unless this
+// exact call already obtained one by escalating the sandbox. The escalation
+// prompt is the approval for the operation; asking twice would be noise and
+// would let a second prompt silently reverse a user's decision.
+func requestPermission(ctx context.Context, permissions permission.Service, req permission.CreatePermissionRequest) (bool, error) {
+	if escalationApproved(ctx, req.ToolCallID) {
+		return true, nil
+	}
+	return permissions.Request(ctx, req)
 }

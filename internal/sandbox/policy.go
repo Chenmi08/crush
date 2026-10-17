@@ -135,7 +135,7 @@ func (d Denial) Error() string {
 		fmt.Fprintf(&b, " remedy=%s", d.Remedy)
 	}
 	if d.EscalationHint {
-		b.WriteString(" hint=retry with sandbox_permissions and a justification to request this for one call")
+		b.WriteString(" hint=sandbox escalation is available: retry with sandbox_permissions and a justification to request this mode for one call")
 	}
 	return b.String()
 }

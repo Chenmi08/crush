@@ -28,12 +28,14 @@ type MultiEditOperation struct {
 type MultiEditParams struct {
 	FilePath string               `json:"file_path" description:"The absolute path to the file to modify"`
 	Edits    []MultiEditOperation `json:"edits" description:"Array of edit operations to perform sequentially on the file"`
+	EscalationParams
 }
 
 type MultiEditPermissionsParams struct {
 	FilePath   string `json:"file_path"`
 	OldContent string `json:"old_content,omitempty"`
 	NewContent string `json:"new_content,omitempty"`
+	EscalationParams
 }
 
 type FailedEdit struct {
@@ -66,7 +68,7 @@ func NewMultiEditTool(
 ) fantasy.AgentTool {
 	return fantasy.NewAgentTool(
 		MultiEditToolName,
-		multieditDescription,
+		withSandboxNote(multieditDescription),
 		func(ctx context.Context, params MultiEditParams, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 			if params.FilePath == "" {
 				return fantasy.NewTextErrorResponse("file_path is required"), nil
@@ -76,7 +78,20 @@ func NewMultiEditTool(
 				return fantasy.NewTextErrorResponse("at least one edit operation is required"), nil
 			}
 
+			escalation, err := parseEscalation(params.EscalationParams)
+			if err != nil {
+				return fantasy.NewTextErrorResponse(err.Error()), nil
+			}
+
 			params.FilePath = filepathext.SmartJoin(workingDir, params.FilePath)
+
+			ctx, denied, err := applyEscalation(ctx, permissions, MultiEditToolName, escalation, call)
+			if err != nil {
+				return fantasy.ToolResponse{}, err
+			}
+			if denied != nil {
+				return *denied, nil
+			}
 
 			// Validate all edits before applying any
 			if err := validateEdits(params.Edits); err != nil {
@@ -90,7 +105,6 @@ func NewMultiEditTool(
 			}
 
 			var response fantasy.ToolResponse
-			var err error
 
 			editCtx := editContext{
 				ctx:         ctx,
@@ -197,7 +211,7 @@ func processMultiEditWithCreation(edit editContext, params MultiEditParams, call
 	} else {
 		description = fmt.Sprintf("Create file %s with %d edits", params.FilePath, editsApplied)
 	}
-	p, err := edit.permissions.Request(edit.ctx, sandboxedRequest(edit.ctx, permission.CreatePermissionRequest{
+	p, err := requestPermission(edit.ctx, edit.permissions, sandboxedRequest(edit.ctx, permission.CreatePermissionRequest{
 		SessionID:   sessionID,
 		Path:        fsext.PathOrPrefix(params.FilePath, edit.workingDir),
 		ToolCallID:  call.ID,
@@ -302,7 +316,7 @@ func processMultiEditExistingFile(edit editContext, params MultiEditParams, call
 	} else {
 		description = fmt.Sprintf("Apply %d edits to file %s", editsApplied, params.FilePath)
 	}
-	p, err := edit.permissions.Request(edit.ctx, sandboxedRequest(edit.ctx, permission.CreatePermissionRequest{
+	p, err := requestPermission(edit.ctx, edit.permissions, sandboxedRequest(edit.ctx, permission.CreatePermissionRequest{
 		SessionID:   sessionID,
 		Path:        fsext.PathOrPrefix(params.FilePath, edit.workingDir),
 		ToolCallID:  call.ID,

@@ -28,6 +28,7 @@ type BashParams struct {
 	WorkingDir          string `json:"working_dir,omitempty" description:"The working directory to execute the command in (defaults to current directory)"`
 	RunInBackground     bool   `json:"run_in_background,omitempty" description:"Set to true (boolean) to run this command in the background. Use job_output to read the output later."`
 	AutoBackgroundAfter int    `json:"auto_background_after,omitempty" description:"Seconds to wait before automatically moving the command to a background job (default: 60)"`
+	EscalationParams
 }
 
 type BashPermissionsParams struct {
@@ -36,6 +37,7 @@ type BashPermissionsParams struct {
 	WorkingDir          string `json:"working_dir"`
 	RunInBackground     bool   `json:"run_in_background"`
 	AutoBackgroundAfter int    `json:"auto_background_after"`
+	EscalationParams
 }
 
 type BashResponseMetadata struct {
@@ -223,10 +225,17 @@ func blockFuncs() []shell.BlockFunc {
 func NewBashTool(permissions permission.Service, workingDir, spillDir string, attribution *config.Attribution, modelID string, dangerousCommands []string) fantasy.AgentTool {
 	return fantasy.NewAgentTool(
 		BashToolName,
-		string(bashDescription(attribution, modelID)),
+		withSandboxNote(bashDescription(attribution, modelID)),
 		func(ctx context.Context, params BashParams, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 			if params.Command == "" {
 				return fantasy.NewTextErrorResponse("missing command"), nil
+			}
+
+			// Validate the escalation pair before anything else: one without
+			// the other is malformed and must be rejected before execution.
+			escalation, err := parseEscalation(params.EscalationParams)
+			if err != nil {
+				return fantasy.NewTextErrorResponse(err.Error()), nil
 			}
 
 			// Determine working directory
@@ -249,6 +258,23 @@ func NewBashTool(permissions permission.Service, workingDir, spillDir string, at
 				return fantasy.ToolResponse{}, fmt.Errorf("session ID is required for executing shell command")
 			}
 
+			// A validated escalation asks for a wider mode for this call
+			// before the policy for the command is resolved.
+			sessionPolicy := SandboxPolicyFromContext(ctx)
+			escalatedPolicy, escResp, err := resolveEscalation(ctx, permissions, BashToolName, escalation, sessionPolicy, call)
+			if err != nil {
+				return fantasy.ToolResponse{}, err
+			}
+			if escResp.Content != "" || escResp.IsError {
+				return escResp, nil
+			}
+			ctx = WithSandboxPolicy(ctx, escalatedPolicy)
+			// An approved escalation is also the approval for the command
+			// itself; asking again would let a second prompt reverse it.
+			if escalation != nil {
+				ctx = withEscalationApproval(ctx, call.ID)
+			}
+
 			// Decide which policy applies to this command before asking for
 			// approval: a confined command is auto-approved, an excluded or
 			// unconfined one keeps the normal approval flow.
@@ -261,8 +287,9 @@ func NewBashTool(permissions permission.Service, workingDir, spillDir string, at
 				if !sandboxed && reason != "" {
 					description = fmt.Sprintf("Execute command (unsandboxed: %s): %s", reason, params.Command)
 				}
-				p, err := permissions.Request(
+				p, err := requestPermission(
 					ctx,
+					permissions,
 					permission.CreatePermissionRequest{
 						SessionID:   sessionID,
 						Path:        execWorkingDir,
