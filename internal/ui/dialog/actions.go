@@ -47,13 +47,19 @@ type ActionSelectModel struct {
 
 // Messages for commands
 type (
-	ActionNewSession              struct{}
-	ActionToggleHelp              struct{}
-	ActionToggleCompactMode       struct{}
-	ActionToggleThinking          struct{}
-	ActionTogglePills             struct{}
-	ActionExternalEditor          struct{}
-	ActionToggleYoloMode          struct{}
+	ActionNewSession        struct{}
+	ActionToggleHelp        struct{}
+	ActionToggleCompactMode struct{}
+	ActionToggleThinking    struct{}
+	ActionTogglePills       struct{}
+	ActionExternalEditor    struct{}
+	ActionToggleYoloMode    struct{}
+
+	// ActionSetSandboxMode requests a sandbox mode switch. The UI resolves
+	// approval for a widening before the workspace call.
+	ActionSetSandboxMode struct {
+		Mode string
+	}
 	ActionToggleNotifications     struct{}
 	ActionSelectNotificationStyle struct {
 		Style string

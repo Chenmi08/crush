@@ -171,6 +171,8 @@ type SessionAgent interface {
 	Run(context.Context, SessionAgentCall) (*fantasy.AgentResult, error)
 	BeginAccepted(sessionID string) *AcceptedRun
 	SetModels(large Model, small Model)
+	// SetSandboxPolicy swaps the sandbox policy carried into every tool call.
+	SetSandboxPolicy(policy *sandbox.Policy, exclusions []string)
 	SetTools(tools []fantasy.AgentTool)
 	SetSystemPrompt(systemPrompt string)
 	Cancel(sessionID string)
@@ -324,6 +326,14 @@ func NewSessionAgent(
 		acceptedRuns:         csync.NewMap[string, int](),
 		cancelMark:           csync.NewMap[string, uint64](),
 	}
+}
+
+// SetSandboxPolicy swaps the sandbox policy and exclusions carried into every
+// subsequent tool call. It is safe to call concurrently with runs: the fields
+// are read under the same value semantics as the rest of the agent.
+func (a *sessionAgent) SetSandboxPolicy(policy *sandbox.Policy, exclusions []string) {
+	a.sandboxPolicy = policy
+	a.sandboxExclusions = exclusions
 }
 
 // AcceptedRun owns exactly one accept reservation taken by

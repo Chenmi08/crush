@@ -15,8 +15,10 @@ import (
 	"github.com/charmbracelet/crush/internal/agent"
 	"github.com/charmbracelet/crush/internal/app"
 	"github.com/charmbracelet/crush/internal/backend"
+	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/message"
 	"github.com/charmbracelet/crush/internal/proto"
+	"github.com/charmbracelet/crush/internal/sandbox"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
@@ -41,6 +43,12 @@ type runCoordinator struct {
 	lastMainAgentSet atomic.Value
 	busy             bool
 }
+
+func (c *runCoordinator) SetSandboxMode(sandbox.Mode, bool) error { return nil }
+
+func (c *runCoordinator) SandboxMode() sandbox.Mode { return sandbox.DefaultMode }
+
+func (c *runCoordinator) SandboxStatus() config.SandboxRuntime { return config.SandboxRuntime{} }
 
 func newRunCoordinator(returnFn func(ctx context.Context) error) *runCoordinator {
 	return &runCoordinator{

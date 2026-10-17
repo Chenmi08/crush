@@ -41,6 +41,7 @@ import (
 	"github.com/charmbracelet/crush/internal/permission"
 	"github.com/charmbracelet/crush/internal/pubsub"
 	"github.com/charmbracelet/crush/internal/question"
+	"github.com/charmbracelet/crush/internal/sandbox"
 	"github.com/charmbracelet/crush/internal/session"
 	"github.com/charmbracelet/crush/internal/skills"
 	"golang.org/x/sync/errgroup"
@@ -122,6 +123,14 @@ func isOpenCodeResponsesModel(modelID string) bool {
 
 type Coordinator interface {
 	SetMainAgent(agentName string) error
+	// SetSandboxMode switches the workspace's sandbox policy at runtime.
+	// Tightening applies immediately; widening requires approved=true, which
+	// the caller grants only after the user confirmed.
+	SetSandboxMode(mode sandbox.Mode, approved bool) error
+	// SandboxMode returns the mode currently in effect.
+	SandboxMode() sandbox.Mode
+	// SandboxStatus returns the resolved policy and enforcement facts.
+	SandboxStatus() config.SandboxRuntime
 	Run(ctx context.Context, sessionID, prompt string, attachments ...message.Attachment) (*fantasy.AgentResult, error)
 	// RunAccepted runs a call that was already accepted via
 	// BeginAccepted on the fire-and-forget dispatch path. The handle is

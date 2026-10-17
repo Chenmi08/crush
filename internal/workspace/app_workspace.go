@@ -21,6 +21,7 @@ import (
 	"github.com/charmbracelet/crush/internal/permission"
 	"github.com/charmbracelet/crush/internal/proto"
 	"github.com/charmbracelet/crush/internal/question"
+	"github.com/charmbracelet/crush/internal/sandbox"
 	"github.com/charmbracelet/crush/internal/session"
 	"github.com/charmbracelet/crush/internal/shell"
 	"github.com/charmbracelet/crush/internal/skills"
@@ -599,3 +600,28 @@ func (w *AppWorkspace) Store() *config.ConfigStore {
 
 // Compile-time check that AppWorkspace implements Workspace.
 var _ Workspace = (*AppWorkspace)(nil)
+
+// -- Sandbox --
+
+// SandboxMode returns the sandbox mode currently in effect.
+func (w *AppWorkspace) SandboxMode() string {
+	if w.app.AgentCoordinator == nil {
+		return ""
+	}
+	return string(w.app.AgentCoordinator.SandboxMode())
+}
+
+// SandboxSetMode switches the sandbox mode for this workspace.
+func (w *AppWorkspace) SandboxSetMode(mode string, approved bool) (string, error) {
+	if w.app.AgentCoordinator == nil {
+		return "", errors.New("agent coordinator not initialized")
+	}
+	parsed, err := sandbox.ValidateMode(mode)
+	if err != nil {
+		return "", err
+	}
+	if err := w.app.AgentCoordinator.SetSandboxMode(parsed, approved); err != nil {
+		return "", err
+	}
+	return string(w.app.AgentCoordinator.SandboxMode()), nil
+}

@@ -43,6 +43,7 @@ import (
 // codebase, so this stub reproduces the documented black-box outcome by
 // controlling run timing directly through blockEntered / release.
 type scriptedCoordinator struct {
+	sandboxFake
 	app *app.App
 
 	// blockEntered, when non-nil, is signaled (once) right after a run

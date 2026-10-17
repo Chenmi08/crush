@@ -836,3 +836,30 @@ func jsonError(w http.ResponseWriter, status int, message string) {
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(proto.Error{Message: message})
 }
+
+// handleGetWorkspaceSandboxMode returns the sandbox mode in effect.
+func (c *controllerV1) handleGetWorkspaceSandboxMode(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	mode, err := c.backend.GetSandboxMode(id)
+	if err != nil {
+		c.handleError(w, r, err)
+		return
+	}
+	jsonEncode(w, proto.SandboxModeRequest{Mode: mode})
+}
+
+// handlePostWorkspaceSandboxMode switches a workspace's sandbox mode.
+func (c *controllerV1) handlePostWorkspaceSandboxMode(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var req proto.SandboxModeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		c.handleError(w, r, err)
+		return
+	}
+	resolved, err := c.backend.SetSandboxMode(id, req.Mode, req.Approved)
+	if err != nil {
+		c.handleError(w, r, err)
+		return
+	}
+	jsonEncode(w, proto.SandboxModeRequest{Mode: resolved, Approved: req.Approved})
+}

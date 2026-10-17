@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/crush/internal/app"
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/message"
+	"github.com/charmbracelet/crush/internal/sandbox"
 	"github.com/charmbracelet/crush/internal/session"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -142,6 +143,12 @@ type recordingCoordinator struct {
 	runs     chan [2]string // {sessionID, prompt}
 	channels chan string    // per-turn channel provenance
 }
+
+func (c *recordingCoordinator) SetSandboxMode(sandbox.Mode, bool) error { return nil }
+
+func (c *recordingCoordinator) SandboxMode() sandbox.Mode { return sandbox.DefaultMode }
+
+func (c *recordingCoordinator) SandboxStatus() config.SandboxRuntime { return config.SandboxRuntime{} }
 
 func newRecordingCoordinator() *recordingCoordinator {
 	return &recordingCoordinator{runs: make(chan [2]string, 8), channels: make(chan string, 8)}

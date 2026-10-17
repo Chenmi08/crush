@@ -164,3 +164,20 @@ func TestSandboxDenialMsg_Notice(t *testing.T) {
 	}}.String()
 	require.Contains(t, protected, "protected path")
 }
+
+// TestSandboxSwitch_ConfigSnapshot pins the badge update path: after a mode
+// switch the status badge reflects the new mode even before the next config
+// snapshot arrives.
+func TestSandboxSwitch_ConfigSnapshot(t *testing.T) {
+	t.Parallel()
+	st := newSandboxTestStatus(t)
+
+	cfg := &config.Config{Permissions: &config.Permissions{Sandbox: &config.Sandbox{Mode: "read-only"}}}
+	st.SetSandboxFromConfig(cfg)
+	require.Contains(t, st.SandboxBadge(), "SANDBOX READ-ONLY")
+
+	// The switch handler builds a snapshot with the resolved mode.
+	after := &config.Config{Permissions: &config.Permissions{Sandbox: &config.Sandbox{Mode: "workspace-write"}}}
+	st.SetSandboxFromConfig(after)
+	require.Contains(t, st.SandboxBadge(), "SANDBOX WORKSPACE-WRITE")
+}

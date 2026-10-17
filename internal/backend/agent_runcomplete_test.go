@@ -9,8 +9,10 @@ import (
 	"charm.land/fantasy"
 	"github.com/charmbracelet/crush/internal/agent"
 	"github.com/charmbracelet/crush/internal/app"
+	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/message"
 	"github.com/charmbracelet/crush/internal/proto"
+	"github.com/charmbracelet/crush/internal/sandbox"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
@@ -24,6 +26,12 @@ type errorCoordinator struct {
 	err           error
 	markPublished bool
 }
+
+func (c *errorCoordinator) SetSandboxMode(sandbox.Mode, bool) error { return nil }
+
+func (c *errorCoordinator) SandboxMode() sandbox.Mode { return sandbox.DefaultMode }
+
+func (c *errorCoordinator) SandboxStatus() config.SandboxRuntime { return config.SandboxRuntime{} }
 
 func (c *errorCoordinator) Run(ctx context.Context, sessionID, prompt string, attachments ...message.Attachment) (*fantasy.AgentResult, error) {
 	return nil, c.err

@@ -25,6 +25,7 @@ import (
 // the type satisfies the interface without dragging in the full
 // coordinator dependency graph.
 type stubCoordinator struct {
+	sandboxFake
 	busy map[string]bool
 }
 

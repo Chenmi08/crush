@@ -14,15 +14,21 @@ import (
 	"charm.land/fantasy/providers/openaicompat"
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/discover"
+	"github.com/charmbracelet/crush/internal/sandbox"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // mockSessionAgent is a minimal mock for the SessionAgent interface.
 type mockSessionAgent struct {
-	model     Model
-	runFunc   func(ctx context.Context, call SessionAgentCall) (*fantasy.AgentResult, error)
-	cancelled []string
+	model         Model
+	runFunc       func(ctx context.Context, call SessionAgentCall) (*fantasy.AgentResult, error)
+	cancelled     []string
+	sandboxPolicy *sandbox.Policy
+}
+
+func (m *mockSessionAgent) SetSandboxPolicy(policy *sandbox.Policy, _ []string) {
+	m.sandboxPolicy = policy
 }
 
 func (m *mockSessionAgent) Run(ctx context.Context, call SessionAgentCall) (*fantasy.AgentResult, error) {

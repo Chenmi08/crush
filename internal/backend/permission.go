@@ -3,6 +3,7 @@ package backend
 import (
 	"github.com/charmbracelet/crush/internal/permission"
 	"github.com/charmbracelet/crush/internal/proto"
+	"github.com/charmbracelet/crush/internal/sandbox"
 )
 
 // GrantPermission grants, denies, or persistently grants a permission
@@ -57,4 +58,38 @@ func (b *Backend) GetPermissionsSkip(workspaceID string) (bool, error) {
 	}
 
 	return ws.Permissions.SkipRequests(), nil
+}
+
+// GetSandboxMode returns the sandbox mode currently in effect for a
+// workspace.
+func (b *Backend) GetSandboxMode(workspaceID string) (string, error) {
+	ws, err := b.GetWorkspace(workspaceID)
+	if err != nil {
+		return "", err
+	}
+	if ws.App == nil || ws.App.AgentCoordinator == nil {
+		return "", ErrAgentNotInitialized
+	}
+	return string(ws.App.AgentCoordinator.SandboxMode()), nil
+}
+
+// SetSandboxMode switches a workspace's sandbox mode. Tightening applies
+// immediately; widening requires the user's confirmation, which the caller
+// conveys through approved.
+func (b *Backend) SetSandboxMode(workspaceID, mode string, approved bool) (string, error) {
+	ws, err := b.GetWorkspace(workspaceID)
+	if err != nil {
+		return "", err
+	}
+	if ws.App == nil || ws.App.AgentCoordinator == nil {
+		return "", ErrAgentNotInitialized
+	}
+	parsed, err := sandbox.ValidateMode(mode)
+	if err != nil {
+		return "", err
+	}
+	if err := ws.App.AgentCoordinator.SetSandboxMode(parsed, approved); err != nil {
+		return "", err
+	}
+	return string(ws.App.AgentCoordinator.SandboxMode()), nil
 }

@@ -1013,3 +1013,38 @@ func (c *Client) LSPStopAll(ctx context.Context, id string) error {
 	}
 	return nil
 }
+
+// GetSandboxMode retrieves the sandbox mode currently in effect for a
+// workspace.
+func (c *Client) GetSandboxMode(ctx context.Context, id string) (string, error) {
+	rsp, err := c.get(ctx, fmt.Sprintf("/workspaces/%s/sandbox/mode", id), nil, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to get sandbox mode: %w", err)
+	}
+	defer rsp.Body.Close()
+	if rsp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("failed to get sandbox mode: status code %d", rsp.StatusCode)
+	}
+	var mode proto.SandboxModeRequest
+	if err := json.NewDecoder(rsp.Body).Decode(&mode); err != nil {
+		return "", fmt.Errorf("failed to decode sandbox mode: %w", err)
+	}
+	return mode.Mode, nil
+}
+
+// SetSandboxMode switches a workspace's sandbox mode.
+func (c *Client) SetSandboxMode(ctx context.Context, id, mode string, approved bool) (string, error) {
+	rsp, err := c.post(ctx, fmt.Sprintf("/workspaces/%s/sandbox/mode", id), nil, jsonBody(proto.SandboxModeRequest{Mode: mode, Approved: approved}), http.Header{"Content-Type": []string{"application/json"}})
+	if err != nil {
+		return "", fmt.Errorf("failed to set sandbox mode: %w", err)
+	}
+	defer rsp.Body.Close()
+	if rsp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("failed to set sandbox mode: status code %d", rsp.StatusCode)
+	}
+	var resolved proto.SandboxModeRequest
+	if err := json.NewDecoder(rsp.Body).Decode(&resolved); err != nil {
+		return "", fmt.Errorf("failed to decode sandbox mode: %w", err)
+	}
+	return resolved.Mode, nil
+}

@@ -435,6 +435,22 @@ func (w *ClientWorkspace) PermissionSetSkipRequests(skip bool) {
 	_ = w.client.SetPermissionsSkipRequests(context.Background(), w.workspaceID(), skip)
 }
 
+// -- Sandbox --
+
+// SandboxMode returns the sandbox mode currently in effect on the server.
+func (w *ClientWorkspace) SandboxMode() string {
+	mode, err := w.client.GetSandboxMode(context.Background(), w.workspaceID())
+	if err != nil {
+		return ""
+	}
+	return mode
+}
+
+// SandboxSetMode switches the sandbox mode on the server.
+func (w *ClientWorkspace) SandboxSetMode(mode string, approved bool) (string, error) {
+	return w.client.SetSandboxMode(context.Background(), w.workspaceID(), mode, approved)
+}
+
 // -- Questions --
 
 // QuestionAnswer submits answers for a question via the client SDK.
@@ -1531,3 +1547,6 @@ func protoQuestionsToDomain(qs []proto.QuestionItem) []question.Question {
 	}
 	return out
 }
+
+// Compile-time interface check.
+var _ Workspace = (*ClientWorkspace)(nil)

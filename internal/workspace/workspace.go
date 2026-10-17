@@ -189,6 +189,14 @@ type Workspace interface {
 	PermissionSkipRequests() bool
 	PermissionSetSkipRequests(skip bool)
 
+	// SandboxMode returns the sandbox mode currently in effect.
+	SandboxMode() string
+	// SandboxSetMode switches the sandbox mode for the workspace. Tightening
+	// applies immediately; widening requires approved=true, which the caller
+	// grants only after the user confirmed. It returns the resolved mode or
+	// an error naming why the switch was refused.
+	SandboxSetMode(mode string, approved bool) (string, error)
+
 	// Questions
 	//
 	// QuestionAnswer resolves the pending question with responses.

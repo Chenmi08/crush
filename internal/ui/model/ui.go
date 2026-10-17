@@ -44,6 +44,7 @@ import (
 	"github.com/charmbracelet/crush/internal/permission"
 	"github.com/charmbracelet/crush/internal/pubsub"
 	"github.com/charmbracelet/crush/internal/question"
+	"github.com/charmbracelet/crush/internal/sandbox"
 	"github.com/charmbracelet/crush/internal/session"
 	"github.com/charmbracelet/crush/internal/skills"
 	"github.com/charmbracelet/crush/internal/stringext"
@@ -286,6 +287,11 @@ type UI struct {
 	// modeSwitching is true while the async agent-model update kicked off
 	// by setInputMode is still in flight; sending is blocked meanwhile.
 	modeSwitching bool
+
+	// sandboxSwitchPending holds the mode chosen from the commands dialog
+	// while the "Leave Sandbox?" confirmation is open. Empty means nothing
+	// is pending.
+	sandboxSwitchPending string
 
 	// cycleYolo is true while YOLO was enabled by the Shift+Tab input-mode
 	// cycle, which is the only case where the cycle may disable it again.
@@ -2563,6 +2569,9 @@ func (m *UI) handleDialogMsg(msg tea.Msg) tea.Cmd {
 		}
 
 	// Command dialog messages.
+	case dialog.ActionSetSandboxMode:
+		cmds = append(cmds, m.handleSetSandboxMode(msg.Mode)...)
+		m.dialog.CloseDialog(dialog.CommandsID)
 	case dialog.ActionToggleYoloMode:
 		if m.mode == uiInputModePlan {
 			// Same as Ctrl+Y in plan mode: YOLO only exists as YOLO
@@ -2953,6 +2962,20 @@ func (m *UI) handleDialogMsg(msg tea.Msg) tea.Cmd {
 		m.dialog.CloseDialog(dialog.ReasoningID)
 	case dialog.ActionPermissionResponse:
 		m.dialog.CloseDialog(dialog.PermissionsID)
+		// A pending sandbox switch reuses the escalation dialog; its allow
+		// applies the switch and its deny changes nothing. Send neither to
+		// the permission service: this confirmation is not a tool approval
+		// and must never be recorded as a grant.
+		if m.sandboxSwitchPending != "" {
+			mode := m.sandboxSwitchPending
+			m.sandboxSwitchPending = ""
+			if msg.Action == dialog.PermissionAllow {
+				cmds = append(cmds, m.applySandboxMode(mode, true)...)
+			} else {
+				cmds = append(cmds, util.CmdHandler(util.NewInfoMsg("Sandbox mode unchanged")))
+			}
+			break
+		}
 		switch msg.Action {
 		case dialog.PermissionAllow:
 			m.com.Workspace.PermissionGrant(msg.Permission)
@@ -7082,4 +7105,71 @@ func renderLogo(t *styles.Styles, compact, hyper bool, width int) string {
 		Width:        width,
 		Hyper:        hyper,
 	})
+}
+
+// sandboxEscalationPending carries the mode a widening switch will apply once
+// the user confirms, keyed by the permission request the confirmation reuses.
+type sandboxEscalationPending struct{ mode string }
+
+// handleSetSandboxMode applies a sandbox mode chosen from the commands dialog.
+// Tightening applies immediately with a status note; widening opens the same
+// "Leave Sandbox?" confirmation dialog an escalation uses, so leaving the
+// boundary always looks and feels the same no matter where it was requested.
+func (m *UI) handleSetSandboxMode(mode string) []tea.Cmd {
+	current := m.com.Workspace.SandboxMode()
+	if mode == current || current == "" {
+		return []tea.Cmd{util.CmdHandler(util.NewInfoMsg("Sandbox mode is already " + mode))}
+	}
+
+	widening := sandbox.IsWiderMode(sandbox.Mode(mode), sandbox.Mode(current))
+	if widening {
+		// Reuse the escalation confirmation: a distinct title, a one-shot
+		// approval, and a deny that changes nothing.
+		perm := permission.PermissionRequest{
+			ID:             "sandbox-switch-" + mode,
+			ToolName:       "sandbox",
+			Action:         "escalate",
+			Description:    fmt.Sprintf("Switch the sandbox from %s to %s for the rest of this session", current, mode),
+			Escalation:     true,
+			EscalationMode: mode,
+			Sandboxed:      false,
+		}
+		m.sandboxSwitchPending = mode
+		return []tea.Cmd{m.openPermissionsDialog(perm)}
+	}
+
+	return m.applySandboxMode(mode, true)
+}
+
+// applySandboxMode calls the workspace and reports the outcome in the status
+// line. The config snapshot is invalidated so the persistent badge updates.
+func (m *UI) applySandboxMode(mode string, approved bool) []tea.Cmd {
+	resolved, err := m.com.Workspace.SandboxSetMode(mode, approved)
+	if err != nil {
+		return []tea.Cmd{util.CmdHandler(util.NewErrorMsg(err))}
+	}
+	m.status.SetSandboxFromConfig(m.configWithSandboxMode(resolved))
+	return []tea.Cmd{util.CmdHandler(util.NewInfoMsg("Sandbox mode set to " + resolved))}
+}
+
+// configWithSandboxMode returns the current config with the mode overridden,
+// for the status badge until the next config snapshot arrives.
+func (m *UI) configWithSandboxMode(mode string) *config.Config {
+	cfg := m.com.Config()
+	if cfg == nil {
+		return &config.Config{Permissions: &config.Permissions{Sandbox: &config.Sandbox{Mode: mode}}}
+	}
+	clone := *cfg
+	perms := config.Permissions{}
+	if cfg.Permissions != nil {
+		perms = *cfg.Permissions
+	}
+	box := config.Sandbox{Mode: mode}
+	if cfg.Permissions != nil && cfg.Permissions.Sandbox != nil {
+		box = *cfg.Permissions.Sandbox
+		box.Mode = mode
+	}
+	perms.Sandbox = &box
+	clone.Permissions = &perms
+	return &clone
 }

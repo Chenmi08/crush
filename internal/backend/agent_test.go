@@ -10,8 +10,10 @@ import (
 	"charm.land/fantasy"
 	"github.com/charmbracelet/crush/internal/agent"
 	"github.com/charmbracelet/crush/internal/app"
+	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/message"
 	"github.com/charmbracelet/crush/internal/proto"
+	"github.com/charmbracelet/crush/internal/sandbox"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
@@ -29,6 +31,12 @@ type blockingCoordinator struct {
 	lastMainAgentSet atomic.Value
 	busy             bool
 }
+
+func (c *blockingCoordinator) SetSandboxMode(sandbox.Mode, bool) error { return nil }
+
+func (c *blockingCoordinator) SandboxMode() sandbox.Mode { return sandbox.DefaultMode }
+
+func (c *blockingCoordinator) SandboxStatus() config.SandboxRuntime { return config.SandboxRuntime{} }
 
 func newBlockingCoordinator() *blockingCoordinator {
 	return &blockingCoordinator{

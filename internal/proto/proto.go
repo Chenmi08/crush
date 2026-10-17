@@ -267,6 +267,14 @@ type QuestionNotification struct {
 }
 
 // PermissionSkipRequest represents a request to skip permission prompts.
+// SandboxModeRequest carries a sandbox mode switch for a workspace. Approved
+// reports that the user confirmed a widening; the server refuses widening
+// without it.
+type SandboxModeRequest struct {
+	Mode     string `json:"mode"`
+	Approved bool   `json:"approved,omitempty"`
+}
+
 type PermissionSkipRequest struct {
 	Skip bool `json:"skip"`
 }
