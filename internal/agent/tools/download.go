@@ -19,17 +19,19 @@ import (
 )
 
 type DownloadParams struct {
-	URL      string `json:"url" description:"The URL to download from"`
-	FilePath string `json:"file_path" description:"The local file path where the downloaded content should be saved"`
-	Timeout  int    `json:"timeout,omitempty" description:"Optional timeout in seconds (max 600)"`
-	EscalationParams
+	URL                string `json:"url" description:"The URL to download from"`
+	FilePath           string `json:"file_path" description:"The local file path where the downloaded content should be saved"`
+	Timeout            int    `json:"timeout,omitempty" description:"Optional timeout in seconds (max 600)"`
+	SandboxPermissions string `json:"sandbox_permissions,omitempty" description:"Request a wider sandbox mode for this one call only. Requires justification. The user is asked to approve leaving the sandbox; approval never carries to another call. Accepted: read-only, workspace-write, danger-full-access"`
+	Justification      string `json:"justification,omitempty" description:"A sentence explaining why this call needs a wider sandbox mode. Required whenever sandbox_permissions is set, and ignored when it is not"`
 }
 
 type DownloadPermissionsParams struct {
-	URL      string `json:"url"`
-	FilePath string `json:"file_path"`
-	Timeout  int    `json:"timeout,omitempty"`
-	EscalationParams
+	URL                string `json:"url"`
+	FilePath           string `json:"file_path"`
+	Timeout            int    `json:"timeout,omitempty"`
+	SandboxPermissions string `json:"sandbox_permissions,omitempty"`
+	Justification      string `json:"justification,omitempty"`
 }
 
 const DownloadToolName = "download"
@@ -80,7 +82,7 @@ func NewDownloadTool(permissions permission.Service, workingDir string, client *
 				return fantasy.NewTextErrorResponse("URL must start with http:// or https://"), nil
 			}
 
-			escalation, err := parseEscalation(params.EscalationParams)
+			escalation, err := parseEscalation(params.SandboxPermissions, params.Justification)
 			if err != nil {
 				return fantasy.NewTextErrorResponse(err.Error()), nil
 			}

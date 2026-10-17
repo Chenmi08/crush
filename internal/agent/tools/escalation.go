@@ -11,19 +11,14 @@ import (
 	"github.com/charmbracelet/crush/internal/sandbox"
 )
 
-// sandboxPermissionsDescription is the parameter description shared by every
-// confined tool, so the model learns one rule. It states that the sandbox is
-// active and how to escalate.
+// The escalation parameter descriptions below are the canonical wording for
+// the sandbox_permissions and justification struct tags in every confined
+// tool's parameter struct. Struct tags cannot reference constants, so each
+// tool repeats these literals verbatim; keep them in sync.
 const sandboxPermissionsDescription = "Request a wider sandbox mode for this one call only. Requires justification. The user is asked to approve leaving the sandbox; approval never carries to another call. Accepted: read-only, workspace-write, danger-full-access"
 
 // justificationDescription pairs with sandbox_permissions.
 const justificationDescription = "A sentence explaining why this call needs a wider sandbox mode. Required whenever sandbox_permissions is set, and ignored when it is not"
-
-// EscalationParams are embedded in every confined tool's parameter struct.
-type EscalationParams struct {
-	SandboxPermissions string `json:"sandbox_permissions,omitempty" description:"Request a wider sandbox mode for this one call only. Requires justification. The user is asked to approve leaving the sandbox; approval never carries to another call. Accepted: read-only, workspace-write, danger-full-access"`
-	Justification      string `json:"justification,omitempty" description:"A sentence explaining why this call needs a wider sandbox mode. Required whenever sandbox_permissions is set, and ignored when it is not"`
-}
 
 // escalationRequest is a validated single-call escalation.
 type escalationRequest struct {
@@ -31,12 +26,12 @@ type escalationRequest struct {
 	justification string
 }
 
-// parseEscalation validates the pair. Both must be present or neither: an
-// escalation without a justification, or a justification without a mode, is
-// malformed and rejected before execution.
-func parseEscalation(params EscalationParams) (*escalationRequest, error) {
-	mode := strings.TrimSpace(params.SandboxPermissions)
-	justification := strings.TrimSpace(params.Justification)
+// parseEscalation validates the sandbox_permissions/justification pair. Both
+// must be present or neither: an escalation without a justification, or a
+// justification without a mode, is malformed and rejected before execution.
+func parseEscalation(sandboxPermissions, justification string) (*escalationRequest, error) {
+	mode := strings.TrimSpace(sandboxPermissions)
+	justification = strings.TrimSpace(justification)
 
 	if mode == "" && justification == "" {
 		return nil, nil

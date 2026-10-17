@@ -28,7 +28,8 @@ type BashParams struct {
 	WorkingDir          string `json:"working_dir,omitempty" description:"The working directory to execute the command in (defaults to current directory)"`
 	RunInBackground     bool   `json:"run_in_background,omitempty" description:"Set to true (boolean) to run this command in the background. Use job_output to read the output later."`
 	AutoBackgroundAfter int    `json:"auto_background_after,omitempty" description:"Seconds to wait before automatically moving the command to a background job (default: 60)"`
-	EscalationParams
+	SandboxPermissions  string `json:"sandbox_permissions,omitempty" description:"Request a wider sandbox mode for this one call only. Requires justification. The user is asked to approve leaving the sandbox; approval never carries to another call. Accepted: read-only, workspace-write, danger-full-access"`
+	Justification       string `json:"justification,omitempty" description:"A sentence explaining why this call needs a wider sandbox mode. Required whenever sandbox_permissions is set, and ignored when it is not"`
 }
 
 type BashPermissionsParams struct {
@@ -37,7 +38,8 @@ type BashPermissionsParams struct {
 	WorkingDir          string `json:"working_dir"`
 	RunInBackground     bool   `json:"run_in_background"`
 	AutoBackgroundAfter int    `json:"auto_background_after"`
-	EscalationParams
+	SandboxPermissions  string `json:"sandbox_permissions,omitempty"`
+	Justification       string `json:"justification,omitempty"`
 }
 
 type BashResponseMetadata struct {
@@ -233,7 +235,7 @@ func NewBashTool(permissions permission.Service, workingDir, spillDir string, at
 
 			// Validate the escalation pair before anything else: one without
 			// the other is malformed and must be rejected before execution.
-			escalation, err := parseEscalation(params.EscalationParams)
+			escalation, err := parseEscalation(params.SandboxPermissions, params.Justification)
 			if err != nil {
 				return fantasy.NewTextErrorResponse(err.Error()), nil
 			}

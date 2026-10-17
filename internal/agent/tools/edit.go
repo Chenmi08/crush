@@ -23,18 +23,20 @@ import (
 )
 
 type EditParams struct {
-	FilePath   string `json:"file_path" description:"The absolute path to the file to modify"`
-	OldString  string `json:"old_string" description:"The text to replace"`
-	NewString  string `json:"new_string" description:"The text to replace it with"`
-	ReplaceAll bool   `json:"replace_all,omitempty" description:"Replace all occurrences of old_string (default false)"`
-	EscalationParams
+	FilePath           string `json:"file_path" description:"The absolute path to the file to modify"`
+	OldString          string `json:"old_string" description:"The text to replace"`
+	NewString          string `json:"new_string" description:"The text to replace it with"`
+	ReplaceAll         bool   `json:"replace_all,omitempty" description:"Replace all occurrences of old_string (default false)"`
+	SandboxPermissions string `json:"sandbox_permissions,omitempty" description:"Request a wider sandbox mode for this one call only. Requires justification. The user is asked to approve leaving the sandbox; approval never carries to another call. Accepted: read-only, workspace-write, danger-full-access"`
+	Justification      string `json:"justification,omitempty" description:"A sentence explaining why this call needs a wider sandbox mode. Required whenever sandbox_permissions is set, and ignored when it is not"`
 }
 
 type EditPermissionsParams struct {
-	FilePath   string `json:"file_path"`
-	OldContent string `json:"old_content,omitempty"`
-	NewContent string `json:"new_content,omitempty"`
-	EscalationParams
+	FilePath           string `json:"file_path"`
+	OldContent         string `json:"old_content,omitempty"`
+	NewContent         string `json:"new_content,omitempty"`
+	SandboxPermissions string `json:"sandbox_permissions,omitempty"`
+	Justification      string `json:"justification,omitempty"`
 }
 
 type EditResponseMetadata struct {
@@ -74,7 +76,7 @@ func NewEditTool(
 				return fantasy.NewTextErrorResponse("file_path is required"), nil
 			}
 
-			escalation, err := parseEscalation(params.EscalationParams)
+			escalation, err := parseEscalation(params.SandboxPermissions, params.Justification)
 			if err != nil {
 				return fantasy.NewTextErrorResponse(err.Error()), nil
 			}

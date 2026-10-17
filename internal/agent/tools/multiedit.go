@@ -26,16 +26,18 @@ type MultiEditOperation struct {
 }
 
 type MultiEditParams struct {
-	FilePath string               `json:"file_path" description:"The absolute path to the file to modify"`
-	Edits    []MultiEditOperation `json:"edits" description:"Array of edit operations to perform sequentially on the file"`
-	EscalationParams
+	FilePath           string               `json:"file_path" description:"The absolute path to the file to modify"`
+	Edits              []MultiEditOperation `json:"edits" description:"Array of edit operations to perform sequentially on the file"`
+	SandboxPermissions string               `json:"sandbox_permissions,omitempty" description:"Request a wider sandbox mode for this one call only. Requires justification. The user is asked to approve leaving the sandbox; approval never carries to another call. Accepted: read-only, workspace-write, danger-full-access"`
+	Justification      string               `json:"justification,omitempty" description:"A sentence explaining why this call needs a wider sandbox mode. Required whenever sandbox_permissions is set, and ignored when it is not"`
 }
 
 type MultiEditPermissionsParams struct {
-	FilePath   string `json:"file_path"`
-	OldContent string `json:"old_content,omitempty"`
-	NewContent string `json:"new_content,omitempty"`
-	EscalationParams
+	FilePath           string `json:"file_path"`
+	OldContent         string `json:"old_content,omitempty"`
+	NewContent         string `json:"new_content,omitempty"`
+	SandboxPermissions string `json:"sandbox_permissions,omitempty"`
+	Justification      string `json:"justification,omitempty"`
 }
 
 type FailedEdit struct {
@@ -78,7 +80,7 @@ func NewMultiEditTool(
 				return fantasy.NewTextErrorResponse("at least one edit operation is required"), nil
 			}
 
-			escalation, err := parseEscalation(params.EscalationParams)
+			escalation, err := parseEscalation(params.SandboxPermissions, params.Justification)
 			if err != nil {
 				return fantasy.NewTextErrorResponse(err.Error()), nil
 			}

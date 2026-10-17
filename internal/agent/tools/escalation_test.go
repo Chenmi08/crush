@@ -2,12 +2,15 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"charm.land/fantasy"
+	"charm.land/fantasy/schema"
 	"github.com/charmbracelet/crush/internal/permission"
 	"github.com/charmbracelet/crush/internal/sandbox"
 	"github.com/stretchr/testify/require"
@@ -48,26 +51,25 @@ func newEscalationService(grants ...bool) *escalationPermissionService {
 func TestEscalation_PairValidation(t *testing.T) {
 	t.Parallel()
 
-	_, err := parseEscalation(EscalationParams{SandboxPermissions: "danger-full-access"})
+	_, err := parseEscalation("danger-full-access", "")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "justification")
 
-	_, err = parseEscalation(EscalationParams{Justification: "I need to write outside."})
+	_, err = parseEscalation("", "I need to write outside.")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "sandbox_permissions")
 
-	_, err = parseEscalation(EscalationParams{SandboxPermissions: "bogus", Justification: "because"})
+	_, err = parseEscalation("bogus", "because")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "accepted")
 
-	req, err := parseEscalation(EscalationParams{
-		SandboxPermissions: "danger-full-access",
-		Justification:      "Writing the release artefact outside the repository.",
-	})
+	req, err := parseEscalation(
+		"danger-full-access",
+		"Writing the release artefact outside the repository.")
 	require.NoError(t, err)
 	require.Equal(t, sandbox.ModeDangerFullAccess, req.mode)
 
-	none, err := parseEscalation(EscalationParams{})
+	none, err := parseEscalation("", "")
 	require.NoError(t, err)
 	require.Nil(t, none)
 }
@@ -84,10 +86,8 @@ func TestEscalation_RejectedBeforeExecution(t *testing.T) {
 	resp := runWriteTool(t, tool, ctx, WriteParams{
 		FilePath: target,
 		Content:  "x",
-		EscalationParams: EscalationParams{
-			// Missing justification.
-			SandboxPermissions: "danger-full-access",
-		},
+		// Missing justification.
+		SandboxPermissions: "danger-full-access",
 	})
 	require.True(t, resp.IsError)
 	require.Contains(t, resp.Content, "justification")
@@ -108,10 +108,8 @@ func TestEscalation_MustBeStrictlyWider(t *testing.T) {
 	resp := runWriteTool(t, tool, ctx, WriteParams{
 		FilePath: outside,
 		Content:  "x",
-		EscalationParams: EscalationParams{
-			SandboxPermissions: "workspace-write",
-			Justification:      "Same mode, not wider.",
-		},
+		SandboxPermissions: "workspace-write",
+		Justification:      "Same mode, not wider.",
 	})
 	require.True(t, resp.IsError)
 	require.Contains(t, resp.Content, "escalation-not-wider")
@@ -131,10 +129,8 @@ func TestEscalation_AppliesToExactlyOneCall(t *testing.T) {
 	resp := runWriteTool(t, tool, ctx, WriteParams{
 		FilePath: outside,
 		Content:  "x",
-		EscalationParams: EscalationParams{
-			SandboxPermissions: "danger-full-access",
-			Justification:      "Writing outside the workspace once.",
-		},
+		SandboxPermissions: "danger-full-access",
+		Justification:      "Writing outside the workspace once.",
 	})
 	require.False(t, resp.IsError, "the approved escalation must let the call proceed")
 	content, err := readFile(outside)
@@ -168,10 +164,8 @@ func TestEscalation_RejectionStopsTheTurn(t *testing.T) {
 	resp := runWriteTool(t, tool, ctx, WriteParams{
 		FilePath: outside,
 		Content:  "x",
-		EscalationParams: EscalationParams{
-			SandboxPermissions: "danger-full-access",
-			Justification:      "Need to write outside.",
-		},
+		SandboxPermissions: "danger-full-access",
+		Justification:      "Need to write outside.",
 	})
 	require.True(t, resp.IsError)
 	require.True(t, resp.StopTurn, "the turn must stop so the model does not retry another route")
@@ -193,10 +187,8 @@ func TestEscalation_RequestIsDistinct(t *testing.T) {
 	runWriteTool(t, tool, ctx, WriteParams{
 		FilePath: filepath.Join(t.TempDir(), "x"),
 		Content:  "x",
-		EscalationParams: EscalationParams{
-			SandboxPermissions: "danger-full-access",
-			Justification:      "Need to write outside.",
-		},
+		SandboxPermissions: "danger-full-access",
+		Justification:      "Need to write outside.",
 	})
 	require.NotNil(t, perms.lastRequest)
 	require.True(t, perms.lastRequest.Escalation)
@@ -240,10 +232,8 @@ func TestEscalation_UnavailableWithoutApprovalChannel(t *testing.T) {
 	resp := runWriteTool(t, tool, ctx, WriteParams{
 		FilePath: filepath.Join(t.TempDir(), "file.txt"),
 		Content:  "x",
-		EscalationParams: EscalationParams{
-			SandboxPermissions: "danger-full-access",
-			Justification:      "Need to write outside.",
-		},
+		SandboxPermissions: "danger-full-access",
+		Justification:      "Need to write outside.",
 	})
 	require.True(t, resp.IsError)
 	require.Contains(t, resp.Content, "escalation-unavailable")
@@ -265,9 +255,7 @@ func TestEscalation_ShellTool(t *testing.T) {
 	resp := runBashTool(t, tool, ctx, BashParams{
 		Description: "half a pair",
 		Command:     "true",
-		EscalationParams: EscalationParams{
-			SandboxPermissions: "danger-full-access",
-		},
+		SandboxPermissions: "danger-full-access",
 	})
 	require.True(t, resp.IsError)
 	require.Contains(t, resp.Content, "justification")
@@ -277,10 +265,8 @@ func TestEscalation_ShellTool(t *testing.T) {
 	resp = runBashTool(t, tool, ctx, BashParams{
 		Description: "escalated write",
 		Command:     "echo hi > " + outside,
-		EscalationParams: EscalationParams{
-			SandboxPermissions: "danger-full-access",
-			Justification:      "Writing one file outside the workspace.",
-		},
+		SandboxPermissions: "danger-full-access",
+		Justification:      "Writing one file outside the workspace.",
 	})
 	require.False(t, resp.IsError)
 	content, err := readFile(outside)
@@ -346,6 +332,56 @@ func TestEscalation_SessionGrantNeverApplies(t *testing.T) {
 	})
 	require.Error(t, err, "an escalation must prompt, not be resolved by a session grant")
 	require.False(t, granted)
+}
+
+// TestEscalation_SchemaMatchesDecoding guards against the schema and the
+// decoder disagreeing on the escalation parameters' shape. The schema is what
+// the model sees, so the decoder must accept exactly that shape: a flat
+// sandbox_permissions/justification pair on every confined tool. When they
+// diverged, the model sent a nested escalation_params object that decoding
+// silently dropped, and the escalation never fired.
+func TestEscalation_SchemaMatchesDecoding(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		params any
+	}{
+		{BashParams{Command: "true"}},
+		{WriteParams{FilePath: "x", Content: "x"}},
+		{EditParams{FilePath: "x", OldString: "x", NewString: "x"}},
+		{MultiEditParams{FilePath: "x", Edits: []MultiEditOperation{}}},
+		{DownloadParams{URL: "https://example.com", FilePath: "x"}},
+	}
+	for _, tc := range cases {
+		generated := schema.Generate(reflect.TypeOf(tc.params))
+
+		_, hasNested := generated.Properties["escalation_params"]
+		require.False(t, hasNested,
+			"escalation params must be flat, not nested under escalation_params")
+
+		for _, name := range []string{"sandbox_permissions", "justification"} {
+			prop, ok := generated.Properties[name]
+			require.True(t, ok, "%T is missing the %s property", tc.params, name)
+			require.Equal(t, "string", prop.Type, "%T %s", tc.params, name)
+			require.NotEmpty(t, prop.Description, "%T %s", tc.params, name)
+		}
+
+		// The exact payload a model would send from this schema must decode
+		// back into the populated fields.
+		input, err := json.Marshal(map[string]any{
+			"sandbox_permissions": "danger-full-access",
+			"justification":       "test",
+		})
+		require.NoError(t, err)
+		decoded := reflect.New(reflect.TypeOf(tc.params)).Interface()
+		require.NoError(t, json.Unmarshal(input, decoded), "%T", tc.params)
+
+		v := reflect.ValueOf(decoded).Elem()
+		require.Equal(t, "danger-full-access",
+			v.FieldByName("SandboxPermissions").String(), "%T", tc.params)
+		require.Equal(t, "test",
+			v.FieldByName("Justification").String(), "%T", tc.params)
+	}
 }
 
 // statPath reports file info for the assertions above.
