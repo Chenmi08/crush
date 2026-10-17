@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/charmbracelet/crush/internal/sandbox"
 	"mvdan.cc/sh/v3/interp"
 )
 
@@ -41,7 +42,7 @@ func isolateProcess(cmd *exec.Cmd) {
 // The implementation mirrors interp.DefaultExecHandler with two additions:
 // isolateProcess(&cmd) after construction, and negative-PID signal targeting
 // in the cancellation callback so the entire child process group is killed.
-func processGroupExecHandler(killTimeout time.Duration) interp.ExecHandlerFunc {
+func processGroupExecHandler(killTimeout time.Duration, policy *sandbox.Policy) interp.ExecHandlerFunc {
 	return func(ctx context.Context, args []string) error {
 		hc := interp.HandlerCtx(ctx)
 		path, err := interp.LookPathDir(hc.Dir, hc.Env, args[0])
@@ -60,6 +61,13 @@ func processGroupExecHandler(killTimeout time.Duration) interp.ExecHandlerFunc {
 			Stderr: hc.Stderr,
 		}
 		isolateProcess(&cmd)
+
+		// Every child process goes through the selected backend, so the
+		// boundary covers the command and everything it starts.
+		if wrapErr := sandbox.WrapCommand(ctx, policy, &cmd); wrapErr != nil {
+			fmt.Fprintf(hc.Stderr, "crush: %v\n", wrapErr)
+			return interp.ExitStatus(126)
+		}
 
 		err = cmd.Start()
 		if err == nil {

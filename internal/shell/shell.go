@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/charmbracelet/crush/internal/sandbox"
 	"github.com/charmbracelet/x/exp/slice"
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
@@ -68,6 +69,7 @@ type Shell struct {
 	mu         sync.Mutex
 	logger     Logger
 	blockFuncs []BlockFunc
+	policy     *sandbox.Policy
 }
 
 // Options for creating a new shell
@@ -76,6 +78,10 @@ type Options struct {
 	Env        []string
 	Logger     Logger
 	BlockFuncs []BlockFunc
+	// Policy is the sandbox policy this shell executes under. It is carried
+	// per shell instance, not stored globally, so two concurrent sessions
+	// with different modes do not interfere.
+	Policy *sandbox.Policy
 }
 
 // NewShell creates a new shell instance with the given options
@@ -112,6 +118,7 @@ func NewShell(opts *Options) *Shell {
 		env:        env,
 		logger:     logger,
 		blockFuncs: opts.BlockFuncs,
+		policy:     opts.Policy,
 	}
 }
 
@@ -178,6 +185,20 @@ func (s *Shell) SetEnv(key, value string) {
 	s.env = append(s.env, keyPrefix+value)
 }
 
+// SetPolicy sets the sandbox policy for subsequent executions.
+func (s *Shell) SetPolicy(policy *sandbox.Policy) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.policy = policy
+}
+
+// Policy returns the sandbox policy the shell executes under, if any.
+func (s *Shell) Policy() *sandbox.Policy {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.policy
+}
+
 // SetBlockFuncs sets the command block functions for the shell
 func (s *Shell) SetBlockFuncs(blockFuncs []BlockFunc) {
 	s.mu.Lock()
@@ -241,7 +262,7 @@ func splitArgsFlags(parts []string) (args []string, flags []string) {
 // newInterp creates a new interpreter with the current shell state. A nil
 // stdin is equivalent to an empty input stream.
 func (s *Shell) newInterp(stdin io.Reader, stdout, stderr io.Writer) (*interp.Runner, error) {
-	return newRunner(s.cwd, s.env, stdin, stdout, stderr, s.blockFuncs)
+	return newRunnerWithPolicy(s.cwd, s.env, stdin, stdout, stderr, s.blockFuncs, s.policy)
 }
 
 // updateShellFromRunner updates the shell from the interpreter after execution.

@@ -3,9 +3,12 @@
 package shell
 
 import (
+	"context"
+	"fmt"
 	"os/exec"
 	"time"
 
+	"github.com/charmbracelet/crush/internal/sandbox"
 	"mvdan.cc/sh/v3/interp"
 )
 
@@ -17,7 +20,21 @@ const defaultKillTimeout = 2 * time.Second
 // default handler already handles adequately.
 func isolateProcess(_ *exec.Cmd) {}
 
-// processGroupExecHandler returns interp.DefaultExecHandler on Windows.
-func processGroupExecHandler(killTimeout time.Duration) interp.ExecHandlerFunc {
-	return interp.DefaultExecHandler(killTimeout)
+// processGroupExecHandler on Windows applies the sandbox backend (which fails
+// closed on this platform) and then delegates to interp.DefaultExecHandler.
+func processGroupExecHandler(killTimeout time.Duration, policy *sandbox.Policy) interp.ExecHandlerFunc {
+	base := interp.DefaultExecHandler(killTimeout)
+	return func(ctx context.Context, args []string) error {
+		// Windows has no backend: a confined policy must refuse rather than
+		// run unconfined.
+		if policy != nil && policy.Mode != sandbox.ModeDangerFullAccess {
+			hc := interp.HandlerCtx(ctx)
+			err := sandbox.WrapCommand(ctx, policy, &exec.Cmd{Args: args})
+			if err != nil {
+				fmt.Fprintf(hc.Stderr, "crush: %v\n", err)
+				return interp.ExitStatus(126)
+			}
+		}
+		return base(ctx, args)
+	}
 }

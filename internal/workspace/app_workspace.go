@@ -148,10 +148,15 @@ func (w *AppWorkspace) AgentRunShellCommand(ctx context.Context, sessionID, comm
 		}
 	}
 
+	// Bang-mode commands follow the session policy: a command the user
+	// types is confined exactly like one the agent runs, and the UI states
+	// which policy applied so the user is not surprised either way.
+	rt := w.store.ResolveSandboxRuntime()
 	opts := shell.RunOptions{
 		Command:   command,
 		Cwd:       w.store.WorkingDir(),
 		TermWidth: termWidth,
+		Policy:    rt.Policy,
 	}
 
 	var result shell.CaptureResult

@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/crush/internal/filepathext"
+	"github.com/charmbracelet/crush/internal/sandbox"
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
@@ -45,7 +46,7 @@ const probeWindow = 128
 // blockFuncs is the block list used when building the nested runner for the
 // shell-source case, so deny rules apply recursively to commands invoked
 // from in-process scripts.
-func scriptDispatchHandler(blockFuncs []BlockFunc) execMiddleware {
+func scriptDispatchHandler(blockFuncs []BlockFunc, policy *sandbox.Policy) execMiddleware {
 	return func(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
 		return func(ctx context.Context, args []string) error {
 			if len(args) == 0 || !isPathPrefixed(args[0]) {
@@ -63,11 +64,11 @@ func scriptDispatchHandler(blockFuncs []BlockFunc) execMiddleware {
 
 			switch {
 			case hasShebang(probe):
-				return dispatchShebang(ctx, scriptPath, probe, args)
+				return dispatchShebang(ctx, scriptPath, probe, args, policy)
 			case isBinary(probe):
 				return next(ctx, args)
 			default:
-				return runShellSource(ctx, scriptPath, args, blockFuncs)
+				return runShellSource(ctx, scriptPath, args, blockFuncs, policy)
 			}
 		}
 	}
@@ -171,7 +172,7 @@ func isBinary(probe []byte) bool {
 // interpreter via os/exec, inheriting the parent runner's cwd, env, and
 // stdio. Returns interp.ExitStatus on non-zero interpreter exit so the
 // parent interpreter sees it as a normal non-zero status.
-func dispatchShebang(ctx context.Context, scriptPath string, probe []byte, args []string) error {
+func dispatchShebang(ctx context.Context, scriptPath string, probe []byte, args []string, policy *sandbox.Policy) error {
 	sb, err := parseShebang(probe)
 	if err != nil {
 		hc := interp.HandlerCtx(ctx)
@@ -198,6 +199,13 @@ func dispatchShebang(ctx context.Context, scriptPath string, probe []byte, args 
 	cmd.Stdout = hc.Stdout
 	cmd.Stderr = hc.Stderr
 	isolateProcess(cmd)
+	// The shebang path spawns a process directly, so it needs the same
+	// backend wrapping as the ordinary exec path.
+	if err := sandbox.WrapCommand(ctx, policy, cmd); err != nil {
+		hc := interp.HandlerCtx(ctx)
+		fmt.Fprintf(hc.Stderr, "crush: %s: %v\n", scriptPath, err)
+		return interp.ExitStatus(126)
+	}
 
 	if err := cmd.Run(); err != nil {
 		var exitErr *exec.ExitError
@@ -375,7 +383,7 @@ func parseEnvShebang(rest string) (*shebang, error) {
 // This is the only branch that reads the full file; probeFile keeps its
 // read to probeWindow bytes so the binary/shebang paths never touch more
 // than 128 bytes of I/O.
-func runShellSource(ctx context.Context, path string, args []string, blockFuncs []BlockFunc) error {
+func runShellSource(ctx context.Context, path string, args []string, blockFuncs []BlockFunc, policy *sandbox.Policy) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -393,7 +401,10 @@ func runShellSource(ctx context.Context, path string, args []string, blockFuncs 
 		interp.Interactive(false),
 		interp.Env(hc.Env),
 		interp.Dir(hc.Dir),
-		execHandlerOption(blockFuncs),
+		execHandlerOption(blockFuncs, policy),
+	}
+	if policy != nil {
+		opts = append(opts, interp.OpenHandler(openHandler(policy)))
 	}
 	if len(args) > 1 {
 		// Params with a leading "--" avoids any of args[1:] being
