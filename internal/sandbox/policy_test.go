@@ -241,3 +241,30 @@ func TestCanonicalProtectedPaths_SortedAndDeduped(t *testing.T) {
 	out := CanonicalProtectedPaths([]string{b, a, b, ""})
 	require.Equal(t, []string{a, b}, out)
 }
+
+// sandboxResetDenialCountForTest resets the process-wide refusal counter so
+// assertions are deterministic.
+func sandboxResetDenialCountForTest() { denialCount.Store(0) }
+
+// TestDenialCountSurfacesInMessage verifies that repeated refusals tell the
+// model it is going in circles, while the first refusals stay clean.
+func TestDenialCountSurfacesInMessage(t *testing.T) {
+	p := testPolicy(t)
+	outside := t.TempDir()
+
+	// Reset the process-wide counter so the assertion is deterministic.
+	sandboxResetDenialCountForTest()
+
+	first := p.CheckWrite(filepath.Join(outside, "a")).Error()
+	require.NotContains(t, first, "refusal", "the first refusal carries no nudge")
+
+	// The second refusal is still quiet; from the third on, the message
+	// nudges the model to stop and explain rather than keep retrying.
+	_ = p.CheckWrite(filepath.Join(outside, "b")).Error()
+	second := p.CheckWrite(filepath.Join(outside, "b")).Error()
+	require.Contains(t, second, "refusal 3 this session")
+
+	third := p.CheckWrite(filepath.Join(outside, "c")).Error()
+	require.Contains(t, third, "refusal 4 this session")
+	require.Contains(t, third, "stop and explain")
+}

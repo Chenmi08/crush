@@ -117,6 +117,10 @@ type Denial struct {
 	Remedy string
 	// EscalationHint is set when the caller may request a wider mode.
 	EscalationHint bool
+	// Count is this refusal's number within the process, stamped at
+	// construction. A count above 2 is surfaced in the message so a model
+	// that keeps hitting the same boundary notices it is going in circles.
+	Count int64
 }
 
 // Marker is the stable, model-recognizable prefix of a denial. The same text
@@ -136,6 +140,9 @@ func (d Denial) Error() string {
 	}
 	if d.EscalationHint {
 		b.WriteString(" hint=sandbox escalation is available: retry with sandbox_permissions and a justification to request this mode for one call")
+	}
+	if d.Count > 2 {
+		fmt.Fprintf(&b, " (refusal %d this session; if this keeps failing, stop and explain to the user which path you need and why, instead of retrying)", d.Count)
 	}
 	return b.String()
 }
@@ -406,22 +413,21 @@ func (p *Policy) CheckWrite(path string) error {
 	if isSink(canonical) {
 		return nil
 	}
-
 	if p.isProtected(canonical) {
-		return Denial{
+		return p.refuse(Denial{
 			Path:      canonical,
 			Mode:      p.Mode,
 			Protected: true,
 			Remedy:    "this path grants future code execution and cannot be made writable",
-		}
+		})
 	}
 
 	if p.isDenied(canonical) {
-		return Denial{
+		return p.refuse(Denial{
 			Path:   canonical,
 			Mode:   p.Mode,
 			Remedy: "remove the matching sandbox deny-write entry",
-		}
+		})
 	}
 
 	for _, root := range p.WriteRoots {
@@ -430,11 +436,20 @@ func (p *Policy) CheckWrite(path string) error {
 		}
 	}
 
-	return Denial{
+	return p.refuse(Denial{
 		Path:   canonical,
 		Mode:   p.Mode,
 		Remedy: "add the directory to sandbox allow-write (or run with sandbox mode danger-full-access)",
-	}
+	})
+}
+
+// refuse counts a constructed denial and publishes a notice, so every
+// consumer of CheckWrite — the file tools, the interpreter fence, direct
+// callers — shares one notice stream and one count.
+func (p *Policy) refuse(d Denial) Denial {
+	d.Count = denialCount.Add(1)
+	PublishDenial(d.Tool, d.Path, string(d.Mode), d.Protected)
+	return d
 }
 
 // isDenied reports whether path is a configured write denial or inside one.

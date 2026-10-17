@@ -1670,6 +1670,15 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			TTL:  ttl,
 		})
 		cmds = append(cmds, clearInfoMsgCmd(ttl))
+	case app.SandboxDenialMsg:
+		// Transient, non-blocking: authorization stays model-initiated. A
+		// refusal is visible here for a few seconds so frequent denials do
+		// not require reading the conversation. A repeated denial says so.
+		m.status.SetInfoMsg(util.InfoMsg{
+			Type: util.InfoTypeWarn,
+			Msg:  msg.String(),
+		})
+		cmds = append(cmds, clearInfoMsgCmd(DefaultStatusTTL))
 	case workspace.ConnectionEvent:
 		cmds = append(cmds, m.handleConnectionEvent(msg)...)
 	case util.ClearStatusMsg:

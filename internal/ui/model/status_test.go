@@ -4,7 +4,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/crush/internal/app"
 	"github.com/charmbracelet/crush/internal/config"
+	"github.com/charmbracelet/crush/internal/sandbox"
 	"github.com/charmbracelet/crush/internal/ui/common"
 
 	"charm.land/lipgloss/v2"
@@ -133,4 +135,32 @@ func TestSandboxBadge_FromConfig(t *testing.T) {
 	cfg.Permissions.Sandbox.Mode = ""
 	st.SetSandboxFromConfig(cfg)
 	require.Contains(t, st.SandboxBadge(), "SANDBOX WORKSPACE-WRITE")
+}
+
+// TestSandboxDenialMsg_Notice pins the transient notice contract: a refusal
+// is a short warning that fits a status line, a repeat announces the count,
+// and nothing here is a question — authorization stays model-initiated.
+func TestSandboxDenialMsg_Notice(t *testing.T) {
+	t.Parallel()
+
+	first := app.SandboxDenialMsg{DenialNotice: sandbox.DenialNotice{
+		Tool: "write", Path: "/etc/hosts", Mode: "workspace-write", Count: 1,
+	}}.String()
+	require.Contains(t, first, "/etc/hosts")
+	require.Contains(t, first, "sandbox denied")
+	require.NotContains(t, first, "refusals this session")
+	// Keep it short: it renders for a few seconds in a status bar.
+	require.LessOrEqual(t, len(first), 80)
+
+	repeat := app.SandboxDenialMsg{DenialNotice: sandbox.DenialNotice{
+		Path: "/etc/hosts", Count: 4,
+	}}.String()
+	require.Contains(t, repeat, "(4 refusals this session)")
+
+	// A protected-path refusal names the reason, so the user knows no
+	// setting will re-allow it.
+	protected := app.SandboxDenialMsg{DenialNotice: sandbox.DenialNotice{
+		Path: "/w/crushrc", Protected: true, Count: 2,
+	}}.String()
+	require.Contains(t, protected, "protected path")
 }

@@ -722,6 +722,7 @@ func (app *App) setupEvents() {
 	app.subscribe(ctx, "mcp", mcp.SubscribeEvents)
 	app.subscribe(ctx, "mcp-channels", app.subscribeScopedChannelEvents)
 	app.subscribe(ctx, "lsp", SubscribeLSPEvents)
+	subscribeSandboxDenials(ctx, app.events)
 	if app.Skills != nil {
 		app.subscribe(ctx, "skills", app.Skills.SubscribeEvents)
 	}

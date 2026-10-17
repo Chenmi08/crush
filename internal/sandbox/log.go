@@ -12,7 +12,9 @@ func logSelection(backend string, enforcement Enforcement, reason string) {
 	slog.Info("Sandbox backend selected", "backend", backend, "enforcement", enforcement)
 }
 
-// LogDenial records a policy refusal.
+// LogDenial records a policy refusal in the logs. The count and the transient
+// notice are published by the refusal itself (see Policy.refuse), so direct
+// CheckWrite callers and tool-layer callers see identical streams.
 func LogDenial(d Denial) {
 	slog.Warn("Sandbox denied write",
 		"path", d.Path,
