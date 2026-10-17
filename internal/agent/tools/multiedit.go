@@ -83,6 +83,12 @@ func NewMultiEditTool(
 				return fantasy.NewTextErrorResponse(err.Error()), nil
 			}
 
+			// Refuse an out-of-policy write before creating any parent
+			// directory, so a denied call leaves no filesystem trace.
+			if resp := checkSandboxWrite(ctx, MultiEditToolName, params.FilePath); resp.IsError {
+				return resp, nil
+			}
+
 			var response fantasy.ToolResponse
 			var err error
 
@@ -191,7 +197,7 @@ func processMultiEditWithCreation(edit editContext, params MultiEditParams, call
 	} else {
 		description = fmt.Sprintf("Create file %s with %d edits", params.FilePath, editsApplied)
 	}
-	p, err := edit.permissions.Request(edit.ctx, permission.CreatePermissionRequest{
+	p, err := edit.permissions.Request(edit.ctx, sandboxedRequest(edit.ctx, permission.CreatePermissionRequest{
 		SessionID:   sessionID,
 		Path:        fsext.PathOrPrefix(params.FilePath, edit.workingDir),
 		ToolCallID:  call.ID,
@@ -203,7 +209,7 @@ func processMultiEditWithCreation(edit editContext, params MultiEditParams, call
 			OldContent: "",
 			NewContent: currentContent,
 		},
-	})
+	}))
 	if err != nil {
 		return fantasy.ToolResponse{}, err
 	}
@@ -296,7 +302,7 @@ func processMultiEditExistingFile(edit editContext, params MultiEditParams, call
 	} else {
 		description = fmt.Sprintf("Apply %d edits to file %s", editsApplied, params.FilePath)
 	}
-	p, err := edit.permissions.Request(edit.ctx, permission.CreatePermissionRequest{
+	p, err := edit.permissions.Request(edit.ctx, sandboxedRequest(edit.ctx, permission.CreatePermissionRequest{
 		SessionID:   sessionID,
 		Path:        fsext.PathOrPrefix(params.FilePath, edit.workingDir),
 		ToolCallID:  call.ID,
@@ -308,7 +314,7 @@ func processMultiEditExistingFile(edit editContext, params MultiEditParams, call
 			OldContent: oldContent,
 			NewContent: currentContent,
 		},
-	})
+	}))
 	if err != nil {
 		return fantasy.ToolResponse{}, err
 	}

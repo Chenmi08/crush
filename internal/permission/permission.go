@@ -49,6 +49,17 @@ type CreatePermissionRequest struct {
 	// YOLO mode, the configured allow-list, and PreToolUse hook approval can
 	// skip them.
 	Dangerous bool `json:"dangerous,omitempty"`
+	// Sandboxed reports whether the operation will run confined by the
+	// sandbox. A confined operation does not need approval; an excluded or
+	// unconfined one does, and the prompt states so.
+	Sandboxed bool `json:"sandboxed,omitempty"`
+	// SandboxMode is the mode that applies to the operation, when sandboxed.
+	SandboxMode string `json:"sandbox_mode,omitempty"`
+	// Escalation marks a request to widen the sandbox for a single call. The
+	// UI renders these distinctly from ordinary permission prompts.
+	Escalation bool `json:"escalation,omitempty"`
+	// EscalationMode is the wider mode being requested.
+	EscalationMode string `json:"escalation_mode,omitempty"`
 }
 
 type PermissionNotification struct {
@@ -67,6 +78,15 @@ type PermissionRequest struct {
 	Action      string `json:"action"`
 	Params      any    `json:"params"`
 	Path        string `json:"path"`
+	// Sandboxed reports whether the operation runs confined by the sandbox,
+	// so the prompt and any audit subscriber can distinguish the two.
+	Sandboxed bool `json:"sandboxed,omitempty"`
+	// SandboxMode is the mode that applies to the operation.
+	SandboxMode string `json:"sandbox_mode,omitempty"`
+	// Escalation marks a single-call request to leave the sandbox.
+	Escalation bool `json:"escalation,omitempty"`
+	// EscalationMode is the requested wider mode.
+	EscalationMode string `json:"escalation_mode,omitempty"`
 }
 
 type Service interface {
@@ -251,14 +271,18 @@ func (s *permissionService) Request(ctx context.Context, opts CreatePermissionRe
 		dir = s.workingDir
 	}
 	permission := PermissionRequest{
-		ID:          uuid.New().String(),
-		Path:        dir,
-		SessionID:   opts.SessionID,
-		ToolCallID:  opts.ToolCallID,
-		ToolName:    opts.ToolName,
-		Description: opts.Description,
-		Action:      opts.Action,
-		Params:      opts.Params,
+		ID:             uuid.New().String(),
+		Path:           dir,
+		SessionID:      opts.SessionID,
+		ToolCallID:     opts.ToolCallID,
+		ToolName:       opts.ToolName,
+		Description:    opts.Description,
+		Action:         opts.Action,
+		Params:         opts.Params,
+		Sandboxed:      opts.Sandboxed,
+		SandboxMode:    opts.SandboxMode,
+		Escalation:     opts.Escalation,
+		EscalationMode: opts.EscalationMode,
 	}
 
 	// A session grant ("allow for session") covers the tool/action/path key.

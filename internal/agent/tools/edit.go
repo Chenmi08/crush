@@ -74,6 +74,12 @@ func NewEditTool(
 
 			params.FilePath = filepathext.SmartJoin(workingDir, params.FilePath)
 
+			// Refuse an out-of-policy write before any branch can create a
+			// parent directory, so a denied call leaves no filesystem trace.
+			if resp := checkSandboxWrite(ctx, EditToolName, params.FilePath); resp.IsError {
+				return resp, nil
+			}
+
 			var response fantasy.ToolResponse
 			var err error
 
@@ -141,7 +147,7 @@ func createNewFile(edit editContext, filePath, content string, call fantasy.Tool
 	)
 	p, err := edit.permissions.Request(
 		edit.ctx,
-		permission.CreatePermissionRequest{
+		sandboxedRequest(edit.ctx, permission.CreatePermissionRequest{
 			SessionID:   sessionID,
 			Path:        fsext.PathOrPrefix(filePath, edit.workingDir),
 			ToolCallID:  call.ID,
@@ -153,7 +159,7 @@ func createNewFile(edit editContext, filePath, content string, call fantasy.Tool
 				OldContent: "",
 				NewContent: content,
 			},
-		},
+		}),
 	)
 	if err != nil {
 		return fantasy.ToolResponse{}, err
@@ -341,7 +347,7 @@ func deleteContent(edit editContext, filePath, oldString string, replaceAll bool
 
 	p, err := edit.permissions.Request(
 		edit.ctx,
-		permission.CreatePermissionRequest{
+		sandboxedRequest(edit.ctx, permission.CreatePermissionRequest{
 			SessionID:   sessionID,
 			Path:        fsext.PathOrPrefix(filePath, edit.workingDir),
 			ToolCallID:  call.ID,
@@ -353,7 +359,7 @@ func deleteContent(edit editContext, filePath, oldString string, replaceAll bool
 				OldContent: oldContent,
 				NewContent: newContent,
 			},
-		},
+		}),
 	)
 	if err != nil {
 		return fantasy.ToolResponse{}, err
@@ -414,7 +420,7 @@ func replaceContent(edit editContext, filePath, oldString, newString string, rep
 
 	p, err := edit.permissions.Request(
 		edit.ctx,
-		permission.CreatePermissionRequest{
+		sandboxedRequest(edit.ctx, permission.CreatePermissionRequest{
 			SessionID:   sessionID,
 			Path:        fsext.PathOrPrefix(filePath, edit.workingDir),
 			ToolCallID:  call.ID,
@@ -426,7 +432,7 @@ func replaceContent(edit editContext, filePath, oldString, newString string, rep
 				OldContent: oldContent,
 				NewContent: result,
 			},
-		},
+		}),
 	)
 	if err != nil {
 		return fantasy.ToolResponse{}, err

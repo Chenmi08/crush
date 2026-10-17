@@ -60,6 +60,13 @@ type fileSnapshot struct {
 // the lifetime of the process (or workspace).
 type RuntimeOverrides struct {
 	SkipPermissionRequests bool
+	// SandboxMode overrides the configured sandbox mode for this process
+	// (from the --sandbox flag). Empty means "use the configuration".
+	SandboxMode string
+	// DisableSandbox turns the sandbox off explicitly (from the --no-sandbox
+	// flag). It is a separate decision from YOLO, which no longer disables
+	// the boundary.
+	DisableSandbox bool
 	// EnabledChannels lists the MCP servers opted in as channels for this
 	// session (via the --channels flag). A server present in MCP config only
 	// pushes channel events when it also appears here. Entries may be written

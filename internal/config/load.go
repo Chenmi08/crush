@@ -56,6 +56,10 @@ func Load(workingDir, dataDir string, debug bool) (*ConfigStore, error) {
 
 	cfg.setDefaults(workingDir, dataDir)
 
+	if err := ValidateSandbox(cfg.Permissions.SandboxConfig()); err != nil {
+		return nil, fmt.Errorf("invalid sandbox configuration: %w", err)
+	}
+
 	store := &ConfigStore{
 		config:         cfg,
 		workingDir:     workingDir,

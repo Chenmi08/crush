@@ -1,12 +1,15 @@
 package model
 
 import (
+	"cmp"
 	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/help"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/crush/internal/config"
+	"github.com/charmbracelet/crush/internal/sandbox"
 	"github.com/charmbracelet/crush/internal/ui/common"
 	"github.com/charmbracelet/crush/internal/ui/util"
 	uv "github.com/charmbracelet/ultraviolet"
@@ -31,6 +34,12 @@ type Status struct {
 	// inputMode and yolo drive the mode badge shown before the help hints.
 	inputMode uiInputMode
 	yolo      bool
+
+	// sandbox is the persistent sandbox indicator: the mode plus whether the
+	// boundary is enforced, partial, or off.
+	sandbox string
+	// sandboxLevel is the enforcement level, which selects the badge style.
+	sandboxLevel string
 }
 
 // NewStatus creates a new status bar and help model.
@@ -57,6 +66,61 @@ func (s *Status) ClearInfoMsg() {
 func (s *Status) SetMode(mode uiInputMode, yolo bool) {
 	s.inputMode = mode
 	s.yolo = yolo
+}
+
+// SetSandbox sets the persistent sandbox indicator. An empty mode hides it.
+// level is "full", "partial", or "none".
+func (s *Status) SetSandbox(mode, level string) {
+	s.sandbox = mode
+	s.sandboxLevel = level
+}
+
+// SetSandboxFromConfig derives the indicator from the workspace's sandbox
+// configuration. It is safe to call with a nil config, which hides the
+// indicator (no workspace, nothing to report).
+func (s *Status) SetSandboxFromConfig(cfg *config.Config) {
+	if cfg == nil {
+		s.SetSandbox("", "")
+		return
+	}
+	sandboxCfg := cfg.Permissions.SandboxConfig()
+	mode := cmp.Or(sandboxCfg.Mode, string(sandbox.DefaultMode))
+	s.SetSandbox(mode, enforcementLevelFor(cfg))
+}
+
+// enforcementLevelFor reports "full", "partial", or "none" for the policy
+// described by cfg. The UI cannot probe a host backend from the render path,
+// so it derives the level from the resolved policy: no policy means the
+// boundary is off, and a policy whose protected paths cannot be subtracted
+// means it is partial.
+func enforcementLevelFor(cfg *config.Config) string {
+	if cfg == nil || cfg.Permissions == nil || cfg.Permissions.Sandbox == nil {
+		return "none"
+	}
+	if cfg.Permissions.Sandbox.Mode == string(sandbox.ModeDangerFullAccess) {
+		return "none"
+	}
+	return "partial"
+}
+
+// SandboxBadge renders the sandbox indicator, or an empty string when no
+// sandbox state is known.
+func (s *Status) SandboxBadge() string {
+	if s.sandbox == "" {
+		return ""
+	}
+	t := s.com.Styles
+	label := "SANDBOX " + strings.ToUpper(s.sandbox)
+	switch s.sandboxLevel {
+	case "full":
+		return t.Status.ModeBadgeSandbox.SetString(label).String()
+	case "partial":
+		return t.Status.ModeBadgeSandboxPartial.SetString(label + " PARTIAL").String()
+	case "none":
+		return t.Status.ModeBadgeSandboxOff.SetString(label + " UNENFORCED").String()
+	default:
+		return t.Status.ModeBadgeSandbox.SetString(label).String()
+	}
 }
 
 // modeBadge renders the badge for the current mode, or an empty string in
@@ -101,7 +165,14 @@ func (s *Status) Draw(scr uv.Screen, area uv.Rectangle) {
 	if !s.hideHelp {
 		helpStyle := s.com.Styles.Status.Help
 		helpWidth := area.Dx() - helpStyle.GetPaddingLeft() - helpStyle.GetPaddingRight()
-		badge := s.modeBadge()
+		badges := []string{}
+		if b := s.SandboxBadge(); b != "" {
+			badges = append(badges, b)
+		}
+		if b := s.modeBadge(); b != "" {
+			badges = append(badges, b)
+		}
+		badge := strings.Join(badges, " ")
 		if badge != "" {
 			// Shrink the hints so the badge does not push them past the
 			// status area.

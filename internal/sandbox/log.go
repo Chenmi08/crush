@@ -1,0 +1,22 @@
+package sandbox
+
+import "log/slog"
+
+// logSelection records the probed backend and enforcement level once, so a
+// host can be diagnosed from the logs.
+func logSelection(backend string, enforcement Enforcement, reason string) {
+	if backend == "" {
+		slog.Warn("No usable sandbox backend", "enforcement", enforcement, "reason", reason)
+		return
+	}
+	slog.Info("Sandbox backend selected", "backend", backend, "enforcement", enforcement)
+}
+
+// LogDenial records a policy refusal.
+func LogDenial(d Denial) {
+	slog.Warn("Sandbox denied write",
+		"path", d.Path,
+		"mode", d.Mode,
+		"protected", d.Protected,
+	)
+}

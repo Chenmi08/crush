@@ -595,6 +595,11 @@ type Styles struct {
 		// Mode badges shown before the help hints.
 		ModeBadgePlan lipgloss.Style
 		ModeBadgeYolo lipgloss.Style
+		// ModeBadgeSandbox shows the active sandbox mode and whether the
+		// boundary is enforced, partial, or off.
+		ModeBadgeSandbox        lipgloss.Style
+		ModeBadgeSandboxPartial lipgloss.Style
+		ModeBadgeSandboxOff     lipgloss.Style
 
 		// Full-width banners shown when switching modes.
 		ModeBannerPlan      lipgloss.Style

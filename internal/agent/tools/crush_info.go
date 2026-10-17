@@ -75,6 +75,7 @@ func buildCrushInfo(cfg *config.ConfigStore, lspManager *lsp.Manager, allSkills 
 	writeSkills(&b, allSkills, activeSkills, disabledSkills, skillTracker)
 	writeHooks(&b, cfg)
 	writePermissions(&b, cfg)
+	writeSandbox(&b, cfg)
 	writeDisabledTools(&b, cfg)
 	writeOptions(&b, cfg)
 	writeAttribution(&b, cfg)
@@ -388,6 +389,39 @@ func writePermissions(b *strings.Builder, cfg *config.ConfigStore) {
 		slices.Sort(sorted)
 		fmt.Fprintf(b, "allowed_tools = %s\n", strings.Join(sorted, ", "))
 	}
+	b.WriteString("\n")
+}
+
+// writeSandbox reports the resolved sandbox policy, backend, and enforcement
+// level, so the agent can see the boundary its tools run under instead of
+// guessing.
+func writeSandbox(b *strings.Builder, cfg *config.ConfigStore) {
+	rt := cfg.ResolveSandboxRuntime()
+	status := cfg.SandboxStatus(rt)
+
+	b.WriteString("[sandbox]\n")
+	fmt.Fprintf(b, "mode = %s\n", rt.RequestedMode)
+	if rt.Disabled {
+		b.WriteString("disabled = true (explicitly turned off; commands run unconfined)\n")
+	}
+	if rt.Err != nil {
+		fmt.Fprintf(b, "configuration_error = %v\n", rt.Err)
+	}
+	fmt.Fprintf(b, "backend = %s\n", status.Backend)
+	fmt.Fprintf(b, "enforcement = %s\n", status.Enforcement)
+	if status.Missing != "" {
+		fmt.Fprintf(b, "missing = %s\n", status.Missing)
+	}
+	if rt.Policy != nil {
+		if len(rt.Policy.WriteRoots) > 0 {
+			fmt.Fprintf(b, "write_roots = %s\n", strings.Join(rt.Policy.WriteRoots, ", "))
+		}
+		fmt.Fprintf(b, "protected_paths = %d\n", len(rt.Policy.Protected))
+	}
+	if len(rt.Configuration.ExcludeCommands) > 0 {
+		fmt.Fprintf(b, "excluded_commands = %s\n", strings.Join(rt.Configuration.ExcludeCommands, ", "))
+	}
+	b.WriteString("reads = unrestricted (the sandbox confines writes only)\n")
 	b.WriteString("\n")
 }
 

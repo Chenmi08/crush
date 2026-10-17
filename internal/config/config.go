@@ -451,6 +451,30 @@ type Permissions struct {
 	// them. Entries are command-name prefixes, e.g. "git push" or
 	// "git branch -d".
 	DangerousCommands []string `json:"dangerous_commands,omitempty" jsonschema:"description=Commands that always require a fresh permission prompt even when the session has allowed bash,example=git push,example=git branch -d"`
+	// Sandbox configures the filesystem sandbox that confines tool writes.
+	Sandbox *Sandbox `json:"sandbox,omitempty" jsonschema:"description=Filesystem sandbox settings"`
+}
+
+// Sandbox is the configuration surface for the filesystem sandbox. It is a
+// request, not a resolved policy: the sandbox package turns it into the set of
+// writable roots after layering and validation.
+type Sandbox struct {
+	// Mode is "read-only", "workspace-write" (default), or
+	// "danger-full-access". An absent or invalid value never selects
+	// danger-full-access: it falls back to the default.
+	Mode string `json:"mode,omitempty" jsonschema:"description=Sandbox mode. read-only permits no writes except a private temp directory; workspace-write permits writes under the workspace, a private temp directory, and the user cache directory; danger-full-access disables confinement and must be chosen explicitly,enum=read-only,enum=workspace-write,enum=danger-full-access,default=workspace-write"`
+	// AllowWrite lists extra directories that may be written. Each must
+	// exist and is canonicalized and deduplicated.
+	AllowWrite []string `json:"allow_write,omitempty" jsonschema:"description=Extra writable directories (absolute or ~ paths). A path that does not exist is reported rather than ignored,example=~/.kube,example=/shared/build-cache"`
+	// DenyWrite lists paths that stay unwritable even inside a writable
+	// root. Denials take precedence over grants.
+	DenyWrite []string `json:"deny_write,omitempty" jsonschema:"description=Paths kept unwritable even inside a writable root. Denials take precedence over grants,example=./secrets"`
+	// ExcludeCommands lists command patterns that run outside the sandbox.
+	// An excluded command takes the normal approval flow.
+	ExcludeCommands []string `json:"exclude_commands,omitempty" jsonschema:"description=Command patterns that run outside the sandbox and go through the normal approval flow,example=docker *,example=gh *"`
+	// FailIfUnavailable refuses to start when the sandbox cannot be
+	// established, for managed or repeatable environments.
+	FailIfUnavailable bool `json:"fail_if_unavailable,omitempty" jsonschema:"description=Exit at startup when no sandbox backend is usable,default=false"`
 }
 
 type TrailerStyle string

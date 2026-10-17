@@ -170,6 +170,10 @@ type coordinator struct {
 	allSkills    []*skills.Skill // Pre-filter: all discovered after dedup.
 	skillTracker *skills.Tracker
 
+	// sandboxRuntime is the resolved sandbox policy for this workspace. It is
+	// derived once and shared by every agent and by the status surfaces.
+	sandboxRuntime config.SandboxRuntime
+
 	readyWg errgroup.Group
 }
 
@@ -222,6 +226,11 @@ func NewCoordinator(ctx context.Context, opts CoordinatorOptions) (Coordinator, 
 		allSkills:    allSkills,
 		skillTracker: skillTracker,
 		interactive:  opts.Interactive,
+	}
+
+	c.sandboxRuntime = opts.Config.ResolveSandboxRuntime()
+	if c.sandboxRuntime.Err != nil {
+		slog.Warn("Sandbox configuration rejected; writes are not confined", "error", c.sandboxRuntime.Err)
 	}
 
 	agentCfg, ok := opts.Config.Config().Agents[config.AgentCoder]
@@ -814,6 +823,7 @@ func (c *coordinator) buildAgent(ctx context.Context, prompt *prompt.Prompt, age
 		Notify:               c.notify,
 		RunComplete:          c.runComplete,
 		AllSkills:            c.allSkills,
+		SandboxPolicy:        c.sandboxRuntime.Policy,
 	})
 
 	// The readiness goroutines below perform one-time setup — building the

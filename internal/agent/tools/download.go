@@ -79,6 +79,13 @@ func NewDownloadTool(permissions permission.Service, workingDir string, client *
 			}
 
 			filePath := filepathext.SmartJoin(workingDir, params.FilePath)
+
+			// Refuse an out-of-policy write before the download starts, so a
+			// denied call does not fetch anything or create directories.
+			if resp := checkSandboxWrite(ctx, DownloadToolName, filePath); resp.IsError {
+				return resp, nil
+			}
+
 			relPath, _ := filepath.Rel(workingDir, filePath)
 			relPath = filepath.ToSlash(cmp.Or(relPath, filePath))
 
@@ -89,14 +96,15 @@ func NewDownloadTool(permissions permission.Service, workingDir string, client *
 
 			p, err := permissions.Request(
 				ctx,
-				permission.CreatePermissionRequest{
+				sandboxedRequest(ctx, permission.CreatePermissionRequest{
 					SessionID:   sessionID,
 					Path:        filePath,
+					ToolCallID:  call.ID,
 					ToolName:    DownloadToolName,
 					Action:      "download",
 					Description: fmt.Sprintf("Download file from URL: %s to %s", params.URL, filePath),
 					Params:      DownloadPermissionsParams(params),
-				},
+				}),
 			)
 			if err != nil {
 				return fantasy.ToolResponse{}, err

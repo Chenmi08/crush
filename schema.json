@@ -711,6 +711,10 @@
           },
           "type": "array",
           "description": "Commands that always require a fresh permission prompt even when the session has allowed bash"
+        },
+        "sandbox": {
+          "$ref": "#/$defs/Sandbox",
+          "description": "Filesystem sandbox settings"
         }
       },
       "additionalProperties": false,
@@ -816,6 +820,59 @@
           },
           "type": "array",
           "description": "List of models available from this provider"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "Sandbox": {
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "read-only",
+            "workspace-write",
+            "danger-full-access"
+          ],
+          "description": "Sandbox mode. read-only permits no writes except a private temp directory; workspace-write permits writes under the workspace",
+          "default": "workspace-write"
+        },
+        "allow_write": {
+          "items": {
+            "type": "string",
+            "examples": [
+              "~/.kube",
+              "/shared/build-cache"
+            ]
+          },
+          "type": "array",
+          "description": "Extra writable directories (absolute or ~ paths). A path that does not exist is reported rather than ignored"
+        },
+        "deny_write": {
+          "items": {
+            "type": "string",
+            "examples": [
+              "./secrets"
+            ]
+          },
+          "type": "array",
+          "description": "Paths kept unwritable even inside a writable root. Denials take precedence over grants"
+        },
+        "exclude_commands": {
+          "items": {
+            "type": "string",
+            "examples": [
+              "docker *",
+              "gh *"
+            ]
+          },
+          "type": "array",
+          "description": "Command patterns that run outside the sandbox and go through the normal approval flow"
+        },
+        "fail_if_unavailable": {
+          "type": "boolean",
+          "description": "Exit at startup when no sandbox backend is usable",
+          "default": false
         }
       },
       "additionalProperties": false,

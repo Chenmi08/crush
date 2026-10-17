@@ -4122,6 +4122,7 @@ func (m *UI) Draw(scr uv.Screen, area uv.Rectangle) *tea.Cursor {
 	// Add status and help layer
 	m.status.SetHideHelp(isOnboarding)
 	m.status.SetMode(m.mode, m.yoloModeCached())
+	m.status.SetSandboxFromConfig(m.com.Config())
 	m.status.Draw(scr, layout.status)
 
 	// Draw completions popup if open

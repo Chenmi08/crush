@@ -66,6 +66,12 @@ func NewWriteTool(
 
 			filePath := filepathext.SmartJoin(workingDir, params.FilePath)
 
+			// The sandbox fence runs before any filesystem mutation so a
+			// refused write leaves no directory or file behind.
+			if resp := checkSandboxWrite(ctx, WriteToolName, filePath); resp.IsError {
+				return resp, nil
+			}
+
 			fileInfo, err := os.Stat(filePath)
 			if err == nil {
 				if fileInfo.IsDir() {
@@ -111,7 +117,7 @@ func NewWriteTool(
 
 			p, err := permissions.Request(
 				ctx,
-				permission.CreatePermissionRequest{
+				sandboxedRequest(ctx, permission.CreatePermissionRequest{
 					SessionID:   sessionID,
 					Path:        fsext.PathOrPrefix(filePath, workingDir),
 					ToolCallID:  call.ID,
@@ -123,7 +129,7 @@ func NewWriteTool(
 						OldContent: oldContent,
 						NewContent: params.Content,
 					},
-				},
+				}),
 			)
 			if err != nil {
 				return fantasy.ToolResponse{}, err
