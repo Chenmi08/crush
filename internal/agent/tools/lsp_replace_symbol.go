@@ -73,6 +73,13 @@ func NewReplaceSymbolTool(
 				return fantasy.NewTextErrorResponse(fmt.Sprintf("replacement is required for action %q", action)), nil
 			}
 
+			// This tool mutates a file, so it goes through the same fence as
+			// write/edit/multiedit: confinement must not depend on which tool
+			// the agent happened to pick.
+			if resp := checkSandboxWrite(ctx, ReplaceSymbolToolName, params.FilePath); resp.IsError {
+				return resp, nil
+			}
+
 			lspManager.Start(ctx, params.FilePath)
 
 			client := findLSPClient(lspManager, params.FilePath)
@@ -132,17 +139,19 @@ func NewReplaceSymbolTool(
 
 			sessionID := GetSessionFromContext(ctx)
 			if sessionID != "" && permissions != nil {
-				granted, err := permissions.Request(ctx, permission.CreatePermissionRequest{
+				granted, err := requestPermission(ctx, permissions, sandboxedRequest(ctx, permission.CreatePermissionRequest{
 					SessionID:   sessionID,
 					Path:        params.FilePath,
+					ToolCallID:  call.ID,
 					ToolName:    ReplaceSymbolToolName,
+					Action:      "write",
 					Description: fmt.Sprintf("%s symbol '%s' in %s", action, params.Symbol, params.FilePath),
 					Params: ReplaceSymbolPermissionsParams{
 						FilePath:   params.FilePath,
 						OldContent: string(content),
 						NewContent: newContent,
 					},
-				})
+				}))
 				if err != nil {
 					return fantasy.ToolResponse{}, fmt.Errorf("permission request failed: %w", err)
 				}

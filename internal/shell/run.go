@@ -350,13 +350,20 @@ type execMiddleware = func(next interp.ExecHandlerFunc) interp.ExecHandlerFunc
 //     script exec's rather than the outer path-prefixed wrapper;
 //  3. block list;
 //  4. optional Go coreutils (only when useGoCoreUtils is on).
+//
+// The Go coreutils are skipped when a sandbox policy is attached: they write
+// files (cp, mv, rm, mkdir, touch, tar) inside the Crush process, bypassing
+// both the interpreter's file-open hook and the process backend. Leaving them
+// out makes those commands resolve to real binaries, which the selected
+// backend confines. On a platform with no backend the command is then refused,
+// which is the intended fail-closed behavior rather than an unconfined write.
 func standardHandlers(blockFuncs []BlockFunc, policy *sandbox.Policy) []execMiddleware {
 	handlers := []execMiddleware{
 		builtinHandler(),
 		scriptDispatchHandler(blockFuncs, policy),
 		blockHandler(blockFuncs),
 	}
-	if useGoCoreUtils && coreUtilsExecHandler != nil {
+	if useGoCoreUtils && coreUtilsExecHandler != nil && policy == nil {
 		handlers = append(handlers, coreUtilsExecHandler)
 	}
 	return handlers

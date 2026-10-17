@@ -3,6 +3,7 @@ package shell
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -266,4 +267,26 @@ func TestFence_ProtectedPathRefusedThroughShell(t *testing.T) {
 	_, stderr, err := runFenced(t, policy, policy.Workspace, "source "+script)
 	require.Error(t, err)
 	require.Contains(t, stderr, "reason=protected")
+}
+
+// TestFence_GoCoreutilsDisabledUnderPolicy verifies the in-process Go
+// coreutils are not installed when a policy is attached: they write inside the
+// Crush process and would bypass both the file-open hook and the backend.
+func TestFence_GoCoreutilsDisabledUnderPolicy(t *testing.T) {
+	policy := fencePolicy(t)
+	for _, handler := range standardHandlers(nil, policy) {
+		require.NotEqual(t, fmt.Sprintf("%p", coreUtilsExecHandler), fmt.Sprintf("%p", handler),
+			"the Go coreutils middleware must not be installed under a policy")
+	}
+
+	// Without a policy, the existing behavior is unchanged.
+	if coreUtilsExecHandler != nil && useGoCoreUtils {
+		found := false
+		for _, handler := range standardHandlers(nil, nil) {
+			if fmt.Sprintf("%p", handler) == fmt.Sprintf("%p", coreUtilsExecHandler) {
+				found = true
+			}
+		}
+		require.True(t, found)
+	}
 }
