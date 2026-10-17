@@ -1,3 +1,5 @@
+//go:build linux
+
 package sandbox
 
 import (
@@ -47,12 +49,6 @@ func goldenPolicy(t *testing.T) (*Policy, string) {
 			filepath.Join(workspace, ".git", "config"),
 		}),
 	}, root
-}
-
-// normalizeRoots replaces the temp root in generated text so a golden file is
-// stable across runs.
-func normalizeRoots(text, root string) string {
-	return strings.ReplaceAll(text, root, "<ROOT>")
 }
 
 // sandboxPlaceholder is the placeholder file the backend binds over a

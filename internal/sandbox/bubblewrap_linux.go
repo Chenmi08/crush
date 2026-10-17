@@ -14,8 +14,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"log/slog"
 )
 
 // bubblewrapBinary is the runner this backend invokes.
@@ -94,26 +92,6 @@ func (b *bubblewrapBackend) Wrap(ctx context.Context, p *Policy, cmd *exec.Cmd) 
 	cmd.Path = path
 	cmd.Args = append([]string{path}, args...)
 	return cleanupArtifacts(p, artifacts), nil
-}
-
-// cleanupArtifacts removes the zero-byte mount points bubblewrap created for
-// protected paths that did not exist when the command started, so a confined
-// command leaves the workspace exactly as it found it.
-func cleanupArtifacts(p *Policy, paths []string) func() {
-	if len(paths) == 0 {
-		return nil
-	}
-	return func() {
-		for _, path := range paths {
-			info, err := os.Lstat(path)
-			if err != nil || info.IsDir() || info.Size() != 0 {
-				continue
-			}
-			if err := os.Remove(path); err != nil {
-				slog.Debug("Could not remove sandbox placeholder", "path", path, "error", err)
-			}
-		}
-	}
 }
 
 // BubblewrapArgs generates the runner arguments for a policy and a target

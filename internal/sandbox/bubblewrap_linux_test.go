@@ -1,3 +1,5 @@
+//go:build linux
+
 package sandbox
 
 import (
@@ -224,11 +226,4 @@ func isReadOnlyFilesystemError(stderr string) bool {
 		}
 	}
 	return false
-}
-
-// forceSelection overrides the cached backend selection for one test.
-func forceSelection(t *testing.T, sel Selection) {
-	t.Helper()
-	selectionOnce.Do(func() {}) // mark done so probe never runs
-	selection = sel
 }
