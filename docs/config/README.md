@@ -525,8 +525,12 @@ worktrees and submodules), and shell startup files when they fall inside a
 writable root.
 
 **Enforcement.** The boundary is enforced by the OS where possible: `bubblewrap`
-on Linux (falling back to Landlock, then to the in-process fence), Seatbelt via
-`sandbox-exec` on macOS. Windows has no backend and reports `unsupported`;
+on Linux, falling back to Landlock when bubblewrap is absent or cannot create
+its namespaces, then to the in-process fence, which confines Crush's own tools
+and interpreter but not child processes. Landlock can only union allowlists, so
+it cannot subtract protected paths from a writable root: on such a host the
+status reports `partial` and names the missing guarantee. On macOS, Seatbelt via
+`sandbox-exec`. Windows has no backend and reports `unsupported`;
 confined commands are refused rather than run unconfined. `crush sandbox
 status` prints the resolved policy, backend, and enforcement level, and
 `crush sandbox exec -- <command>` runs one command under that policy for
