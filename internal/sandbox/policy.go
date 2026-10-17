@@ -513,3 +513,10 @@ func (p *Policy) String() string {
 	}
 	return b.String()
 }
+
+// IsWiderMode reports whether candidate is strictly wider than base. It is
+// used to validate an escalation request and to check that project-level
+// configuration does not widen the sandbox.
+func IsWiderMode(candidate, base Mode) bool {
+	return candidate.wider(base)
+}

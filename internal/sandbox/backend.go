@@ -299,3 +299,11 @@ func availableOnPath(name string) (string, bool) {
 	}
 	return path, true
 }
+
+// ForceSelectionForTest overrides the cached backend selection. It exists so
+// tests can assert fail-closed and prompt behaviour without uninstalling a
+// backend; production code never calls it.
+func ForceSelectionForTest(sel Selection) {
+	selectionOnce.Do(func() {})
+	selection = sel
+}

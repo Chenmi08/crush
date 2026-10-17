@@ -152,38 +152,9 @@ func ValidateSandbox(cfg Sandbox) error {
 }
 
 // IsSandboxExcluded reports whether a command matches a configured exclusion.
-// Patterns are matched as a case-sensitive glob-style prefix: "docker *"
-// matches any command starting with "docker ". A pattern with no * is an exact
-// command-name match.
+// It delegates to the sandbox package so every caller uses one matcher.
 func IsSandboxExcluded(command string, patterns []string) bool {
-	command = strings.TrimSpace(command)
-	for _, pattern := range patterns {
-		if matchExclusion(command, strings.TrimSpace(pattern)) {
-			return true
-		}
-	}
-	return false
-}
-
-func matchExclusion(command, pattern string) bool {
-	if pattern == "" {
-		return false
-	}
-	if !strings.Contains(pattern, "*") {
-		fields := strings.Fields(command)
-		if len(fields) == 0 {
-			return false
-		}
-		return fields[0] == pattern || command == pattern
-	}
-	prefix, suffix, _ := strings.Cut(pattern, "*")
-	if suffix == "" {
-		return strings.HasPrefix(command, prefix)
-	}
-	if prefix == "" {
-		return strings.HasSuffix(command, suffix)
-	}
-	return strings.HasPrefix(command, prefix) && strings.HasSuffix(command, suffix)
+	return sandbox.IsSandboxExcludedCommand(command, patterns)
 }
 
 // DefaultSandboxTempDir returns the private per-run temp directory for a data

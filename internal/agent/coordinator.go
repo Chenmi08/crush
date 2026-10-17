@@ -824,6 +824,7 @@ func (c *coordinator) buildAgent(ctx context.Context, prompt *prompt.Prompt, age
 		RunComplete:          c.runComplete,
 		AllSkills:            c.allSkills,
 		SandboxPolicy:        c.sandboxRuntime.Policy,
+		SandboxExclusions:    c.sandboxRuntime.Configuration.ExcludeCommands,
 	})
 
 	// The readiness goroutines below perform one-time setup — building the

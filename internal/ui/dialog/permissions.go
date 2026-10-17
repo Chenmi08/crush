@@ -456,6 +456,18 @@ func (p *Permissions) renderHeader(contentWidth int) string {
 
 	lines := []string{title, "", toolLine}
 
+	// State the sandbox posture explicitly: an unsandboxed request must not
+	// look like an ordinary one, and an escalation request must be visibly
+	// distinct because approving it leaves the sandbox.
+	switch {
+	case p.permission.Escalation:
+		title = common.DialogTitle(t, "Leave Sandbox?", contentWidth-t.Dialog.Title.GetHorizontalFrameSize(), t.Dialog.TitleGradFromColor, t.Dialog.TitleGradToColor)
+		lines[0] = t.Dialog.Title.Render(title)
+		lines = append(lines, p.renderKeyValue("Escalation", "widen to "+p.permission.EscalationMode+" for this call only", contentWidth))
+	case !p.permission.Sandboxed:
+		lines = append(lines, p.renderKeyValue("Sandbox", "none — this command runs unsandboxed", contentWidth))
+	}
+
 	// Show generic Path only for tools that don't render their own file/path line.
 	switch p.permission.ToolName {
 	case tools.EditToolName, tools.WriteToolName, tools.MultiEditToolName,

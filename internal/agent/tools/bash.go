@@ -240,13 +240,27 @@ func NewBashTool(permissions permission.Service, workingDir, spillDir string, at
 			// can't approve them.
 			dangerous := isDangerousCommand(params.Command, dangerousCommands)
 
+			// A confined command is auto-approved, so the read-only shortcut
+			// is only needed when no sandbox policy is attached.
 			isSafeReadOnly := isSafeReadOnlyCommand(params.Command, dangerous)
 
 			sessionID := GetSessionFromContext(ctx)
 			if sessionID == "" {
 				return fantasy.ToolResponse{}, fmt.Errorf("session ID is required for executing shell command")
 			}
-			if !isSafeReadOnly {
+
+			// Decide which policy applies to this command before asking for
+			// approval: a confined command is auto-approved, an excluded or
+			// unconfined one keeps the normal approval flow.
+			execPolicy := sandboxPolicyForCommand(ctx, params.Command)
+			sandboxed, reason := execPolicy.Sandboxed, execPolicy.Reason
+			_, sandboxMode := execPolicy.SandboxState()
+
+			if execPolicy.RequiresApproval(isSafeReadOnly, dangerous) {
+				description := fmt.Sprintf("Execute command: %s", params.Command)
+				if !sandboxed && reason != "" {
+					description = fmt.Sprintf("Execute command (unsandboxed: %s): %s", reason, params.Command)
+				}
 				p, err := permissions.Request(
 					ctx,
 					permission.CreatePermissionRequest{
@@ -255,9 +269,11 @@ func NewBashTool(permissions permission.Service, workingDir, spillDir string, at
 						ToolCallID:  call.ID,
 						ToolName:    BashToolName,
 						Action:      "execute",
-						Description: fmt.Sprintf("Execute command: %s", params.Command),
+						Description: description,
 						Params:      BashPermissionsParams(params),
 						Dangerous:   dangerous,
+						Sandboxed:   sandboxed,
+						SandboxMode: sandboxMode,
 					},
 				)
 				if err != nil {
@@ -274,7 +290,7 @@ func NewBashTool(permissions permission.Service, workingDir, spillDir string, at
 				bgManager := shell.GetBackgroundShellManager()
 				bgManager.Cleanup()
 				// Use background context so it continues after tool returns
-				bgShell, err := bgManager.StartWithPolicy(context.Background(), execWorkingDir, blockFuncs(), SandboxPolicyFromContext(ctx), params.Command, params.Description)
+				bgShell, err := bgManager.StartWithPolicy(context.Background(), execWorkingDir, blockFuncs(), execPolicy.Policy, params.Command, params.Description)
 				if err != nil {
 					return fantasy.ToolResponse{}, fmt.Errorf("error starting background shell: %w", err)
 				}
@@ -331,7 +347,7 @@ func NewBashTool(permissions permission.Service, workingDir, spillDir string, at
 			// Start with detached context so it can survive if moved to background
 			bgManager := shell.GetBackgroundShellManager()
 			bgManager.Cleanup()
-			bgShell, err := bgManager.StartWithPolicy(context.Background(), execWorkingDir, blockFuncs(), SandboxPolicyFromContext(ctx), params.Command, params.Description)
+			bgShell, err := bgManager.StartWithPolicy(context.Background(), execWorkingDir, blockFuncs(), execPolicy.Policy, params.Command, params.Description)
 			if err != nil {
 				return fantasy.ToolResponse{}, fmt.Errorf("error starting shell: %w", err)
 			}

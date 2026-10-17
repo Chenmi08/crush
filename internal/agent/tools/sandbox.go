@@ -11,6 +11,23 @@ import (
 // sandboxContextKey carries the resolved policy for the current agent turn.
 type sandboxContextKey struct{}
 
+// exclusionsContextKey carries the configured command exclusions for the
+// current agent turn.
+type exclusionsContextKey struct{}
+
+// WithSandboxExclusions attaches the configured command exclusions to a
+// context. They travel with the policy so one execution cannot observe
+// another's settings.
+func WithSandboxExclusions(ctx context.Context, patterns []string) context.Context {
+	return context.WithValue(ctx, exclusionsContextKey{}, patterns)
+}
+
+// ExclusionPatternsFromContext returns the exclusions attached to ctx.
+func ExclusionPatternsFromContext(ctx context.Context) []string {
+	patterns, _ := ctx.Value(exclusionsContextKey{}).([]string)
+	return patterns
+}
+
 // WithSandboxPolicy attaches the resolved sandbox policy to a context. It is
 // called by the agent runtime when a turn starts, so every tool invoked for
 // that turn sees the same policy without the policy being stored globally.
@@ -66,4 +83,66 @@ func sandboxedRequest(ctx context.Context, req permission.CreatePermissionReques
 	req.Sandboxed = policy.Mode != sandbox.ModeDangerFullAccess
 	req.SandboxMode = string(policy.Mode)
 	return req
+}
+
+// commandPolicy is the per-command result of applying the session policy.
+type commandPolicy struct {
+	// Policy is the policy the command actually runs under. Nil means no
+	// policy is attached at all, which keeps the caller's previous
+	// behaviour.
+	Policy *sandbox.Policy
+	// Sandboxed reports whether the boundary applies to this command.
+	Sandboxed bool
+	// Reason explains why the command is not sandboxed, for the prompt.
+	Reason string
+}
+
+// sandboxPolicyForCommand resolves the policy that applies to one shell
+// command. Exclusions remove the boundary and keep the approval flow; with no
+// session policy, or an explicitly disabled sandbox, the command runs
+// unconfined and prompts.
+func sandboxPolicyForCommand(ctx context.Context, command string) commandPolicy {
+	policy := SandboxPolicyFromContext(ctx)
+	if policy == nil {
+		return commandPolicy{}
+	}
+	if policy.Mode == sandbox.ModeDangerFullAccess {
+		return commandPolicy{Policy: policy, Reason: "sandbox disabled"}
+	}
+	if sandbox.IsSandboxExcludedCommand(command, ExclusionPatternsFromContext(ctx)) {
+		return commandPolicy{Policy: policy, Reason: "command excluded from the sandbox"}
+	}
+	// A confined mode with no usable backend must prompt, never run
+	// silently: the prompt states that the command is unsandboxed.
+	if status := sandbox.Describe(ctx, policy); status.Backend == "none" {
+		return commandPolicy{Policy: policy, Reason: "no sandbox backend is available"}
+	}
+	return commandPolicy{Policy: policy, Sandboxed: true}
+}
+
+// RequiresApproval reports whether this command must go through the
+// permission flow. A confined command does not; an excluded, unconfined, or
+// unavailable-backend command does, even when it would otherwise match the
+// read-only shortcut. A configured dangerous command always does, even when
+// confined, so grants like `git push` are never granted implicitly. With no
+// policy attached at all, the caller's own read-only decision applies.
+func (c commandPolicy) RequiresApproval(safeReadOnly, dangerous bool) bool {
+	if dangerous {
+		return true
+	}
+	if c.Policy == nil {
+		return !safeReadOnly
+	}
+	if c.Sandboxed {
+		return false
+	}
+	return true
+}
+
+// SandboxState describes the request for the prompt and audit subscribers.
+func (c commandPolicy) SandboxState() (sandboxed bool, mode string) {
+	if c.Policy == nil {
+		return false, ""
+	}
+	return c.Sandboxed, string(c.Policy.Mode)
 }
