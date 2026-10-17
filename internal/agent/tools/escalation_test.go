@@ -207,24 +207,25 @@ func TestEscalation_RequestIsDistinct(t *testing.T) {
 }
 
 // TestEscalation_DenialCarriesHint verifies the model-facing denial carries
-// the mode marker followed by an escalation hint, in shared wording.
+// the mode marker and, for the bash tool (whose refusals stay model-initiated),
+// an escalation hint in shared wording. The file tools now raise the dialog on
+// refusal (see TestWriteTool_SandboxRefusalAsksOnce), so this covers the bash
+// path through the interpreter fence via the policy directly.
 func TestEscalation_DenialCarriesHint(t *testing.T) {
 	t.Parallel()
-	workspace := t.TempDir()
-	tool := NewWriteTool(nil, &mockPermissionService{}, &mockHistoryService{}, mockFileTrackerService{}, workspace, FileWriteOptions{})
-	ctx := sandboxTestContext(t, workspace)
+	policy := tableSandboxPolicy(t, t.TempDir())
+	err := policy.CheckWrite(filepath.Join(t.TempDir(), "file.txt"))
+	require.Error(t, err)
+	d, ok := sandbox.AsDenial(err)
+	require.True(t, ok)
+	d.EscalationHint = true
 
-	resp := runWriteTool(t, tool, ctx, WriteParams{
-		FilePath: filepath.Join(t.TempDir(), "file.txt"),
-		Content:  "x",
-	})
-	require.True(t, resp.IsError)
-
-	idx := indexOf(resp.Content, sandbox.Marker)
+	msg := d.Error()
+	idx := indexOf(msg, sandbox.Marker)
 	require.NotEqual(t, -1, idx)
-	require.Contains(t, resp.Content, "mode=workspace-write")
-	require.Contains(t, resp.Content, "hint=sandbox escalation is available")
-	require.Greater(t, indexOf(resp.Content, "hint="), idx,
+	require.Contains(t, msg, "mode=workspace-write")
+	require.Contains(t, msg, "hint=sandbox escalation is available")
+	require.Greater(t, indexOf(msg, "hint="), idx,
 		"the hint must follow the marker")
 }
 

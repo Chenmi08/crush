@@ -209,3 +209,72 @@ func applyEscalation(
 	ctx = withEscalationApproval(ctx, call.ID)
 	return WithSandboxPolicy(ctx, policy), nil, nil
 }
+
+// fenceEscalationResponse is what a file tool does when the fence refuses a
+// write: ask the user once, via the same "Leave Sandbox?" dialog an explicit
+// escalation uses. Approved, the wider policy applies to exactly this call
+// and the tool proceeds; denied, the original denial is returned so the model
+// sees the standard refusal.
+//
+// Only the idempotent file tools route through here (write, edit, multiedit,
+// download): replaying the same call after approval cannot double-apply
+// anything. The bash tool keeps its model-initiated escalation, because a
+// shell command may have partially run before the refusal and replaying it is
+// not safe.
+//
+// The requested mode is the widest one that still keeps the boundary
+// meaningful: danger-full-access for this call, as chosen by the dialog.
+func fenceEscalation(
+	ctx context.Context,
+	permissions permission.Service,
+	toolName string,
+	d sandbox.Denial,
+	call fantasy.ToolCall,
+) (context.Context, *fantasy.ToolResponse, error) {
+	effective := SandboxPolicyFromContext(ctx)
+	if effective == nil {
+		return ctx, nil, nil
+	}
+	req := &escalationRequest{
+		mode:          sandbox.ModeDangerFullAccess,
+		justification: "the sandbox refused a write to " + d.Path,
+	}
+	return applyEscalation(ctx, permissions, toolName, req, call)
+}
+
+// handleFenceDenial is the shared fence exit for the file tools. When the
+// policy refuses the write it asks the user once; the returned context
+// carries the widened policy when the user approved, so the caller proceeds
+// with its normal path. A nil response means "continue".
+func handleFenceDenial(
+	ctx context.Context,
+	permissions permission.Service,
+	toolName, path string,
+	call fantasy.ToolCall,
+) (context.Context, *fantasy.ToolResponse, error) {
+	policy := SandboxPolicyFromContext(ctx)
+	if policy == nil {
+		return ctx, nil, nil
+	}
+	err := policy.CheckWrite(path)
+	if err == nil {
+		return ctx, nil, nil
+	}
+	d, ok := sandbox.AsDenial(err)
+	if !ok {
+		return ctx, nil, nil
+	}
+	d.Tool = toolName
+	sandbox.LogDenial(d)
+
+	// A protected path cannot be re-allowed by any setting, so asking would
+	// be theater: refuse outright with the escalation hint.
+	if d.Protected {
+		d.EscalationHint = false
+		resp := fantasy.NewTextErrorResponse(d.Error())
+		resp.StopTurn = true
+		return ctx, &resp, nil
+	}
+
+	return fenceEscalation(ctx, permissions, toolName, d, call)
+}

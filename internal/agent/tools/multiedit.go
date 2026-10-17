@@ -99,9 +99,15 @@ func NewMultiEditTool(
 			}
 
 			// Refuse an out-of-policy write before creating any parent
-			// directory, so a denied call leaves no filesystem trace.
-			if resp := checkSandboxWrite(ctx, MultiEditToolName, params.FilePath); resp.IsError {
-				return resp, nil
+			// directory. A refusal asks the user once via the
+			// "Leave Sandbox?" dialog; approval widens the policy for this
+			// call and the edits proceed.
+			ctx, denied, err = handleFenceDenial(ctx, permissions, MultiEditToolName, params.FilePath, call)
+			if err != nil {
+				return fantasy.ToolResponse{}, err
+			}
+			if denied != nil {
+				return *denied, nil
 			}
 
 			var response fantasy.ToolResponse

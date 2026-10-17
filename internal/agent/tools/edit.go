@@ -90,9 +90,15 @@ func NewEditTool(
 			}
 
 			// Refuse an out-of-policy write before any branch can create a
-			// parent directory, so a denied call leaves no filesystem trace.
-			if resp := checkSandboxWrite(ctx, EditToolName, params.FilePath); resp.IsError {
-				return resp, nil
+			// parent directory. A refusal asks the user once via the
+			// "Leave Sandbox?" dialog; approval widens the policy for this
+			// call and the edit proceeds.
+			ctx, denied, err = handleFenceDenial(ctx, permissions, EditToolName, params.FilePath, call)
+			if err != nil {
+				return fantasy.ToolResponse{}, err
+			}
+			if denied != nil {
+				return *denied, nil
 			}
 
 			var response fantasy.ToolResponse

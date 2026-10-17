@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
 	"github.com/charmbracelet/crush/internal/config"
@@ -154,20 +155,28 @@ func TestApproval_RequestCarriesSandboxState(t *testing.T) {
 }
 
 // TestApproval_HookAndSessionGrantsDoNotBypassBoundary verifies the sandbox is
-// independent of the approval mechanism: even when a permission service
-// grants everything, the fence still refuses an out-of-policy write.
+// independent of the approval mechanism: even when a permission service grants
+// everything, an out-of-policy write only proceeds through the fence dialog —
+// and a protected path is refused outright, no matter what grants exist.
 func TestApproval_HookAndSessionGrantsDoNotBypassBoundary(t *testing.T) {
 	t.Parallel()
 	workspace := t.TempDir()
-	policy := tableSandboxPolicy(t, workspace)
 	tool := NewWriteTool(nil, &mockPermissionService{}, &mockHistoryService{}, mockFileTrackerService{}, workspace, FileWriteOptions{})
 	ctx := sandboxTestContext(t, workspace)
-	_ = policy
 
+	// The granting mock approves the fence dialog for an ordinary outside
+	// write, so it proceeds.
 	outside := t.TempDir() + "/file.txt"
 	resp := runWriteTool(t, tool, ctx, WriteParams{FilePath: outside, Content: "x"})
+	require.False(t, resp.IsError)
+
+	// A protected path is refused with no dialog at all: no grant can
+	// re-allow it.
+	target := filepath.Join(workspace, "crushrc")
+	resp = runWriteTool(t, tool, ctx, WriteParams{FilePath: target, Content: "x"})
 	require.True(t, resp.IsError)
 	require.Contains(t, resp.Content, sandbox.Marker)
+	require.Contains(t, resp.Content, "reason=protected")
 }
 
 // sandboxAttribution returns the attribution used by tool tests.

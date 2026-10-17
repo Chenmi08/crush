@@ -96,9 +96,16 @@ func NewDownloadTool(permissions permission.Service, workingDir string, client *
 			}
 
 			// Refuse an out-of-policy write before the download starts, so a
-			// denied call does not fetch anything or create directories.
-			if resp := checkSandboxWrite(ctx, DownloadToolName, filePath); resp.IsError {
-				return resp, nil
+			// denied call does not fetch anything or create directories. A
+			// refusal asks the user once via the "Leave Sandbox?" dialog;
+			// approval widens the policy for this call and the download
+			// proceeds.
+			ctx, denied, err = handleFenceDenial(ctx, permissions, DownloadToolName, filePath, call)
+			if err != nil {
+				return fantasy.ToolResponse{}, err
+			}
+			if denied != nil {
+				return *denied, nil
 			}
 
 			relPath, _ := filepath.Rel(workingDir, filePath)

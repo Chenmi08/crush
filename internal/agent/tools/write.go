@@ -82,9 +82,15 @@ func NewWriteTool(
 			}
 
 			// The sandbox fence runs before any filesystem mutation so a
-			// refused write leaves no directory or file behind.
-			if resp := checkSandboxWrite(ctx, WriteToolName, filePath); resp.IsError {
-				return resp, nil
+			// refused write leaves no directory or file behind. A refusal
+			// asks the user once via the "Leave Sandbox?" dialog; approval
+			// widens the policy for this call and the write proceeds.
+			ctx, denied, err = handleFenceDenial(ctx, permissions, WriteToolName, filePath, call)
+			if err != nil {
+				return fantasy.ToolResponse{}, err
+			}
+			if denied != nil {
+				return *denied, nil
 			}
 
 			fileInfo, statErr := os.Stat(filePath)

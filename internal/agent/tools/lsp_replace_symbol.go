@@ -75,10 +75,16 @@ func NewReplaceSymbolTool(
 
 			// This tool mutates a file, so it goes through the same fence as
 			// write/edit/multiedit: confinement must not depend on which tool
-			// the agent happened to pick.
-			if resp := checkSandboxWrite(ctx, ReplaceSymbolToolName, params.FilePath); resp.IsError {
-				return resp, nil
+			// the agent happened to pick. A refusal asks the user once via
+			// the "Leave Sandbox?" dialog.
+			ctx, denied, fenceErr := handleFenceDenial(ctx, permissions, ReplaceSymbolToolName, params.FilePath, call)
+			if fenceErr != nil {
+				return fantasy.ToolResponse{}, fenceErr
 			}
+			if denied != nil {
+				return *denied, nil
+			}
+			_ = ctx
 
 			lspManager.Start(ctx, params.FilePath)
 
