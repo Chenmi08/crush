@@ -29,6 +29,26 @@ func TestSandboxBuiltin_ModeRejectsInvalid(t *testing.T) {
 	require.Contains(t, err.Error(), "danger-full-access")
 }
 
+// loadCrushShWithGlobalSettings writes script to the user-level crushrc and
+// loads it through the real pipeline. Sandbox settings that widen the sandbox
+// (a writable root) are only valid at the user level, so they must live here.
+func loadCrushShWithGlobalSettings(t *testing.T, script string) *config.ConfigStore {
+	t.Helper()
+	isolated := t.TempDir()
+	t.Setenv("HOME", isolated)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(isolated, ".config"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(isolated, ".local", "share"))
+	globalDir := filepath.Join(isolated, ".config", "crush")
+	t.Setenv("CRUSH_GLOBAL_CONFIG", globalDir)
+	t.Setenv("CRUSH_GLOBAL_DATA", filepath.Join(isolated, ".local", "share", "crush"))
+	require.NoError(t, os.MkdirAll(globalDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(globalDir, "crushrc"), []byte(script), 0o644))
+
+	store, err := config.Load(t.TempDir(), t.TempDir(), false)
+	require.NoError(t, err)
+	return store
+}
+
 // TestSandboxBuiltin_Lists verifies extra roots, denials, and exclusions
 // accumulate and deduplicate.
 func TestSandboxBuiltin_Lists(t *testing.T) {
@@ -36,7 +56,7 @@ func TestSandboxBuiltin_Lists(t *testing.T) {
 	t.Setenv("HOME", home)
 	require.NoError(t, os.MkdirAll(filepath.Join(home, ".kube"), 0o755))
 
-	store := loadCrushSh(t, `sandbox allow-write ~/.kube
+	store := loadCrushShWithGlobalSettings(t, `sandbox allow-write ~/.kube
 sandbox allow-write ~/.kube
 sandbox deny-write ./secrets
 sandbox deny-write ./secrets
@@ -88,16 +108,16 @@ func TestSandboxConfig_JSONSettingsWork(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
-	t.Setenv("CRUSH_GLOBAL_CONFIG", filepath.Join(home, ".config", "crush"))
+	globalDir := filepath.Join(home, ".config", "crush")
+	t.Setenv("CRUSH_GLOBAL_CONFIG", globalDir)
 	t.Setenv("CRUSH_GLOBAL_DATA", filepath.Join(home, ".local", "share", "crush"))
+	require.NoError(t, os.MkdirAll(globalDir, 0o755))
 
 	extra := filepath.Join(t.TempDir(), "extra")
 	require.NoError(t, os.MkdirAll(extra, 0o755))
 
-	workDir := t.TempDir()
-	dataDir := t.TempDir()
 	require.NoError(t, os.WriteFile(
-		filepath.Join(workDir, "crush.json"),
+		filepath.Join(globalDir, "crush.json"),
 		[]byte(`{"permissions": {"sandbox": {
 			"mode": "workspace-write",
 			"allow_write": ["`+extra+`"],
@@ -107,9 +127,8 @@ func TestSandboxConfig_JSONSettingsWork(t *testing.T) {
 		}}}`),
 		0o644,
 	))
-	config.TrustTestProject(t, workDir)
 
-	store, err := config.Load(workDir, dataDir, false)
+	store, err := config.Load(t.TempDir(), t.TempDir(), false)
 	require.NoError(t, err)
 	box := store.Config().Permissions.SandboxConfig()
 	require.Equal(t, "workspace-write", box.Mode)
@@ -262,11 +281,10 @@ func TestProjectSandbox_TightensOnly(t *testing.T) {
 		require.ErrorIs(t, err, config.ErrProjectWidensSandbox)
 	})
 
-	t.Run("fail-if-unavailable is user-only", func(t *testing.T) {
+	t.Run("requiring the sandbox is a tightening", func(t *testing.T) {
 		t.Parallel()
 		err := config.CheckProjectSandboxTightens(config.Sandbox{FailIfUnavailable: true}, base)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "fail_if_unavailable")
+		require.NoError(t, err)
 	})
 }
 
@@ -378,16 +396,16 @@ func TestSandboxRuntime_FailIfUnavailable(t *testing.T) {
 	t.Setenv("CRUSH_GLOBAL_CONFIG", filepath.Join(home, ".config", "crush"))
 	t.Setenv("CRUSH_GLOBAL_DATA", filepath.Join(home, ".local", "share", "crush"))
 
-	workDir := t.TempDir()
-	dataDir := t.TempDir()
+	globalDir := filepath.Join(home, ".config", "crush")
+	require.NoError(t, os.MkdirAll(globalDir, 0o755))
 	require.NoError(t, os.WriteFile(
-		filepath.Join(workDir, "crush.json"),
+		filepath.Join(globalDir, "crush.json"),
 		[]byte(`{"permissions": {"sandbox": {"fail_if_unavailable": true}}}`),
 		0o644,
 	))
-	config.TrustTestProject(t, workDir)
 
-	store, err := config.Load(workDir, dataDir, false)
+	workDir := t.TempDir()
+	store, err := config.Load(workDir, t.TempDir(), false)
 	require.NoError(t, err)
 
 	// On this host a backend is available, so the requirement is satisfied.

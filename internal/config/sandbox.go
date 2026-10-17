@@ -107,27 +107,23 @@ func resolveAgainstWorkspace(paths []string, workspace string) []string {
 // CheckProjectSandboxTightens rejects a project-level configuration that
 // widens the sandbox relative to base. It reports the offending key.
 func CheckProjectSandboxTightens(project, base Sandbox) error {
-	if project.Mode != "" && project.Mode != base.Mode {
-		if base.Mode == "" || widensMode(sandbox.Mode(project.Mode), sandbox.Mode(base.Mode)) {
-			return fmt.Errorf("%w: permissions.sandbox.mode %q would widen %q", ErrProjectWidensSandbox, project.Mode, base.Mode)
+	if project.Mode != "" {
+		effective := base.Mode
+		if effective == "" {
+			effective = string(sandbox.DefaultMode)
+		}
+		if widensMode(sandbox.Mode(project.Mode), sandbox.Mode(effective)) {
+			return fmt.Errorf("%w: permissions.sandbox.mode %q would widen %q", ErrProjectWidensSandbox, project.Mode, effective)
 		}
 	}
 	if len(project.AllowWrite) > 0 {
 		return fmt.Errorf("%w: permissions.sandbox.allow_write may only be set in user configuration", ErrProjectWidensSandbox)
 	}
-	if project.FailIfUnavailable && !base.FailIfUnavailable {
-		return fmt.Errorf("%w: permissions.sandbox.fail_if_unavailable may only be set in user configuration", ErrProjectWidensSandbox)
-	}
 	return nil
 }
 
 func widensMode(candidate, base sandbox.Mode) bool {
-	order := map[sandbox.Mode]int{
-		sandbox.ModeReadOnly:         0,
-		sandbox.ModeWorkspaceWrite:   1,
-		sandbox.ModeDangerFullAccess: 2,
-	}
-	return order[candidate] > order[base]
+	return sandbox.IsWiderMode(candidate, base)
 }
 
 // ValidateSandbox validates the sandbox settings and reports the offending

@@ -13,6 +13,14 @@ type CreatePermissionRequest struct {
 	Action      string `json:"action"`
 	Params      any    `json:"params"`
 	Path        string `json:"path"`
+	// Sandboxed reports whether the operation runs confined by the sandbox.
+	Sandboxed bool `json:"sandboxed,omitempty"`
+	// SandboxMode is the mode that applies to the operation.
+	SandboxMode string `json:"sandbox_mode,omitempty"`
+	// Escalation marks a single-call request to leave the sandbox.
+	Escalation bool `json:"escalation,omitempty"`
+	// EscalationMode is the requested wider mode.
+	EscalationMode string `json:"escalation_mode,omitempty"`
 }
 
 // PermissionNotification represents a notification about a permission change.
@@ -33,6 +41,14 @@ type PermissionRequest struct {
 	Action      string `json:"action"`
 	Params      any    `json:"params"`
 	Path        string `json:"path"`
+	// Sandboxed reports whether the operation runs confined by the sandbox.
+	Sandboxed bool `json:"sandboxed,omitempty"`
+	// SandboxMode is the mode that applies to the operation.
+	SandboxMode string `json:"sandbox_mode,omitempty"`
+	// Escalation marks a single-call request to leave the sandbox.
+	Escalation bool `json:"escalation,omitempty"`
+	// EscalationMode is the requested wider mode.
+	EscalationMode string `json:"escalation_mode,omitempty"`
 }
 
 // UnmarshalJSON implements the json.Unmarshaler interface. This is needed

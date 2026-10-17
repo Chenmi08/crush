@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"runtime"
+	"sync"
 
 	"github.com/charmbracelet/crush/internal/sandbox"
 )
@@ -33,6 +33,10 @@ type SandboxRuntime struct {
 // ResolveSandboxRuntime resolves the workspace's sandbox policy. It is called
 // once by the app and by the diagnostics commands so every surface agrees on
 // the same policy.
+//
+// Turning the sandbox off is a deliberate act with a visible warning: a
+// danger-full-access mode (from a flag or from configuration) and the explicit
+// disable flag both print one to stderr, once per process.
 func (s *ConfigStore) ResolveSandboxRuntime() SandboxRuntime {
 	rt := SandboxRuntime{RequestedMode: sandbox.DefaultMode}
 
@@ -48,6 +52,7 @@ func (s *ConfigStore) ResolveSandboxRuntime() SandboxRuntime {
 		rt.Disabled = true
 		rt.Configuration = requested
 		rt.RequestedMode = sandbox.ModeDangerFullAccess
+		warnSandboxDisabled("the sandbox was disabled explicitly")
 		return rt
 	}
 
@@ -79,8 +84,22 @@ func (s *ConfigStore) ResolveSandboxRuntime() SandboxRuntime {
 		return rt
 	}
 	rt.Policy = policy
+	if policy.Mode == sandbox.ModeDangerFullAccess {
+		warnSandboxDisabled("sandbox mode is danger-full-access")
+	}
 	slog.Info("Sandbox policy resolved", "mode", policy.Mode, "roots", policy.WriteRoots, "protected", len(policy.Protected))
 	return rt
+}
+
+var sandboxWarningOnce sync.Once
+
+// warnSandboxDisabled prints the visible warning that accompanies running
+// unconfined. It fires once per process so multiple policy resolutions (the
+// app, the status line, diagnostics) do not repeat it.
+func warnSandboxDisabled(reason string) {
+	sandboxWarningOnce.Do(func() {
+		fmt.Fprintf(os.Stderr, "WARNING: the sandbox is disabled (%s). Tool writes are not confined; the agent has the full authority of your user account.\n", reason)
+	})
 }
 
 // sandboxCacheDir returns the user cache directory, which is writable by
@@ -134,12 +153,3 @@ func ValidateSandboxModeFlag(value string) (sandbox.Mode, error) {
 	}
 	return mode, nil
 }
-
-// PlatformSandboxSupport reports whether this platform has a backend at all.
-func PlatformSandboxSupport() bool {
-	return runtime.GOOS != "windows"
-}
-
-// SandboxHomeShellPaths exposes the shell startup files for the protected-set
-// documentation and diagnostics.
-func SandboxHomeShellPaths() []string { return sandbox.HomeShellPaths() }

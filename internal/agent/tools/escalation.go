@@ -158,17 +158,24 @@ func escalatePolicy(effective *sandbox.Policy, mode sandbox.Mode) (*sandbox.Poli
 	}
 	widened := *effective
 	widened.Mode = mode
-	// A wider mode widens the writable set accordingly.
+	// A wider mode widens the writable set to what that mode grants. The
+	// workspace, protected set, temp directory, and cache stay the same, so
+	// protected paths remain protected after an escalation.
 	switch mode {
-	case sandbox.ModeDangerFullAccess:
-		widened.WriteRoots = nil
 	case sandbox.ModeWorkspaceWrite:
-		if len(widened.WriteRoots) == 0 {
-			widened.WriteRoots = []string{widened.Workspace, widened.TempDir}
+		roots := []string{widened.Workspace}
+		if widened.TempDir != "" {
+			roots = append(roots, widened.TempDir)
 		}
+		if widened.CacheDir != "" {
+			roots = append(roots, widened.CacheDir)
+		}
+		widened.WriteRoots = sandbox.UniquePaths(roots)
 	case sandbox.ModeReadOnly:
 		if widened.TempDir != "" {
 			widened.WriteRoots = []string{widened.TempDir}
+		} else {
+			widened.WriteRoots = nil
 		}
 	}
 	return &widened, nil

@@ -174,7 +174,16 @@ func (e *exitCodeError) Error() string { return fmt.Sprintf("exit status %d", e.
 func loadSandboxStore(cmd *cobra.Command, cwd string) (*config.ConfigStore, error) {
 	debug, _ := cmd.Flags().GetBool("debug")
 	dataDir, _ := cmd.Flags().GetString("data-dir")
-	return config.Init(cwd, dataDir, debug)
+	store, err := config.Init(cwd, dataDir, debug)
+	if err != nil {
+		return nil, err
+	}
+	// The diagnostics honour --sandbox and --no-sandbox so a user can validate
+	// the override before relying on it.
+	if err := applySandboxFlags(cmd, store); err != nil {
+		return nil, err
+	}
+	return store, nil
 }
 
 // quoteArgs quotes arguments so the joined command string parses back to the

@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/sandbox"
@@ -31,10 +30,6 @@ func applySandboxFlags(cmd *cobra.Command, store *config.ConfigStore) error {
 	overrides := store.Overrides()
 	overrides.SandboxMode = string(validated)
 	overrides.DisableSandbox = noSandbox || validated == sandbox.ModeDangerFullAccess
-
-	if overrides.DisableSandbox {
-		fmt.Fprintln(os.Stderr, "WARNING: the sandbox is disabled. Tool writes are not confined; the agent has the full authority of your user account.")
-	}
 
 	rt := store.ResolveSandboxRuntime()
 	if rt.Err != nil {

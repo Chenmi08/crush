@@ -191,6 +191,10 @@ type Status struct {
 	Note string
 	// Unsupported is set when the platform has no backend at all.
 	Unsupported bool
+	// ConfinesChildren reports whether the selected backend's boundary
+	// covers child processes, not only Crush's own writes. The in-process
+	// fence does not, so a shell command cannot be auto-approved on it.
+	ConfinesChildren bool
 }
 
 // Describe resolves the enforcement facts for a policy without running
@@ -215,6 +219,7 @@ func Describe(ctx context.Context, p *Policy) Status {
 	}
 	status.Backend = sel.Backend.Name()
 	status.Enforcement = sel.Backend.Enforcement(p)
+	status.ConfinesChildren = sel.Backend.Name() != "in-process"
 	status.Note = status.Enforcement.Note()
 	if status.Enforcement == EnforcementPartial {
 		status.Missing = partialMissing(p, status.Backend)
@@ -243,13 +248,16 @@ func (s Status) String() string {
 }
 
 func partialMissing(p *Policy, backend string) string {
-	if p != nil && p.RequiresSubtraction() && backend == "landlock" {
+	switch {
+	case backend == "in-process":
+		return "child processes are not confined; only Crush's own writes are"
+	case p != nil && p.RequiresSubtraction() && backend == "landlock":
 		return "protected paths inside writable roots cannot be subtracted"
-	}
-	if backend == "" {
+	case backend == "":
 		return "no backend"
+	default:
+		return "a guarantee the policy asks for is not enforced"
 	}
-	return "child processes are not fully confined"
 }
 
 // ApplyEnv sets environment variables inside cmd.Env that make tools respect

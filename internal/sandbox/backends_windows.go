@@ -3,5 +3,6 @@
 package sandbox
 
 // backendsForPlatform returns no backend on Windows: a sandbox is reported as
-// unsupported and confined commands fail closed.
-func backendsForPlatform() []Backend { return []Backend{fenceBackend{}} }
+// unsupported and confined commands fail closed rather than running
+// unconfined.
+func backendsForPlatform() []Backend { return nil }

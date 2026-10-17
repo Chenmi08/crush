@@ -276,6 +276,11 @@ func Resolve(opts Options) (*Policy, error) {
 	return p, nil
 }
 
+// UniquePaths deduplicates paths, preserving order. It is exported so a
+// caller building a policy (an escalation, for example) derives the writable
+// set the same way resolution does.
+func UniquePaths(paths []string) []string { return dedupe(paths) }
+
 func dedupe(paths []string) []string {
 	seen := make(map[string]bool, len(paths))
 	out := make([]string, 0, len(paths))

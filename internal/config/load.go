@@ -1020,6 +1020,10 @@ func filterGlobalConfigPaths(paths []string) []string {
 func loadFromConfigPaths(ctx context.Context, configPaths []string) (*Config, []string, error) {
 	var configs [][]byte
 	var loaded []string
+	// layers mirrors configs, tagging each document with whether it is
+	// repository-local, which decides whether the sandbox tighten-only rule
+	// applies.
+	var layers []sandboxLayer
 
 	// Track directories that have both crush.json and crushrc to warn
 	// about potential confusion, along with the top-level keys each
@@ -1054,6 +1058,7 @@ func loadFromConfigPaths(ctx context.Context, configPaths []string) (*Config, []
 				}
 				addTopLevelKeys(shDirKeys, dir, jsonBytes)
 				configs = append(configs, jsonBytes)
+				layers = append(layers, sandboxLayer{document: jsonBytes, project: !isGlobalConfigPath(path)})
 				loaded = append(loaded, path)
 			}
 		} else {
@@ -1062,6 +1067,7 @@ func loadFromConfigPaths(ctx context.Context, configPaths []string) (*Config, []
 			}
 			addTopLevelKeys(jsonDirKeys, dir, data)
 			configs = append(configs, data)
+			layers = append(layers, sandboxLayer{document: data, project: !isGlobalConfigPath(path)})
 			loaded = append(loaded, path)
 		}
 	}
@@ -1070,7 +1076,7 @@ func loadFromConfigPaths(ctx context.Context, configPaths []string) (*Config, []
 	// it. The check runs on the raw documents, in load order, so a
 	// repository-local file cannot grant itself a writable root or a wider
 	// mode before validation.
-	if err := checkSandboxLayerOrder(configs); err != nil {
+	if err := checkSandboxLayerOrder(layers); err != nil {
 		return nil, nil, err
 	}
 
@@ -1103,7 +1109,7 @@ func loadFromConfigPaths(ctx context.Context, configPaths []string) (*Config, []
 	// Sandbox settings merge with tighten-only semantics: a deep map merge
 	// would let a later document replace the user's denials and exclusions
 	// instead of adding to them.
-	merged, err := mergeSandboxLayers(configs)
+	merged, err := mergeSandboxLayers(layers)
 	if err != nil {
 		return nil, nil, fmt.Errorf("invalid sandbox configuration layer: %w", err)
 	}

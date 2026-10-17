@@ -78,29 +78,22 @@ func (s *Status) SetSandbox(mode, level string) {
 // SetSandboxFromConfig derives the indicator from the workspace's sandbox
 // configuration. It is safe to call with a nil config, which hides the
 // indicator (no workspace, nothing to report).
+//
+// The render path cannot probe a host backend, so an active sandbox is shown
+// as "partial" until the coordinator reports the probed level: claiming "full"
+// without probing would let a partial backend be mistaken for a full one.
 func (s *Status) SetSandboxFromConfig(cfg *config.Config) {
-	if cfg == nil {
+	if cfg == nil || cfg.Permissions == nil || cfg.Permissions.Sandbox == nil {
 		s.SetSandbox("", "")
 		return
 	}
 	sandboxCfg := cfg.Permissions.SandboxConfig()
 	mode := cmp.Or(sandboxCfg.Mode, string(sandbox.DefaultMode))
-	s.SetSandbox(mode, enforcementLevelFor(cfg))
-}
-
-// enforcementLevelFor reports "full", "partial", or "none" for the policy
-// described by cfg. The UI cannot probe a host backend from the render path,
-// so it derives the level from the resolved policy: no policy means the
-// boundary is off, and a policy whose protected paths cannot be subtracted
-// means it is partial.
-func enforcementLevelFor(cfg *config.Config) string {
-	if cfg == nil || cfg.Permissions == nil || cfg.Permissions.Sandbox == nil {
-		return "none"
+	if mode == string(sandbox.ModeDangerFullAccess) {
+		s.SetSandbox(mode, "none")
+		return
 	}
-	if cfg.Permissions.Sandbox.Mode == string(sandbox.ModeDangerFullAccess) {
-		return "none"
-	}
-	return "partial"
+	s.SetSandbox(mode, "partial")
 }
 
 // SandboxBadge renders the sandbox indicator, or an empty string when no

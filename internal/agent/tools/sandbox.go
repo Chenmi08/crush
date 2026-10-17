@@ -112,10 +112,15 @@ func sandboxPolicyForCommand(ctx context.Context, command string) commandPolicy 
 	if sandbox.IsSandboxExcludedCommand(command, ExclusionPatternsFromContext(ctx)) {
 		return commandPolicy{Policy: policy, Reason: "command excluded from the sandbox"}
 	}
-	// A confined mode with no usable backend must prompt, never run
-	// silently: the prompt states that the command is unsandboxed.
-	if status := sandbox.Describe(ctx, policy); status.Backend == "none" {
-		return commandPolicy{Policy: policy, Reason: "no sandbox backend is available"}
+	// A confined mode with no usable backend, or with a backend that only
+	// fences Crush's own writes, must prompt rather than run silently: the
+	// command's child processes would be unconfined.
+	if status := sandbox.Describe(ctx, policy); status.Backend == "none" || !status.ConfinesChildren {
+		reason := "no sandbox backend is available"
+		if status.Backend != "none" {
+			reason = status.Missing
+		}
+		return commandPolicy{Policy: policy, Reason: reason}
 	}
 	return commandPolicy{Policy: policy, Sandboxed: true}
 }

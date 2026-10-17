@@ -4,8 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-
-	"github.com/charmbracelet/crush/internal/home"
 )
 
 // CrushConfigNames are the Crush configuration files that grant code
@@ -146,18 +144,4 @@ func CanonicalProtectedPaths(paths []string) []string {
 	}
 	slices.Sort(out)
 	return out
-}
-
-// HomeShellPaths returns the shell startup files in the user's home
-// directory. They are protected only when they fall inside a writable root.
-func HomeShellPaths() []string {
-	homeDir := home.Dir()
-	if homeDir == "" {
-		return nil
-	}
-	paths := make([]string, 0, len(ShellStartupNames))
-	for _, name := range ShellStartupNames {
-		paths = append(paths, filepath.Join(homeDir, name))
-	}
-	return paths
 }

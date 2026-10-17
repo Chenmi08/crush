@@ -63,14 +63,18 @@ func wrapEvent(ev any) *pubsub.Payload {
 		return envelope(pubsub.PayloadTypePermissionRequest, pubsub.Event[proto.PermissionRequest]{
 			Type: e.Type,
 			Payload: proto.PermissionRequest{
-				ID:          e.Payload.ID,
-				SessionID:   e.Payload.SessionID,
-				ToolCallID:  e.Payload.ToolCallID,
-				ToolName:    e.Payload.ToolName,
-				Description: e.Payload.Description,
-				Action:      e.Payload.Action,
-				Path:        e.Payload.Path,
-				Params:      e.Payload.Params,
+				ID:             e.Payload.ID,
+				SessionID:      e.Payload.SessionID,
+				ToolCallID:     e.Payload.ToolCallID,
+				ToolName:       e.Payload.ToolName,
+				Description:    e.Payload.Description,
+				Action:         e.Payload.Action,
+				Path:           e.Payload.Path,
+				Params:         e.Payload.Params,
+				Sandboxed:      e.Payload.Sandboxed,
+				SandboxMode:    e.Payload.SandboxMode,
+				Escalation:     e.Payload.Escalation,
+				EscalationMode: e.Payload.EscalationMode,
 			},
 		})
 	case pubsub.Event[permission.PermissionNotification]:
