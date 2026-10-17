@@ -45,6 +45,9 @@ func Load(workingDir, dataDir string, debug bool) (*ConfigStore, error) {
 	migrateDisableNotifications()
 
 	configPaths := lookupConfigs(workingDir)
+	if !shouldExecuteProjectConfig(workingDir) {
+		configPaths = filterGlobalConfigPaths(configPaths)
+	}
 
 	cfg, loadedPaths, err := loadFromConfigPaths(context.Background(), configPaths)
 	if err != nil {
@@ -991,6 +994,23 @@ func lookupConfigs(cwd string) []string {
 	slices.Reverse(foundConfigs)
 
 	return append(configPaths, foundConfigs...)
+}
+
+// filterGlobalConfigPaths keeps only user-level and machine-owned config
+// files. It is used for projects that have not been trusted: their
+// repository-local crushrc and crush.json must not be read, let alone
+// executed.
+func filterGlobalConfigPaths(paths []string) []string {
+	global := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if path == "" {
+			continue
+		}
+		if isGlobalConfigPath(path) {
+			global = append(global, path)
+		}
+	}
+	return global
 }
 
 func loadFromConfigPaths(ctx context.Context, configPaths []string) (*Config, []string, error) {

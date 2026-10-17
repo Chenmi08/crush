@@ -279,6 +279,13 @@ func setupLocalWorkspace(cmd *cobra.Command) (workspace.Workspace, func(), error
 		return nil, nil, err
 	}
 
+	// Repository-local configuration is shell code, so it is not executed
+	// until the project is explicitly trusted. Prompt before loading so a
+	// trusted project's config applies on the very first run.
+	if err := promptForProjectTrust(cwd); err != nil {
+		return nil, nil, err
+	}
+
 	store, err := config.Init(cwd, dataDir, debug)
 	if err != nil {
 		return nil, nil, err

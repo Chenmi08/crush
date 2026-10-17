@@ -215,6 +215,7 @@ func insertChannelWorkspaceCfg(t *testing.T, b *Backend, srvName string, enabled
 	})
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(wd, "crush.json"), cfgJSON, 0o644))
+	require.NoError(t, config.TrustProject(config.CanonicalProjectPath(wd)))
 
 	cfg, err := config.Init(wd, "", false)
 	require.NoError(t, err)

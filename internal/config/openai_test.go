@@ -138,6 +138,7 @@ func TestSetProviderAPIKeyOpenAIIsEitherOr(t *testing.T) {
 		dir := t.TempDir()
 		configPath := filepath.Join(dir, "crush.json")
 		require.NoError(t, os.WriteFile(configPath, []byte(initialConfig), 0o600))
+		TrustTestProject(t, dir)
 
 		// The in-memory config mirrors what a real load would produce.
 		// SetConfigFields auto-reloads from configPath, so any state the
@@ -394,6 +395,7 @@ func TestLoadRefreshesChatGPTModelsWhenCatwalkUpdates(t *testing.T) {
 		[]byte(chatGPTLoginConfig(chatGPTLoginToken())),
 		0o600,
 	))
+	TrustTestProject(t, workDir)
 
 	fetched := stubChatGPTModels(t, []catwalk.Model{{ID: "gpt-fresh", Name: "GPT Fresh"}})
 
@@ -428,6 +430,7 @@ func TestLoadKeepsChatGPTModelsWhenCatwalkNotModified(t *testing.T) {
 		[]byte(chatGPTLoginConfig(chatGPTLoginToken())),
 		0o600,
 	))
+	TrustTestProject(t, workDir)
 
 	fetched := stubChatGPTModels(t, []catwalk.Model{{ID: "gpt-fresh", Name: "GPT Fresh"}})
 

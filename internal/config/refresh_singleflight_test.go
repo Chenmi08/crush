@@ -58,6 +58,10 @@ func newRefreshTestStore(t *testing.T, configPath string, exchange func(ctx cont
 		ExpiresAt:    time.Now().Add(-time.Hour).Unix(),
 	}
 	writeTokenToDisk(t, configPath, expired)
+	// The config file lives in the store's working directory, so the trust
+	// gate treats it as repository-local configuration. Trust it so
+	// auto-reloads keep seeing the credential.
+	require.NoError(t, TrustProject(projectTrustKey(filepath.Dir(configPath))))
 
 	providers := csync.NewMap[string, ProviderConfig]()
 	providers.Set("hyper", ProviderConfig{

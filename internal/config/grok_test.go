@@ -41,6 +41,7 @@ func TestSetProviderAPIKeyXAIIsEitherOr(t *testing.T) {
 		dir := t.TempDir()
 		configPath := filepath.Join(dir, "crush.json")
 		require.NoError(t, os.WriteFile(configPath, []byte(initialConfig), 0o600))
+		TrustTestProject(t, dir)
 
 		// The in-memory config mirrors what a real load would produce.
 		// SetConfigFields auto-reloads from configPath, so any state the
@@ -241,6 +242,7 @@ func TestLoadRefreshesGrokModelsWhenCatwalkUpdates(t *testing.T) {
 		[]byte(grokLoginConfig(chatGPTLoginToken())),
 		0o600,
 	))
+	TrustTestProject(t, workDir)
 
 	fetched := stubGrokModels(t, []catwalk.Model{{ID: "grok-fresh", Name: "Grok Fresh"}})
 
@@ -275,6 +277,7 @@ func TestLoadKeepsGrokModelsWhenCatwalkNotModified(t *testing.T) {
 		[]byte(grokLoginConfig(chatGPTLoginToken())),
 		0o600,
 	))
+	TrustTestProject(t, workDir)
 
 	fetched := stubGrokModels(t, []catwalk.Model{{ID: "grok-fresh", Name: "Grok Fresh"}})
 

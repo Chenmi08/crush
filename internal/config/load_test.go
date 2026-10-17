@@ -40,6 +40,17 @@ func runIsolated(m *testing.M) int {
 	return m.Run()
 }
 
+// trustTestProject records the project containing dir as trusted so tests that
+// write repository-local crushrc/crush.json files keep exercising them. Trust
+// is keyed by the canonical project boundary, matching the runtime gate.
+// TrustTestProject exposes the trust gate's key derivation to black-box tests
+// in package config_test. Production code prompts and calls TrustProject
+// directly; this helper only fixes the key, which is an implementation detail.
+func TrustTestProject(t *testing.T, dir string) {
+	t.Helper()
+	require.NoError(t, TrustProject(projectTrustKey(dir)))
+}
+
 func TestConfig_LoadFromBytes(t *testing.T) {
 	data1 := []byte(`{"providers": {"openai": {"api_key": "key1", "base_url": "https://api.openai.com/v1"}}}`)
 	data2 := []byte(`{"providers": {"openai": {"api_key": "key2", "base_url": "https://api.openai.com/v2"}}}`)

@@ -28,6 +28,7 @@ func TestShellConfigDotCrushrcTakesPrecedence(t *testing.T) {
 		[]byte("option notifications osc\n"), 0o644,
 	))
 
+	config.TrustTestProject(t, workDir)
 	store, err := config.Load(workDir, dataDir, false)
 	require.NoError(t, err)
 	require.Equal(t, "osc", store.Config().Options.Notifications,
