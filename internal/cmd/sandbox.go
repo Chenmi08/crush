@@ -2,10 +2,13 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/shell"
@@ -138,7 +141,11 @@ unconfined.`,
 
 		command := strings.Join(quoteArgs(args), " ")
 		var stdout, stderr bytes.Buffer
-		result, err := shell.RunAndCapture(cmd.Context(), shell.RunOptions{
+		// Bound the diagnostic so a hanging command cannot wedge a terminal;
+		// the same policy and interpreter are used as in a session.
+		ctx, cancel := context.WithTimeout(cmd.Context(), sandboxExecTimeout)
+		defer cancel()
+		result, err := shell.RunAndCapture(ctx, shell.RunOptions{
 			Command: command,
 			Cwd:     cwd,
 			Env:     os.Environ(),
@@ -147,6 +154,9 @@ unconfined.`,
 			Policy:  rt.Policy,
 		})
 		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				return fmt.Errorf("command timed out after %s", sandboxExecTimeout)
+			}
 			return err
 		}
 		if result.Output != "" {
@@ -156,17 +166,17 @@ unconfined.`,
 			}
 		}
 		if result.ExitCode != 0 {
-			return &exitCodeError{code: result.ExitCode}
+			// Exit with the confined command's status, without printing an
+			// error box: the command already reported its own error on
+			// stderr.
+			os.Exit(result.ExitCode)
 		}
 		return nil
 	},
 }
 
-// exitCodeError carries a command's non-zero status out of a cobra RunE
-// without printing an error of its own.
-type exitCodeError struct{ code int }
-
-func (e *exitCodeError) Error() string { return fmt.Sprintf("exit status %d", e.code) }
+// sandboxExecTimeout bounds a diagnostic execution.
+const sandboxExecTimeout = 5 * time.Minute
 
 // loadSandboxStore loads the configuration for diagnostics without prompting
 // for project trust: a diagnostic command must never execute an untrusted

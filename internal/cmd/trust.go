@@ -12,11 +12,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// nonInteractiveTrustDefault documents the conservative default applied when
-// Crush cannot ask the user: repository-local configuration is not executed.
-// `crush trust` records the decision for scripts and CI.
-const nonInteractiveTrustDefault = "untrusted"
-
 var trustCmd = &cobra.Command{
 	Use:   "trust",
 	Short: "Manage which projects may execute their local configuration",
@@ -26,8 +21,9 @@ A project's crushrc and crush.json are shell code. Crush does not execute them
 until the project is explicitly trusted. Trust is recorded per canonical
 project path, so two checkouts of the same repository are separate decisions.
 
-Without a terminal, Crush never prompts and treats the project as ` + nonInteractiveTrustDefault + `.
-Run "crush trust" in a terminal, or "crush trust --yes", to grant trust.`,
+Without a terminal, Crush never prompts and treats the project as untrusted
+(the conservative default). Run "crush trust" in a terminal, or "crush trust
+--yes", to grant trust.`,
 	Example: `
 # Show whether the current project is trusted
 crush trust
@@ -129,7 +125,8 @@ var trustListCmd = &cobra.Command{
 // promptForProjectTrust asks once whether a project's repository-local
 // configuration may run, and records the answer. It is called before config
 // loading on the interactive startup path. Without a terminal it applies the
-// conservative default (untrusted) rather than prompting.
+// conservative default (untrusted) rather than prompting, and says so, so a
+// user can run `crush trust` to record the decision for scripts and CI.
 func promptForProjectTrust(cwd string) error {
 	prompt, ok := config.NewTrustPrompt(cwd)
 	if !ok {

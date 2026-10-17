@@ -283,7 +283,9 @@ func setupLocalWorkspace(cmd *cobra.Command) (workspace.Workspace, func(), error
 
 	// Repository-local configuration is shell code, so it is not executed
 	// until the project is explicitly trusted. Prompt before loading so a
-	// trusted project's config applies on the very first run.
+	// trusted project's config applies on the very first run. Without a
+	// terminal the prompt is skipped and the project stays untrusted, which
+	// is the documented conservative default for non-interactive runs.
 	if err := promptForProjectTrust(cwd); err != nil {
 		return nil, nil, err
 	}
