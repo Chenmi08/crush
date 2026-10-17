@@ -227,3 +227,57 @@ func isReadOnlyFilesystemError(stderr string) bool {
 	}
 	return false
 }
+
+// TestBubblewrap_ProtectedVariantsRefused verifies every category the PRD
+// lists is refused by the kernel boundary, not just the one representative
+// path covered above.
+func TestBubblewrap_ProtectedVariantsRefused(t *testing.T) {
+	requireBubblewrap(t)
+	policy := bubblewrapTestPolicy(t)
+
+	targets := []string{
+		filepath.Join(policy.Workspace, "crushrc"),
+		filepath.Join(policy.Workspace, "AGENTS.md"),
+		filepath.Join(policy.Workspace, "CLAUDE.local.md"),
+		filepath.Join(policy.Workspace, ".crush"),
+		filepath.Join(policy.Workspace, ".git", "config"),
+		filepath.Join(policy.Workspace, ".git", "hooks", "pre-commit"),
+		filepath.Join(policy.Workspace, ".bashrc"),
+	}
+	for _, target := range targets {
+		_, stderr, err := runWrapped(t, policy, policy.Workspace, "echo x > "+target)
+		require.Error(t, err, target)
+		_, statErr := os.Stat(target)
+		require.True(t, os.IsNotExist(statErr), "%s must not be created", target)
+		require.NotEmpty(t, stderr, target)
+	}
+}
+
+// TestBubblewrap_GitObjectsStayWritable verifies protection is targeted: git's
+// ordinary operation is not broken by protecting its execution surfaces.
+func TestBubblewrap_GitObjectsStayWritable(t *testing.T) {
+	requireBubblewrap(t)
+	policy := bubblewrapTestPolicy(t)
+
+	target := filepath.Join(policy.Workspace, ".git", "objects", "ab", "cdef")
+	_, stderr, err := runWrapped(t, policy, policy.Workspace,
+		"mkdir -p "+filepath.Dir(target)+" && echo x > "+target)
+	require.NoError(t, err, "stderr=%q", stderr)
+	_, statErr := os.Stat(target)
+	require.NoError(t, statErr)
+}
+
+// TestBubblewrap_NoArtifactsLeftBehind verifies a refused write leaves no
+// placeholder or mount point in the workspace.
+func TestBubblewrap_NoArtifactsLeftBehind(t *testing.T) {
+	requireBubblewrap(t)
+	policy := bubblewrapTestPolicy(t)
+
+	_, _, err := runWrapped(t, policy, policy.Workspace,
+		"echo x > "+filepath.Join(policy.Workspace, "crushrc"))
+	require.Error(t, err)
+
+	entries, err := os.ReadDir(policy.Workspace)
+	require.NoError(t, err)
+	require.Empty(t, entries, "a refused write must leave no filesystem trace")
+}

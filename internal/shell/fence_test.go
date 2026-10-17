@@ -237,3 +237,33 @@ func testBackgroundShellManager(t *testing.T) *BackgroundShellManager {
 	t.Helper()
 	return newBackgroundShellManager()
 }
+
+// TestFence_ProtectedPathRefusedThroughShell verifies a protected path inside a
+// writable root is refused when written through a redirect, through `source`,
+// and through a child process.
+func TestFence_ProtectedPathRefusedThroughShell(t *testing.T) {
+	t.Parallel()
+	policy := fencePolicy(t)
+
+	for _, target := range []string{
+		filepath.Join(policy.Workspace, "crushrc"),
+		filepath.Join(policy.Workspace, "AGENTS.md"),
+		filepath.Join(policy.Workspace, ".git", "config"),
+	} {
+		_, stderr, err := runFenced(t, policy, policy.Workspace, "echo x > "+target)
+		require.Error(t, err, target)
+		require.Contains(t, stderr, sandbox.Marker, target)
+		require.Contains(t, stderr, "reason=protected", target)
+		_, statErr := os.Stat(target)
+		require.True(t, os.IsNotExist(statErr), "%s must not be created", target)
+	}
+
+	// Through a child process: the kernel-boundary test covers the OS
+	// backend; here the file-open hook must refuse a shell redirect nested
+	// inside a sourced script.
+	script := filepath.Join(policy.Workspace, "script.sh")
+	require.NoError(t, os.WriteFile(script, []byte("echo x > "+filepath.Join(policy.Workspace, "crushrc")+"\n"), 0o644))
+	_, stderr, err := runFenced(t, policy, policy.Workspace, "source "+script)
+	require.Error(t, err)
+	require.Contains(t, stderr, "reason=protected")
+}
