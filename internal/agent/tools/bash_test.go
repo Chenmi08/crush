@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -294,4 +295,38 @@ func TestBlockFuncsExecFlags(t *testing.T) {
 	require.False(t, blocked("rg", "--files", "-g", "*.go"))
 	require.False(t, blocked("fd", "pattern"))
 	require.False(t, blocked("fdfind", "-e", "go"))
+}
+
+// TestBashTool_ReadOnlyRedirectRequiresPermission is the regression test for
+// the read-only shortcut approving an arbitrary write. A command that matches
+// the read-only allow-list but carries an output redirect must go through the
+// normal permission flow, because the redirect can write anywhere the user
+// can write.
+func TestBashTool_ReadOnlyRedirectRequiresPermission(t *testing.T) {
+	workingDir := t.TempDir()
+	tool, perms := newBashToolWithRecordingPerms(workingDir, true)
+	ctx := context.WithValue(context.Background(), SessionIDContextKey, "test-session")
+
+	outside := filepath.Join(t.TempDir(), "redirected")
+
+	resp := runBashTool(t, tool, ctx, BashParams{
+		Description: "redirect git status outside the workspace",
+		Command:     "git status > " + outside,
+	})
+
+	require.False(t, resp.IsError)
+	require.Equal(t, 1, perms.requestCount,
+		"a read-only command with an output redirect must request permission")
+	require.NotNil(t, perms.lastRequest)
+	require.Contains(t, perms.lastRequest.Description, "git status")
+
+	// The same command without the redirect keeps the shortcut.
+	perms.requestCount = 0
+	resp = runBashTool(t, tool, ctx, BashParams{
+		Description: "plain git status",
+		Command:     "git status",
+	})
+	require.False(t, resp.IsError)
+	require.Equal(t, 0, perms.requestCount,
+		"a plain read-only command must not request permission")
 }

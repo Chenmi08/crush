@@ -2,7 +2,6 @@ package tools
 
 import (
 	"runtime"
-	"slices"
 	"strings"
 )
 
@@ -63,20 +62,27 @@ var safeCommands = append([]string{
 	"git tag",
 }, fdCommands...)
 
-var chainingMetacharacters = []string{
-	";",
-	"|",
-	"&&",
-	"$(",
-	"`",
-}
-
-// containsCommandChaining reports whether s contains shell metacharacters
-// that enable command chaining or substitution.
-func containsCommandChaining(s string) bool {
-	return slices.ContainsFunc(chainingMetacharacters, func(c string) bool {
-		return strings.Contains(s, c)
-	})
+// isSafeReadOnlyCommand reports whether the command may run without a
+// permission prompt: a configured dangerous command never qualifies, and the
+// command must both match the read-only allow-list and be a plain invocation
+// with no construct that can write or run something else (see
+// [isReadOnlyInvocation]).
+func isSafeReadOnlyCommand(cmd string, dangerous bool) bool {
+	if dangerous {
+		return false
+	}
+	if !isReadOnlyInvocation(cmd) {
+		return false
+	}
+	cmdLower := strings.ToLower(strings.TrimSpace(cmd))
+	for _, safe := range safeCommands {
+		if strings.HasPrefix(cmdLower, safe) {
+			if len(cmdLower) == len(safe) || cmdLower[len(safe)] == ' ' || cmdLower[len(safe)] == '-' {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func init() {

@@ -240,18 +240,7 @@ func NewBashTool(permissions permission.Service, workingDir, spillDir string, at
 			// can't approve them.
 			dangerous := isDangerousCommand(params.Command, dangerousCommands)
 
-			isSafeReadOnly := false
-			if !dangerous && !containsCommandChaining(params.Command) {
-				cmdLower := strings.ToLower(params.Command)
-				for _, safe := range safeCommands {
-					if strings.HasPrefix(cmdLower, safe) {
-						if len(cmdLower) == len(safe) || cmdLower[len(safe)] == ' ' || cmdLower[len(safe)] == '-' {
-							isSafeReadOnly = true
-							break
-						}
-					}
-				}
-			}
+			isSafeReadOnly := isSafeReadOnlyCommand(params.Command, dangerous)
 
 			sessionID := GetSessionFromContext(ctx)
 			if sessionID == "" {
