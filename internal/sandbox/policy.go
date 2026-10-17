@@ -142,12 +142,19 @@ func (d Denial) Error() string {
 
 // IsDenial reports whether err is a policy denial.
 func IsDenial(err error) bool {
+	if IsRunnerError(err) {
+		return false
+	}
 	var d Denial
 	return errors.As(err, &d)
 }
 
-// AsDenial returns the denial carried by err, if any.
+// AsDenial returns the denial carried by err, if any. A denial wrapped inside
+// a runner failure is not reported: the command never ran.
 func AsDenial(err error) (Denial, bool) {
+	if IsRunnerError(err) {
+		return Denial{}, false
+	}
 	var d Denial
 	if errors.As(err, &d) {
 		return d, true

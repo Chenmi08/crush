@@ -201,10 +201,14 @@ func dispatchShebang(ctx context.Context, scriptPath string, probe []byte, args 
 	isolateProcess(cmd)
 	// The shebang path spawns a process directly, so it needs the same
 	// backend wrapping as the ordinary exec path.
-	if err := sandbox.WrapCommand(ctx, policy, cmd); err != nil {
+	cleanup, err := sandbox.WrapCommand(ctx, policy, cmd)
+	if err != nil {
 		hc := interp.HandlerCtx(ctx)
 		fmt.Fprintf(hc.Stderr, "crush: %s: %v\n", scriptPath, err)
 		return interp.ExitStatus(126)
+	}
+	if cleanup != nil {
+		defer cleanup()
 	}
 
 	if err := cmd.Run(); err != nil {

@@ -23,4 +23,4 @@ func (fenceBackend) Enforcement(*Policy) Enforcement { return EnforcementPartial
 
 // Wrap does nothing: the in-process fence is applied by the shell and the file
 // tools, not by wrapping a process.
-func (fenceBackend) Wrap(context.Context, *Policy, *exec.Cmd) error { return nil }
+func (fenceBackend) Wrap(context.Context, *Policy, *exec.Cmd) (func(), error) { return nil, nil }

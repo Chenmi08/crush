@@ -64,9 +64,13 @@ func processGroupExecHandler(killTimeout time.Duration, policy *sandbox.Policy) 
 
 		// Every child process goes through the selected backend, so the
 		// boundary covers the command and everything it starts.
-		if wrapErr := sandbox.WrapCommand(ctx, policy, &cmd); wrapErr != nil {
+		cleanup, wrapErr := sandbox.WrapCommand(ctx, policy, &cmd)
+		if wrapErr != nil {
 			fmt.Fprintf(hc.Stderr, "crush: %v\n", wrapErr)
 			return interp.ExitStatus(126)
+		}
+		if cleanup != nil {
+			defer cleanup()
 		}
 
 		err = cmd.Start()

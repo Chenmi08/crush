@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -23,10 +24,13 @@ type Backend interface {
 	// Enforcement reports the strength of the boundary this backend can
 	// establish for the policy, given its own limitations.
 	Enforcement(p *Policy) Enforcement
-	// Wrap rewrites cmd in place so the boundary applies to it. A non-nil
-	// error means the boundary could not be established and the command must
-	// not run: it is a runner failure, not a policy denial.
-	Wrap(ctx context.Context, p *Policy, cmd *exec.Cmd) error
+	// Wrap rewrites cmd in place so the boundary applies to it. The returned
+	// cleanup func, when non-nil, must run after the command exits; it
+	// removes any artifacts the backend created to express the policy (for
+	// example mount points for protected paths that did not exist yet). A
+	// non-nil error means the boundary could not be established and the
+	// command must not run: it is a runner failure, not a policy denial.
+	Wrap(ctx context.Context, p *Policy, cmd *exec.Cmd) (cleanup func(), err error)
 	// Available reports whether the backend can run on this host. It must be
 	// a functional probe, not a version check.
 	Available(ctx context.Context) error
@@ -56,9 +60,11 @@ func (e *RunnerError) Error() string {
 func (e *RunnerError) Unwrap() error { return e.Err }
 
 // IsRunnerError reports whether err is a failure to establish the boundary.
+// A policy denial wrapped inside a runner error is still a runner failure:
+// the command never ran, so the model must not escalate around it.
 func IsRunnerError(err error) bool {
 	var r *RunnerError
-	return As(err, &r)
+	return errors.As(err, &r)
 }
 
 // Selection is the result of probing for a backend.
@@ -149,27 +155,28 @@ func joinFailures(failures []string) string {
 //
 // When no backend is usable the command is refused: a confined mode never
 // silently runs unconfined.
-func WrapCommand(ctx context.Context, p *Policy, cmd *exec.Cmd) error {
+func WrapCommand(ctx context.Context, p *Policy, cmd *exec.Cmd) (cleanup func(), err error) {
 	if p == nil || p.Mode == ModeDangerFullAccess {
-		return nil
+		return nil, nil
 	}
 	sel := Select(ctx)
 	if sel.Backend == nil {
-		return &RunnerError{
+		return nil, &RunnerError{
 			Backend:  "none",
 			Platform: runtime.GOOS,
-			Detail:   sel.Reason,
+			Detail:   sel.Reason + " (or disable the sandbox explicitly with --no-sandbox, or set sandbox mode danger-full-access)",
 		}
 	}
-	if err := sel.Backend.Wrap(ctx, p, cmd); err != nil {
-		return &RunnerError{
+	cleanup, err = sel.Backend.Wrap(ctx, p, cmd)
+	if err != nil {
+		return nil, &RunnerError{
 			Backend:  sel.Backend.Name(),
 			Platform: runtime.GOOS,
 			Detail:   "the backend could not apply its profile",
 			Err:      err,
 		}
 	}
-	return nil
+	return cleanup, nil
 }
 
 // Status is the resolved policy plus the enforcement facts, suitable for the
@@ -256,6 +263,29 @@ func (p *Policy) ApplyEnv(env []string) []string {
 		"TMP="+p.TempDir,
 		"TEMP="+p.TempDir,
 	)
+}
+
+// protectedPlaceholder returns a path to an empty file that a backend can bind
+// over a protected path that does not exist yet, so the confined process
+// cannot create it. The file lives in the policy's private temp directory, so
+// it is removed with the rest of the run's state.
+func (p *Policy) protectedPlaceholder() (string, error) {
+	if p == nil || p.TempDir == "" {
+		return "", errors.New("sandbox: no private temp directory for protected-path placeholders")
+	}
+	dir := filepath.Join(p.TempDir, ".placeholders")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("sandbox: creating placeholder directory: %w", err)
+	}
+	path := filepath.Join(dir, "protected")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return "", fmt.Errorf("sandbox: creating protected-path placeholder: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 // availableOnPath is a small helper for functional probes.

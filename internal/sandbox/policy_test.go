@@ -206,14 +206,28 @@ func TestDenial_MarkerIsStable(t *testing.T) {
 	require.True(t, IsDenial(err))
 }
 
-func TestDescribe_ReportsPartialForInProcessFence(t *testing.T) {
+func TestDescribe_ReportsEnforcementForSelectedBackend(t *testing.T) {
 	t.Parallel()
 	p := testPolicy(t)
 	status := Describe(t.Context(), p)
-	require.Equal(t, EnforcementPartial, status.Enforcement)
-	require.Equal(t, "enforced partially", status.Enforcement.Note())
-	require.Contains(t, status.Missing, "child processes")
+
+	sel := Select(t.Context())
+	require.Equal(t, sel.Enforcement, status.Enforcement,
+		"the reported enforcement must be the selected backend's")
+	require.Contains(t, status.Note, status.Enforcement.Note())
 	require.Contains(t, status.String(), "sandbox=workspace-write")
+	if status.Enforcement == EnforcementPartial {
+		require.NotEmpty(t, status.Missing)
+	}
+}
+
+// TestFenceBackend_ReportsPartial pins the honest reporting of the in-process
+// fence: child processes are not confined, so it is never full.
+func TestFenceBackend_ReportsPartial(t *testing.T) {
+	t.Parallel()
+	p := testPolicy(t)
+	require.Equal(t, EnforcementPartial, fenceBackend{}.Enforcement(p))
+	require.Equal(t, "in-process", fenceBackend{}.Name())
 }
 
 // TestCanonicalProtectedPaths_SortedAndDeduped pins the shape of the

@@ -76,11 +76,9 @@ func DefaultProtectedPaths(workspace string, globalDirs ...string) []string {
 	for _, name := range CrushConfigNames {
 		paths = append(paths, filepath.Join(workspace, name))
 	}
-	paths = append(paths,
-		filepath.Join(workspace, ".crush"),
-		filepath.Join(workspace, ".crush", "crushrc"),
-		filepath.Join(workspace, ".crush", "crush.json"),
-	)
+	// The whole .crush directory is protected: it holds project state and a
+	// nested crushrc would be executed on reload.
+	paths = append(paths, filepath.Join(workspace, ".crush"))
 
 	// Instruction files at the workspace root.
 	for _, name := range InstructionFileNames {
