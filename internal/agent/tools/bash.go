@@ -336,7 +336,7 @@ func NewBashTool(permissions permission.Service, workingDir, spillDir string, at
 						return fantasy.ToolResponse{}, fmt.Errorf("[Job %s] error executing command: %w", bgShell.ID, execErr)
 					}
 
-					stdout = formatOutput(stdout, stderr, execErr, spillDir)
+					stdout = formatOutput(ctx, stdout, stderr, execErr, spillDir)
 
 					metadata := BashResponseMetadata{
 						StartTime:        startTime.UnixMilli(),
@@ -422,7 +422,7 @@ func NewBashTool(permissions permission.Service, workingDir, spillDir string, at
 					return fantasy.ToolResponse{}, fmt.Errorf("[Job %s] error executing command: %w", bgShell.ID, execErr)
 				}
 
-				stdout = formatOutput(stdout, stderr, execErr, spillDir)
+				stdout = formatOutput(ctx, stdout, stderr, execErr, spillDir)
 
 				metadata := BashResponseMetadata{
 					StartTime:        startTime.UnixMilli(),
@@ -457,9 +457,16 @@ func NewBashTool(permissions permission.Service, workingDir, spillDir string, at
 }
 
 // formatOutput formats the output of a completed command with error handling
-func formatOutput(stdout, stderr string, execErr error, spillDir string) string {
+func formatOutput(ctx context.Context, stdout, stderr string, execErr error, spillDir string) string {
 	interrupted := shell.IsInterrupt(execErr)
 	exitCode := shell.ExitCode(execErr)
+
+	// Spill files are written by Crush, not the command, so they must land
+	// somewhere the policy allows: the policy's private temp directory when
+	// one is attached, the data directory otherwise.
+	if dir := spillDirForContext(ctx); dir != "" {
+		spillDir = dir
+	}
 
 	stdout = truncateOutput(stdout, spillDir)
 	stderr = truncateOutput(stderr, spillDir)

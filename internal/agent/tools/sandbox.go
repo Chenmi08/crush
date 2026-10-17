@@ -183,3 +183,15 @@ func requestPermission(ctx context.Context, permissions permission.Service, req 
 	}
 	return permissions.Request(ctx, req)
 }
+
+// spillDirForContext returns the directory Crush should spill oversized tool
+// output into under the current policy: the policy's private temp directory,
+// which the fence allows, or "" when no policy is attached (the caller keeps
+// its default).
+func spillDirForContext(ctx context.Context) string {
+	policy := SandboxPolicyFromContext(ctx)
+	if policy == nil || policy.TempDir == "" {
+		return ""
+	}
+	return policy.TempDir
+}
