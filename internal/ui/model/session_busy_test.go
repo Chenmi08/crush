@@ -427,6 +427,66 @@ func TestLocalYoloToggleSupersedesInFlightProbe(t *testing.T) {
 	require.True(t, m.busyFetchInFlight, "re-dispatched refresh must be in flight")
 }
 
+// TestCancelArmedEscReachesAgentWhenBusyGoesStale pins the fix for a turn
+// whose terminal event never reached the UI: the memoized busy state stays
+// true while the backend is already idle. Once the first esc has armed the
+// cancel, a second press must still reach AgentCancel instead of being
+// swallowed by a stale gate.
+func TestCancelArmedEscReachesAgentWhenBusyGoesStale(t *testing.T) {
+	pinTTLs(t)
+
+	ws := &countingWorkspace{ready: true, agentBusy: true}
+	m := newBusyUI(ws)
+	warmCaches(m, true)
+
+	pressEsc := func() {
+		_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+		runCmds(m, cmd)
+	}
+
+	pressEsc() // first press arms the cancel
+	require.True(t, m.isCanceling, "first esc press must arm cancellation")
+
+	// The turn ended but its terminal event was lost: the cache still says
+	// busy, so this test pins that arming does not depend on it. Conversely
+	// a stale idle value must not drop the armed press either.
+	m.agentBusyCache.set(false)
+	require.False(t, m.isAgentBusy())
+
+	pressEsc() // second press must get through on isCanceling alone
+	require.Equal(t, 1, ws.cancelCalls, "armed esc must reach AgentCancel despite a stale idle cache")
+	require.False(t, m.isCanceling, "the cancel must be consumed")
+}
+
+// TestArmedCancelBypassesAgentReadyGate: a second esc press expresses an
+// explicit cancel intent, which must not be dropped by a stale readiness
+// value. Cancel is a no-op on the backend when there is nothing to stop, so
+// attempting it is harmless.
+func TestArmedCancelBypassesAgentReadyGate(t *testing.T) {
+	pinTTLs(t)
+
+	ws := &countingWorkspace{ready: true, agentBusy: true}
+	m := newBusyUI(ws)
+	warmCaches(m, true)
+
+	// First press arms while readiness is still believed true.
+	m.cancelAgent()
+	require.True(t, m.isCanceling)
+
+	// Readiness goes stale (e.g. a failed probe in client/server mode).
+	m.agentReady = false
+
+	m.cancelAgent()
+	require.Equal(t, 1, ws.cancelCalls, "an armed cancel must bypass the readiness gate")
+
+	// Unarmed presses still honor the gate: no cancel is attempted.
+	ws.resetCounters()
+	m.agentReady = false
+	m.cancelAgent()
+	require.Zero(t, ws.cancelCalls, "an unarmed press must stay behind the readiness gate")
+	require.False(t, m.isCanceling, "an unarmed press must not arm while not ready")
+}
+
 // TestSendMessageSetsOptimisticBusy pins the esc-after-enter behavior:
 // submitting a prompt optimistically marks the agent busy so an immediate
 // esc routes to cancelAgent instead of reading a stale idle value and doing

@@ -3569,9 +3569,13 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 		return tea.Batch(cmds...)
 	}
 
-	// Handle cancel key when agent is busy.
+	// Handle cancel key when agent is busy. A second esc press while a
+	// cancel is armed always reaches cancelAgent even if the memoized busy
+	// state has since gone stale (e.g. the turn's terminal event was lost
+	// and the backend is already idle): the cancel is idempotent there,
+	// and swallowing the key would leave the user without feedback.
 	if key.Matches(msg, m.keyMap.Chat.Cancel) {
-		if m.isAgentBusy() {
+		if m.isAgentBusy() || m.isCanceling {
 			if cmd := m.cancelAgent(); cmd != nil {
 				cmds = append(cmds, cmd)
 			}
@@ -6119,8 +6123,11 @@ func (m *UI) cancelAgent() tea.Cmd {
 	}
 
 	// Gate on the memoized ready state: esc is a hot key and AgentIsReady
-	// is a synchronous HTTP round-trip in client/server mode.
-	if !m.agentReady {
+	// is a synchronous HTTP round-trip in client/server mode. An armed
+	// cancel (second esc press) bypasses the gate: the user has already
+	// stated the intent, and Cancel is a no-op when the backend has no run
+	// to stop, so a stale readiness value must not swallow it.
+	if !m.agentReady && !m.isCanceling {
 		return nil
 	}
 
