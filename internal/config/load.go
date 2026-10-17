@@ -1066,6 +1066,14 @@ func loadFromConfigPaths(ctx context.Context, configPaths []string) (*Config, []
 		}
 	}
 
+	// Project-level configuration may tighten the sandbox but never widen
+	// it. The check runs on the raw documents, in load order, so a
+	// repository-local file cannot grant itself a writable root or a wider
+	// mode before validation.
+	if err := checkSandboxLayerOrder(configs); err != nil {
+		return nil, nil, err
+	}
+
 	// Warn if both a JSON config and a crushrc exist in the same directory
 	// and define overlapping top-level keys. Disjoint coexistence is
 	// intentional and not worth warning about.
@@ -1090,6 +1098,20 @@ func loadFromConfigPaths(ctx context.Context, configPaths []string) (*Config, []
 	cfg, err := loadFromBytes(configs)
 	if err != nil {
 		return nil, nil, err
+	}
+
+	// Sandbox settings merge with tighten-only semantics: a deep map merge
+	// would let a later document replace the user's denials and exclusions
+	// instead of adding to them.
+	merged, err := mergeSandboxLayers(configs)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid sandbox configuration layer: %w", err)
+	}
+	if !merged.IsZero() {
+		if cfg.Permissions == nil {
+			cfg.Permissions = &Permissions{}
+		}
+		cfg.Permissions.Sandbox = &merged
 	}
 	return cfg, loaded, nil
 }

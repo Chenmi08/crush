@@ -130,7 +130,7 @@ func ValidateSandboxModeFlag(value string) (sandbox.Mode, error) {
 	}
 	mode, err := sandbox.ValidateMode(value)
 	if err != nil {
-		return "", fmt.Errorf("--sandbox: %w", err)
+		return "", err
 	}
 	return mode, nil
 }

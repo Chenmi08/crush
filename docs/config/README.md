@@ -122,6 +122,7 @@ Available Commands:
   lsp           Manage language servers
   hook          Manage hooks
   permissions   Configure tool permissions
+  sandbox       Configure the filesystem sandbox
   option        Configure general Crush behavior
 ```
 
@@ -417,6 +418,169 @@ Usage:
 
 Flags:
       --name string              remove hooks with this name
+```
+
+### sandbox
+
+Configure the filesystem sandbox. The sandbox confines *writes* performed by
+Crush's tools and by commands it runs. Reads are not confined, and network
+access is not isolated — see [Sandbox](#sandbox-model) below.
+
+```text
+Usage:
+  sandbox [command]
+
+Available Commands:
+  mode                 Select the sandbox mode
+  allow-write          Grant extra writable directories
+  deny-write           Keep paths unwritable inside a writable root
+  exclude-command      Run matching commands outside the sandbox
+  fail-if-unavailable  Refuse to start when no sandbox backend is usable
+```
+
+#### `sandbox mode`
+
+```text
+Usage:
+  sandbox mode <read-only|workspace-write|danger-full-access>
+```
+
+The default is `workspace-write`. `danger-full-access` disables confinement
+and must be chosen explicitly; an absent or invalid setting never selects it.
+
+#### `sandbox allow-write`
+
+```text
+Usage:
+  sandbox allow-write <path> [<path> ...]
+```
+
+Extra writable roots, for workflows that need them: `~/.kube`, a shared build
+cache, a sibling repository. Paths are canonicalized and deduplicated, and a
+path that does not exist is reported rather than silently ignored. Relative
+paths resolve against the workspace.
+
+#### `sandbox deny-write`
+
+```text
+Usage:
+  sandbox deny-write <path> [<path> ...]
+```
+
+Paths that stay unwritable even inside a writable root. Denials take
+precedence over grants, and a denial inside a denial is harmless.
+
+#### `sandbox exclude-command`
+
+```text
+Usage:
+  sandbox exclude-command <pattern> [<pattern> ...]
+```
+
+Commands matching a pattern run outside the sandbox and therefore go through
+the normal approval flow. Patterns are glob-style: `docker *` matches any
+command starting with `docker `. A pattern matches the command text, not a
+wrapped or interpreted command, so `docker *` does not match
+`bash -c 'docker run'`. Add the interpreter or wrapper explicitly if that is
+what you mean.
+
+#### `sandbox fail-if-unavailable`
+
+```text
+Usage:
+  sandbox fail-if-unavailable [true|false]
+```
+
+Refuse to start when the sandbox cannot be established, for managed or
+repeatable environments. The exit message is the same actionable message a
+runtime refusal prints.
+
+### Sandbox model
+
+The sandbox is on by default. It has three modes:
+
+| Mode | Meaning |
+| --- | --- |
+| `read-only` | No writes except `/dev/null` and a private per-run temp directory. |
+| `workspace-write` | Writes allowed under the workspace, a private per-run temp directory, the user cache directory, and any extra roots. |
+| `danger-full-access` | No confinement. Must be chosen explicitly. |
+
+**What is confined.** Writes performed through Crush's file tools (`write`,
+`edit`, `multiedit`, `download`) and through the shell, including redirects,
+sourcing, and child processes. Background jobs and bang-mode (`!`) commands
+follow the session policy.
+
+**What is not confined.** Reads, in every mode: the agent can read `~/.ssh`,
+`~/.aws`, and any `.env` on the machine. Network access: a confined command
+can still reach the network. `read-only` means "does not write", not "cannot
+exfiltrate". Hooks, MCP servers, and LSP servers run with your authority,
+outside the sandbox.
+
+**Protected paths.** Paths that grant future code execution stay unwritable
+even inside a writable root, and no setting can re-allow them: Crush's
+configuration files and state directories, instruction files (`AGENTS.md`,
+`CRUSH.md`, `CLAUDE.md`, `GEMINI.md` and their `.local` variants), Git's
+execution surfaces (`.git/hooks`, `.git/config`, and the resolved gitdir of
+worktrees and submodules), and shell startup files when they fall inside a
+writable root.
+
+**Enforcement.** The boundary is enforced by the OS where possible: `bubblewrap`
+on Linux (falling back to Landlock, then to the in-process fence), Seatbelt via
+`sandbox-exec` on macOS. Windows has no backend and reports `unsupported`;
+confined commands are refused rather than run unconfined. `crush sandbox
+status` prints the resolved policy, backend, and enforcement level, and
+`crush sandbox exec -- <command>` runs one command under that policy for
+testing.
+
+**Exclusions and no backend.** An excluded command, or any command on a host
+with no usable backend, prompts instead of running silently, and the prompt
+states that it is unsandboxed.
+
+**YOLO mode and disabling.** `--yolo` disables prompts only; the boundary
+still applies. Disabling the sandbox requires `--no-sandbox` (or `sandbox mode
+danger-full-access`) and prints a warning.
+
+**Project configuration.** A repository's `crushrc` or `crush.json` may add
+write denials and exclusions but may not widen the mode, add a writable root,
+or disable the sandbox. A project attempt to widen is rejected at load with the
+offending key named.
+
+**Project trust.** Repository-local configuration is shell code, so it is not
+executed until you trust the project. Crush asks once, names the files that
+would run, and records the answer per canonical project path. Decline and only
+your user-level configuration applies. `crush trust` reports or grants trust,
+`crush trust --revoke` withdraws it, and `crush trust list` shows trusted
+projects.
+
+```bash
+# Confine writes to the workspace, plus a kube cache.
+sandbox mode workspace-write
+sandbox allow-write ~/.kube
+
+# Keep a secrets directory unwritable inside the workspace.
+sandbox deny-write ./secrets
+
+# Let docker run outside the sandbox (with a prompt).
+sandbox exclude-command "docker *"
+
+# Refuse to start on a host without a usable sandbox.
+sandbox fail-if-unavailable
+```
+
+The equivalent JSON lives under `permissions.sandbox`:
+
+```json
+{
+  "permissions": {
+    "sandbox": {
+      "mode": "workspace-write",
+      "allow_write": ["~/.kube"],
+      "deny_write": ["./secrets"],
+      "exclude_commands": ["docker *"],
+      "fail_if_unavailable": true
+    }
+  }
+}
 ```
 
 ### permissions

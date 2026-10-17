@@ -57,7 +57,9 @@ func init() {
 	rootCmd.PersistentFlags().BoolP("debug", "d", false, "Debug")
 	rootCmd.PersistentFlags().StringVarP(&clientHost, "host", "H", server.DefaultHost(), "Connect to a specific crush server host (for advanced users)")
 	rootCmd.Flags().BoolP("help", "h", false, "Help")
-	rootCmd.Flags().BoolP("yolo", "y", false, "Automatically accept all permissions (dangerous mode)")
+	rootCmd.Flags().BoolP("yolo", "y", false, "Automatically accept all permissions (dangerous mode). Prompts are disabled; the sandbox still applies")
+	rootCmd.Flags().String("sandbox", "", "Sandbox mode: read-only, workspace-write, or danger-full-access (default workspace-write)")
+	rootCmd.Flags().Bool("no-sandbox", false, "Disable the sandbox entirely: commands run unconfined (prints a warning)")
 	rootCmd.PersistentFlags().StringSlice("channels", nil, "MCP servers to enable as channels (repeatable), e.g. --channels server:webhook")
 	_ = rootCmd.PersistentFlags().MarkHidden("channels")
 	rootCmd.Flags().StringP("session", "s", "", "Continue a previous session by ID")
@@ -294,6 +296,10 @@ func setupLocalWorkspace(cmd *cobra.Command) (workspace.Workspace, func(), error
 	cfg := store.Config()
 	store.Overrides().SkipPermissionRequests = yolo
 	store.Overrides().EnabledChannels = channels
+
+	if err := applySandboxFlags(cmd, store); err != nil {
+		return nil, nil, err
+	}
 
 	if err := os.MkdirAll(cfg.Options.DataDirectory, 0o700); err != nil {
 		return nil, nil, fmt.Errorf("failed to create data directory: %q %w", cfg.Options.DataDirectory, err)

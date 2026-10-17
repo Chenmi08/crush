@@ -62,7 +62,7 @@ func ResolveSandbox(cfg Sandbox, opts SandboxResolveOptions) (*sandbox.Policy, e
 		if opts.Base != nil {
 			base = *opts.Base
 		}
-		if err := checkProjectTightens(cfg, base); err != nil {
+		if err := CheckProjectSandboxTightens(cfg, base); err != nil {
 			return nil, err
 		}
 	}
@@ -75,17 +75,38 @@ func ResolveSandbox(cfg Sandbox, opts SandboxResolveOptions) (*sandbox.Policy, e
 		GlobalDataDir:   opts.GlobalDataDir,
 		Config: sandbox.Config{
 			Mode:              mode,
-			AllowWrite:        cfg.AllowWrite,
-			DenyWrite:         cfg.DenyWrite,
+			AllowWrite:        resolveAgainstWorkspace(cfg.AllowWrite, opts.Workspace),
+			DenyWrite:         resolveAgainstWorkspace(cfg.DenyWrite, opts.Workspace),
 			ExcludeCommands:   cfg.ExcludeCommands,
 			FailIfUnavailable: cfg.FailIfUnavailable,
 		},
 	})
 }
 
-// checkProjectTightens rejects a project-level configuration that widens the
-// sandbox relative to base. It reports the offending key.
-func checkProjectTightens(project, base Sandbox) error {
+// resolveAgainstWorkspace resolves relative sandbox paths against the
+// workspace rather than the process working directory, so a checked-out
+// repository's `./secrets` means the repository's own secrets directory.
+func resolveAgainstWorkspace(paths []string, workspace string) []string {
+	if len(paths) == 0 {
+		return nil
+	}
+	resolved := make([]string, 0, len(paths))
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		if !filepath.IsAbs(path) && !strings.HasPrefix(path, "~") {
+			path = filepath.Join(workspace, path)
+		}
+		resolved = append(resolved, path)
+	}
+	return resolved
+}
+
+// CheckProjectSandboxTightens rejects a project-level configuration that
+// widens the sandbox relative to base. It reports the offending key.
+func CheckProjectSandboxTightens(project, base Sandbox) error {
 	if project.Mode != "" && project.Mode != base.Mode {
 		if base.Mode == "" || widensMode(sandbox.Mode(project.Mode), sandbox.Mode(base.Mode)) {
 			return fmt.Errorf("%w: permissions.sandbox.mode %q would widen %q", ErrProjectWidensSandbox, project.Mode, base.Mode)
