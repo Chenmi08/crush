@@ -75,7 +75,10 @@ func NewWriteTool(
 
 			filePath := filepathext.SmartJoin(workingDir, params.FilePath)
 
-			ctx, denied, err := applyEscalation(ctx, permissions, WriteToolName, escalation, call)
+			ctx, denied, err := applyEscalation(ctx, permissions, WriteToolName, escalation, call, WritePermissionsParams{
+				FilePath:   filePath,
+				NewContent: params.Content,
+			})
 			if err != nil {
 				return fantasy.ToolResponse{}, err
 			}
@@ -87,7 +90,10 @@ func NewWriteTool(
 			// refused write leaves no directory or file behind. A refusal
 			// asks the user once via the "Leave Sandbox?" dialog; approval
 			// widens the policy for this call and the write proceeds.
-			ctx, denied, err = handleFenceDenial(ctx, permissions, WriteToolName, filePath, call)
+			ctx, denied, err = handleFenceDenial(ctx, permissions, WriteToolName, filePath, call, WritePermissionsParams{
+				FilePath:   filePath,
+				NewContent: params.Content,
+			})
 			if err != nil {
 				return fantasy.ToolResponse{}, err
 			}

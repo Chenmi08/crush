@@ -73,7 +73,7 @@ func NewRenameTool(
 			for _, path := range affectedFiles {
 				var fenceErr error
 				var denied *fantasy.ToolResponse
-				ctx, denied, fenceErr = handleFenceDenial(ctx, permissions, RenameToolName, path, call)
+				ctx, denied, fenceErr = handleFenceDenial(ctx, permissions, RenameToolName, path, call, nil)
 				if fenceErr != nil {
 					return fantasy.ToolResponse{}, fenceErr
 				}

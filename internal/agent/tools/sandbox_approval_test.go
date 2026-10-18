@@ -168,7 +168,7 @@ func TestApproval_LSPWriteToolsAreFenced(t *testing.T) {
 	ctx = WithSandboxPolicy(ctx, policy)
 
 	outside := filepath.Join(t.TempDir(), "outside.go")
-	_, denied, err := handleFenceDenial(ctx, deniedPerms, RenameToolName, outside, call)
+	_, denied, err := handleFenceDenial(ctx, deniedPerms, RenameToolName, outside, call, nil)
 	require.NoError(t, err)
 	require.NotNil(t, denied, "the fence must refuse %s", outside)
 	require.Contains(t, denied.Content, sandbox.Marker)
@@ -179,7 +179,7 @@ func TestApproval_LSPWriteToolsAreFenced(t *testing.T) {
 	// A path inside the workspace is allowed through without a prompt: it
 	// is confined, so there is no boundary to leave.
 	inside := filepath.Join(workspace, "inside.go")
-	_, denied, err = handleFenceDenial(ctx, deniedPerms, RenameToolName, inside, call)
+	_, denied, err = handleFenceDenial(ctx, deniedPerms, RenameToolName, inside, call, nil)
 	require.NoError(t, err)
 	require.Nil(t, denied)
 	require.Equal(t, 1, deniedPerms.requestCount,

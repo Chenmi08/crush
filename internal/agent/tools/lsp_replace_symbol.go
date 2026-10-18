@@ -80,7 +80,12 @@ func NewReplaceSymbolTool(
 			// The returned context carries the widened policy when the user
 			// approved leaving the sandbox for this call, so the edit below
 			// runs under it.
-			ctx, denied, fenceErr := handleFenceDenial(ctx, permissions, ReplaceSymbolToolName, params.FilePath, call)
+			ctx, denied, fenceErr := handleFenceDenial(ctx, permissions, ReplaceSymbolToolName, params.FilePath, call, ReplaceSymbolPermissionsParams{
+				FilePath: params.FilePath,
+				// The replacement text is what the dialog's diff renders;
+				// the old content is read later, after the symbol lookup.
+				NewContent: params.Replacement,
+			})
 			if fenceErr != nil {
 				return fantasy.ToolResponse{}, fenceErr
 			}

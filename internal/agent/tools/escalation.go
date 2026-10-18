@@ -76,6 +76,12 @@ func escalationDenialHint(d sandbox.Denial) string {
 // The check that the requested mode is strictly wider than the effective mode
 // happens here, at execution time, not in the schema: the effective mode is
 // per-call while schemas are global.
+//
+// dialogParams is what the approval dialog should render besides the
+// escalation rows: the tool's own permission parameters (the command, the
+// file path, the diff). Leaving it carries the escalation request itself,
+// which the default panel would print as an opaque struct; a nil value falls
+// back to that so callers without tool params still work.
 func resolveEscalation(
 	ctx context.Context,
 	permissions permission.Service,
@@ -83,6 +89,7 @@ func resolveEscalation(
 	req *escalationRequest,
 	effective *sandbox.Policy,
 	call fantasy.ToolCall,
+	dialogParams any,
 ) (*sandbox.Policy, fantasy.ToolResponse, error) {
 	if req == nil {
 		return effective, fantasy.ToolResponse{}, nil
@@ -104,6 +111,11 @@ func resolveEscalation(
 		return effective, escalationUnavailableResponse(), nil
 	}
 
+	params := any(req)
+	if dialogParams != nil {
+		params = dialogParams
+	}
+
 	granted, err := permissions.Request(ctx, permission.CreatePermissionRequest{
 		SessionID:      sessionID,
 		ToolCallID:     call.ID,
@@ -111,7 +123,7 @@ func resolveEscalation(
 		Action:         "escalate",
 		Description:    fmt.Sprintf("Leave the sandbox for one call (%s → %s): %s", effective.Mode, req.mode, req.justification),
 		Path:           effective.Workspace,
-		Params:         req,
+		Params:         params,
 		Escalation:     true,
 		EscalationMode: string(req.mode),
 		Reasoning:      req.justification,
@@ -195,12 +207,13 @@ func applyEscalation(
 	toolName string,
 	req *escalationRequest,
 	call fantasy.ToolCall,
+	dialogParams any,
 ) (context.Context, *fantasy.ToolResponse, error) {
 	if req == nil {
 		return ctx, nil, nil
 	}
 	effective := SandboxPolicyFromContext(ctx)
-	policy, resp, err := resolveEscalation(ctx, permissions, toolName, req, effective, call)
+	policy, resp, err := resolveEscalation(ctx, permissions, toolName, req, effective, call, dialogParams)
 	if err != nil {
 		return ctx, nil, err
 	}
@@ -235,6 +248,7 @@ func fenceEscalation(
 	toolName string,
 	d sandbox.Denial,
 	call fantasy.ToolCall,
+	dialogParams any,
 ) (context.Context, *fantasy.ToolResponse, error) {
 	effective := SandboxPolicyFromContext(ctx)
 	if effective == nil {
@@ -246,7 +260,7 @@ func fenceEscalation(
 			"The sandbox refused a write to %s (mode %s). Approving lets this one %s call write the file under %s; denying sends the refusal back to the model, which can ask you differently or use a path inside the workspace.",
 			d.Path, d.Mode, toolName, nextWiderMode(effective.Mode)),
 	}
-	return applyEscalation(ctx, permissions, toolName, req, call)
+	return applyEscalation(ctx, permissions, toolName, req, call, dialogParams)
 }
 
 // handleFenceDenial is the shared fence exit for the file tools. When the
@@ -258,6 +272,7 @@ func handleFenceDenial(
 	permissions permission.Service,
 	toolName, path string,
 	call fantasy.ToolCall,
+	dialogParams any,
 ) (context.Context, *fantasy.ToolResponse, error) {
 	policy := SandboxPolicyFromContext(ctx)
 	if policy == nil {
@@ -284,5 +299,5 @@ func handleFenceDenial(
 		return ctx, &resp, nil
 	}
 
-	return fenceEscalation(ctx, permissions, toolName, d, call)
+	return fenceEscalation(ctx, permissions, toolName, d, call, dialogParams)
 }

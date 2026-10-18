@@ -89,7 +89,7 @@ func NewDownloadTool(permissions permission.Service, workingDir string, client *
 
 			filePath := filepathext.SmartJoin(workingDir, params.FilePath)
 
-			ctx, denied, err := applyEscalation(ctx, permissions, DownloadToolName, escalation, call)
+			ctx, denied, err := applyEscalation(ctx, permissions, DownloadToolName, escalation, call, DownloadPermissionsParams(params))
 			if err != nil {
 				return fantasy.ToolResponse{}, err
 			}
@@ -102,7 +102,7 @@ func NewDownloadTool(permissions permission.Service, workingDir string, client *
 			// refusal asks the user once via the "Leave Sandbox?" dialog;
 			// approval widens the policy for this call and the download
 			// proceeds.
-			ctx, denied, err = handleFenceDenial(ctx, permissions, DownloadToolName, filePath, call)
+			ctx, denied, err = handleFenceDenial(ctx, permissions, DownloadToolName, filePath, call, DownloadPermissionsParams(params))
 			if err != nil {
 				return fantasy.ToolResponse{}, err
 			}

@@ -127,7 +127,7 @@ func NewBashTool(permissions permission.Service, workingDir, spillDir string, at
 			// A validated escalation asks for a wider mode for this call
 			// before the policy for the command is resolved.
 			sessionPolicy := SandboxPolicyFromContext(ctx)
-			escalatedPolicy, escResp, err := resolveEscalation(ctx, permissions, BashToolName, escalation, sessionPolicy, call)
+			escalatedPolicy, escResp, err := resolveEscalation(ctx, permissions, BashToolName, escalation, sessionPolicy, call, BashPermissionsParams(params))
 			if err != nil {
 				return fantasy.ToolResponse{}, err
 			}

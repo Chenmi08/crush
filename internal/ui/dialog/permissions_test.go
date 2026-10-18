@@ -4,9 +4,11 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/crush/internal/agent/tools"
 	"github.com/charmbracelet/crush/internal/permission"
 	"github.com/charmbracelet/crush/internal/ui/common"
 	"github.com/charmbracelet/crush/internal/ui/styles"
+	"github.com/charmbracelet/crush/internal/workspace"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/require"
 )
@@ -140,5 +142,78 @@ func TestPermissions_EscalationRendersReasoning(t *testing.T) {
 		view := p.renderHeader(100)
 		require.Contains(t, view, "Leave Sandbox?")
 		require.NotContains(t, view, "Why")
+	})
+}
+
+// permissionsTestWorkspace satisfies the Workspace dependency the bash
+// content panel consults for the working-directory prefix it strips.
+type permissionsTestWorkspace struct {
+	workspace.Workspace
+}
+
+func (w *permissionsTestWorkspace) WorkingDir() string { return "/tmp/project" }
+
+// TestPermissions_EscalationShowsToolContent verifies the Leave Sandbox
+// dialog shows what the call will actually do — the command for bash, the
+// file path and diff for the file tools — instead of the escalation request
+// object the request carried before. An approval that leaves the sandbox is
+// the highest-stakes prompt in the UI; it must not be blind.
+func TestPermissions_EscalationShowsToolContent(t *testing.T) {
+	t.Parallel()
+
+	s := styles.CharmtonePantera()
+	com := &common.Common{Styles: &s, Workspace: &permissionsTestWorkspace{}}
+
+	t.Run("bash renders the command panel", func(t *testing.T) {
+		t.Parallel()
+		perm := permission.PermissionRequest{
+			ID:             "perm-test",
+			ToolName:       tools.BashToolName,
+			Escalation:     true,
+			EscalationMode: "danger-full-access",
+			Reasoning:      "Need to write the report outside the workspace.",
+			Params: tools.BashPermissionsParams{
+				Description: "escalated write",
+				Command:     "rm -rf /var/lib/report-cache",
+			},
+		}
+		p := NewPermissions(com, perm)
+
+		header := ansi.Strip(p.renderHeader(100))
+		require.Contains(t, header, "Leave Sandbox?")
+		require.Contains(t, header, "Why")
+
+		content := ansi.Strip(p.renderContent(100))
+		require.Contains(t, content, "rm -rf /var/lib/report-cache",
+			"the escalated command must be visible before approval")
+	})
+
+	t.Run("write renders the file diff", func(t *testing.T) {
+		t.Parallel()
+		perm := permission.PermissionRequest{
+			ID:             "perm-test",
+			ToolName:       tools.WriteToolName,
+			Escalation:     true,
+			EscalationMode: "workspace-write",
+			Reasoning:      "Writing outside the workspace once.",
+			Params: tools.WritePermissionsParams{
+				FilePath:   "/tmp/project/notes.txt",
+				NewContent: "hello",
+			},
+		}
+		p := NewPermissions(com, perm)
+
+		header := ansi.Strip(p.renderHeader(100))
+		require.Contains(t, header, "Leave Sandbox?")
+
+		// Draw marks the viewport dirty on first render because its width
+		// changes from zero; the direct renderContent call must do the same
+		// or renderDiff serves its empty cache.
+		p.viewportDirty = true
+		content := ansi.Strip(p.renderContent(100))
+		require.Contains(t, content, "@@ -1,0 +1,1 @@",
+			"the escalated write must render as a diff")
+		require.Contains(t, content, "+ hello",
+			"the escalated write's content must be visible before approval")
 	})
 }

@@ -87,7 +87,12 @@ func NewMultiEditTool(
 
 			params.FilePath = filepathext.SmartJoin(workingDir, params.FilePath)
 
-			ctx, denied, err := applyEscalation(ctx, permissions, MultiEditToolName, escalation, call)
+			ctx, denied, err := applyEscalation(ctx, permissions, MultiEditToolName, escalation, call, MultiEditPermissionsParams{
+				FilePath: params.FilePath,
+				// The joined edit strings preview what the batch will do;
+				// per-edit diffs are only known once the file has been read.
+				NewContent: joinMultiEditPreview(params.Edits),
+			})
 			if err != nil {
 				return fantasy.ToolResponse{}, err
 			}
@@ -104,7 +109,10 @@ func NewMultiEditTool(
 			// directory. A refusal asks the user once via the
 			// "Leave Sandbox?" dialog; approval widens the policy for this
 			// call and the edits proceed.
-			ctx, denied, err = handleFenceDenial(ctx, permissions, MultiEditToolName, params.FilePath, call)
+			ctx, denied, err = handleFenceDenial(ctx, permissions, MultiEditToolName, params.FilePath, call, MultiEditPermissionsParams{
+				FilePath:   params.FilePath,
+				NewContent: joinMultiEditPreview(params.Edits),
+			})
 			if err != nil {
 				return fantasy.ToolResponse{}, err
 			}
@@ -157,6 +165,21 @@ func validateEdits(edits []MultiEditOperation) error {
 		}
 	}
 	return nil
+}
+
+// joinMultiEditPreview renders the batch's edit operations as a compact
+// before/after listing. It is what the sandbox-escalation dialog shows
+// before the file has been read, so the user can see what the batch does
+// without approving it blind.
+func joinMultiEditPreview(edits []MultiEditOperation) string {
+	var b strings.Builder
+	for i, edit := range edits {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		fmt.Fprintf(&b, "edit %d:\n- %s\n+ %s", i+1, edit.OldString, edit.NewString)
+	}
+	return b.String()
 }
 
 // applyEditsToContent applies edits sequentially, collecting the ones that

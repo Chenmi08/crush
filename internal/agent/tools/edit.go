@@ -83,7 +83,14 @@ func NewEditTool(
 
 			params.FilePath = filepathext.SmartJoin(workingDir, params.FilePath)
 
-			ctx, denied, err := applyEscalation(ctx, permissions, EditToolName, escalation, call)
+			ctx, denied, err := applyEscalation(ctx, permissions, EditToolName, escalation, call, EditPermissionsParams{
+				FilePath: params.FilePath,
+				// The old/new strings are what the dialog's diff renders;
+				// the raw params are the closest preview available before
+				// the file has been read.
+				OldContent: params.OldString,
+				NewContent: params.NewString,
+			})
 			if err != nil {
 				return fantasy.ToolResponse{}, err
 			}
@@ -95,7 +102,11 @@ func NewEditTool(
 			// parent directory. A refusal asks the user once via the
 			// "Leave Sandbox?" dialog; approval widens the policy for this
 			// call and the edit proceeds.
-			ctx, denied, err = handleFenceDenial(ctx, permissions, EditToolName, params.FilePath, call)
+			ctx, denied, err = handleFenceDenial(ctx, permissions, EditToolName, params.FilePath, call, EditPermissionsParams{
+				FilePath:   params.FilePath,
+				OldContent: params.OldString,
+				NewContent: params.NewString,
+			})
 			if err != nil {
 				return fantasy.ToolResponse{}, err
 			}
