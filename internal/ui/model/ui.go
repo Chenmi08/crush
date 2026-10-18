@@ -2572,6 +2572,7 @@ func (m *UI) handleDialogMsg(msg tea.Msg) tea.Cmd {
 	case dialog.ActionSetSandboxMode:
 		cmds = append(cmds, m.handleSetSandboxMode(msg.Mode)...)
 		m.dialog.CloseDialog(dialog.CommandsID)
+		m.dialog.CloseDialog(dialog.SandboxID)
 	case dialog.ActionToggleYoloMode:
 		if m.mode == uiInputModePlan {
 			// Same as Ctrl+Y in plan mode: YOLO only exists as YOLO
@@ -6228,6 +6229,8 @@ func (m *UI) openDialog(id string) tea.Cmd {
 		if cmd := m.openNotificationsDialog(); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
+	case dialog.SandboxID:
+		m.openSandboxDialog()
 	case dialog.MCPTogglesID:
 		if cmd := m.openMCPTogglesDialog(); cmd != nil {
 			cmds = append(cmds, cmd)
@@ -6337,6 +6340,21 @@ func (m *UI) openNotificationsDialog() tea.Cmd {
 	notificationsDialog := dialog.NewNotifications(m.com)
 	m.dialog.OpenDialog(notificationsDialog)
 	return nil
+}
+
+// openSandboxDialog opens the sandbox mode picker dialog.
+func (m *UI) openSandboxDialog() {
+	if m.dialog.ContainsDialog(dialog.SandboxID) {
+		// Bring to front and refresh to show the mode in effect.
+		m.dialog.BringToFront(dialog.SandboxID)
+		if sandboxDialog, ok := m.dialog.Dialog(dialog.SandboxID).(*dialog.Sandbox); ok {
+			sandboxDialog.Reset()
+		}
+		return
+	}
+
+	sandboxDialog := dialog.NewSandbox(m.com)
+	m.dialog.OpenDialog(sandboxDialog)
 }
 
 // openSessionsDialog opens the sessions dialog. If the dialog is already open,

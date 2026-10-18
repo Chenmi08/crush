@@ -544,9 +544,9 @@ func (c *Commands) defaultCommands() []*CommandItem {
 	commands = append(
 		commands,
 		NewCommandItem(c.com.Styles, "toggle_yolo", "Toggle Yolo Mode", "ctrl+y", ActionToggleYoloMode{}),
-		NewCommandItem(c.com.Styles, "sandbox_read_only", "Sandbox: Read Only (no writes)", "", ActionSetSandboxMode{Mode: "read-only"}),
-		NewCommandItem(c.com.Styles, "sandbox_workspace_write", "Sandbox: Workspace Write (default)", "", ActionSetSandboxMode{Mode: "workspace-write"}),
-		NewCommandItem(c.com.Styles, "sandbox_danger", "Sandbox: Danger Full Access (no confinement)", "", ActionSetSandboxMode{Mode: "danger-full-access"}),
+		NewCommandItem(c.com.Styles, "select_sandbox_mode", "Select Sandbox Mode", "", ActionOpenDialog{
+			DialogID: SandboxID,
+		}),
 		NewCommandItem(c.com.Styles, "toggle_help", "Toggle Help", "ctrl+g", ActionToggleHelp{}),
 		NewCommandItem(c.com.Styles, "init", "Initialize Project", "", ActionInitializeProject{}),
 	)
