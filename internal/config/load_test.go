@@ -838,7 +838,7 @@ func TestConfig_setupAgentsWithNoDisabledTools(t *testing.T) {
 
 	taskAgent, ok := cfg.Agents[AgentTask]
 	require.True(t, ok)
-	assert.Equal(t, []string{"lsp_symbols", "lsp_definition", "lsp_call_hierarchy", "glob", "grep", "ls", "sourcegraph", "view"}, taskAgent.AllowedTools)
+	assert.Equal(t, []string{"bash", "lsp_symbols", "lsp_definition", "lsp_call_hierarchy", "glob", "grep", "ls", "sourcegraph", "view"}, taskAgent.AllowedTools)
 
 	planAgent, ok := cfg.Agents[AgentPlan]
 	require.True(t, ok)
@@ -864,7 +864,7 @@ func TestConfig_setupAgentsWithDisabledTools(t *testing.T) {
 
 	taskAgent, ok := cfg.Agents[AgentTask]
 	require.True(t, ok)
-	assert.Equal(t, []string{"lsp_symbols", "lsp_definition", "lsp_call_hierarchy", "glob", "ls", "sourcegraph", "view"}, taskAgent.AllowedTools)
+	assert.Equal(t, []string{"bash", "lsp_symbols", "lsp_definition", "lsp_call_hierarchy", "glob", "ls", "sourcegraph", "view"}, taskAgent.AllowedTools)
 
 	planAgent, ok := cfg.Agents[AgentPlan]
 	require.True(t, ok)
@@ -895,7 +895,8 @@ func TestConfig_setupAgentsWithEveryReadOnlyToolDisabled(t *testing.T) {
 
 	taskAgent, ok := cfg.Agents[AgentTask]
 	require.True(t, ok)
-	assert.Len(t, taskAgent.AllowedTools, 0)
+	assert.Equal(t, []string{"bash"}, taskAgent.AllowedTools,
+		"bash stays available to read-only sub-agents; the sandbox fence, not the tool list, blocks writes")
 
 	planAgent, ok := cfg.Agents[AgentPlan]
 	require.True(t, ok)

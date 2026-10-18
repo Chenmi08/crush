@@ -761,6 +761,44 @@ func TestPermissionService_EscalationRequestsIgnoreSessionGrant(t *testing.T) {
 		require.True(t, ok, "YOLO mode should allow escalation requests")
 	})
 
+	t.Run("auto-approved sessions still prompt for escalation", func(t *testing.T) {
+		service := NewPermissionService("/tmp", false, nil)
+		service.AutoApproveSession("s1")
+
+		// Ordinary requests in this session are approved without prompting.
+		ok, err := service.Request(t.Context(), CreatePermissionRequest{
+			SessionID:  "s1",
+			ToolName:   "bash",
+			Action:     "execute",
+			Path:       "/tmp",
+			ToolCallID: "call-1",
+		})
+		require.NoError(t, err)
+		require.True(t, ok, "auto-approved session grants ordinary requests")
+
+		// An escalation must NOT ride the auto-approval: it publishes a
+		// fresh prompt that the user resolves explicitly.
+		events := service.Subscribe(t.Context())
+		var escalated bool
+		var wg sync.WaitGroup
+		wg.Go(func() {
+			escalated, _ = service.Request(t.Context(), CreatePermissionRequest{
+				SessionID:   "s1",
+				ToolName:    "bash",
+				Action:      "execute",
+				Path:        "/tmp",
+				Description: "leave the sandbox",
+				ToolCallID:  "call-2",
+				Escalation:  true,
+			})
+		})
+		event := <-events
+		require.True(t, event.Payload.Escalation, "the published request is the escalation")
+		service.Grant(event.Payload)
+		wg.Wait()
+		require.True(t, escalated, "escalation resolved by explicit grant, not the auto-approval")
+	})
+
 	t.Run("allow-list still allows escalation requests", func(t *testing.T) {
 		service := NewPermissionService("/tmp", false, []string{"bash:execute"})
 		ok, err := service.Request(t.Context(), CreatePermissionRequest{

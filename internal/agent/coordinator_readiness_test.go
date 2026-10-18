@@ -155,3 +155,29 @@ func TestBuildAgent_SubagentPolicyIsReadOnly(t *testing.T) {
 	// The workspace policy object is untouched.
 	require.Equal(t, sandbox.ModeWorkspaceWrite, coord.sandboxRuntime.Policy.Mode)
 }
+
+// TestSubagentBashStaysConfined verifies the read-only fence, not the tool
+// list, is what stops a sub-agent from writing: the task agent's tool list
+// includes bash, but every workspace write the shell attempts is refused by
+// the sub-agent policy.
+func TestSubagentBashStaysConfined(t *testing.T) {
+	cfg, err := config.Init(t.TempDir(), "", false)
+	require.NoError(t, err)
+	cfg.SetupAgents()
+
+	workspace := cfg.WorkingDir()
+	rt := cfg.ResolveSandboxRuntime()
+	require.NoError(t, rt.Err)
+
+	// The task agent's tool list carries bash, matching resolveReadOnlyTools.
+	require.Contains(t, cfg.Config().Agents[config.AgentTask].AllowedTools, "bash")
+
+	// But its derived policy refuses what the shell would try to write.
+	subPolicy := sandbox.SubagentPolicy(rt.Policy)
+	require.Equal(t, sandbox.ModeReadOnly, subPolicy.Mode)
+	require.Error(t, subPolicy.CheckWrite(filepath.Join(workspace, "main.go")),
+		"a sub-agent's bash must not be able to write workspace files")
+	require.Error(t, subPolicy.CheckWrite(filepath.Join(workspace, ".git", "hooks", "pre-commit")))
+	require.NoError(t, subPolicy.CheckWrite(filepath.Join(subPolicy.TempDir, "scratch.txt")),
+		"only the private temp directory stays writable")
+}

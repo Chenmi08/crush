@@ -260,7 +260,13 @@ func (s *permissionService) Request(ctx context.Context, opts CreatePermissionRe
 	autoApprove := s.autoApproveSessions[opts.SessionID]
 	s.autoApproveSessionsMu.RUnlock()
 
-	if autoApprove {
+	// Auto-approval covers the tool calls of a delegated session, not the
+	// sandbox boundary around it: an escalation widens the fence for one
+	// call, which is the user's decision alone, exactly like hook allows
+	// and session grants above. Auto-approved sessions fall through to the
+	// normal path, so the escalation still reaches an approval surface (or
+	// fails closed when none is available).
+	if autoApprove && !opts.Escalation {
 		s.notificationBroker.Publish(pubsub.CreatedEvent, PermissionNotification{
 			SessionID:  opts.SessionID,
 			ToolCallID: opts.ToolCallID,

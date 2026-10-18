@@ -1130,12 +1130,22 @@ func resolveAllowedTools(allTools []string, disabledTools []string) []string {
 }
 
 func resolveReadOnlyTools(tools []string) []string {
-	readOnlyTools := []string{"glob", "grep", "ls", "lsp_call_hierarchy", "lsp_definition", "lsp_symbols", "sourcegraph", "view"}
+	// bash is included because the read-only sandbox fence, not the tool
+	// list, is what keeps a sub-agent from writing: confined shell commands
+	// can search with rg, fd, and friends while every write attempt is
+	// refused by the policy. Without bash the sub-agent would be limited to
+	// the dedicated file tools alone.
+	readOnlyTools := []string{"bash", "glob", "grep", "ls", "lsp_call_hierarchy", "lsp_definition", "lsp_symbols", "sourcegraph", "view"}
 	// filter to only include tools that are in allowedtools (include mode)
 	return filterSlice(tools, readOnlyTools, true)
 }
 
 func resolvePlanTools(tools []string) []string {
+	// bash is deliberately absent: the plan agent is a main agent, so it
+	// runs under the workspace's own policy (usually workspace-write) and
+	// a shell there could write files without prompting — contradicting
+	// the "planning does not modify files" contract. The read-only task
+	// sub-agent can carry bash because its derived policy confines it.
 	// The read-only LSP lookups mirror the task agent's tool set: planning
 	// needs symbol navigation just as much as research does.
 	planTools := []string{
