@@ -35,5 +35,5 @@ func applySandboxFlags(cmd *cobra.Command, store *config.ConfigStore) error {
 	if rt.Err != nil {
 		return fmt.Errorf("sandbox configuration: %w", rt.Err)
 	}
-	return store.EnsureSandboxAvailable(rt)
+	return nil
 }

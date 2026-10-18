@@ -87,14 +87,15 @@ func GetBackgroundShellManager() *BackgroundShellManager {
 }
 
 // Start creates and starts a new background shell with the given command.
-func (m *BackgroundShellManager) Start(ctx context.Context, workingDir string, blockFuncs []BlockFunc, command string, description string) (*BackgroundShell, error) {
-	return m.StartWithPolicy(ctx, workingDir, blockFuncs, nil, command, description)
+func (m *BackgroundShellManager) Start(ctx context.Context, workingDir string, command string, description string) (*BackgroundShell, error) {
+	return m.StartWithPolicy(ctx, workingDir, nil, command, description)
 }
 
 // StartWithPolicy starts a background shell under an explicit sandbox policy.
 // The policy is captured by the job, so moving a long command to the
-// background does not outlive its confinement.
-func (m *BackgroundShellManager) StartWithPolicy(ctx context.Context, workingDir string, blockFuncs []BlockFunc, policy *sandbox.Policy, command string, description string) (*BackgroundShell, error) {
+// background does not outlive its confinement. A nil policy runs the job
+// unconfined.
+func (m *BackgroundShellManager) StartWithPolicy(ctx context.Context, workingDir string, policy *sandbox.Policy, command string, description string) (*BackgroundShell, error) {
 	// Check job limit
 	if m.shells.Len() >= MaxBackgroundJobs {
 		return nil, fmt.Errorf("maximum number of background jobs (%d) reached. Please terminate or wait for some jobs to complete", MaxBackgroundJobs)
@@ -104,7 +105,6 @@ func (m *BackgroundShellManager) StartWithPolicy(ctx context.Context, workingDir
 
 	shell := NewShell(&Options{
 		WorkingDir: workingDir,
-		BlockFuncs: blockFuncs,
 		Policy:     policy,
 	})
 

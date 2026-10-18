@@ -179,11 +179,6 @@ type Config struct {
 	AllowWrite []string
 	// DenyWrite are paths to keep unwritable inside the writable roots.
 	DenyWrite []string
-	// ExcludeCommands are command patterns that run outside the sandbox.
-	ExcludeCommands []string
-	// FailIfUnavailable refuses to start when the sandbox cannot be
-	// established.
-	FailIfUnavailable bool
 }
 
 // DefaultMode is the mode a session uses when nothing is configured.

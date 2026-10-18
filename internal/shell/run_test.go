@@ -212,23 +212,6 @@ func TestRun_ParseError(t *testing.T) {
 	}
 }
 
-func TestRun_BlockFuncs(t *testing.T) {
-	block := CommandsBlocker([]string{"forbidden"})
-	var stderr bytes.Buffer
-	err := Run(t.Context(), RunOptions{
-		Command:    "forbidden",
-		Cwd:        t.TempDir(),
-		Stderr:     &stderr,
-		BlockFuncs: []BlockFunc{block},
-	})
-	if err == nil {
-		t.Fatal("expected error when running blocked command")
-	}
-	if !strings.Contains(err.Error(), "not allowed") {
-		t.Fatalf("expected 'not allowed' error, got: %v", err)
-	}
-}
-
 func TestRun_RequiresCwd(t *testing.T) {
 	err := Run(t.Context(), RunOptions{
 		Command: "echo hi",

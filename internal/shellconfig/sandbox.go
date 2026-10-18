@@ -17,8 +17,6 @@ import (
 //	sandbox mode <read-only|workspace-write|danger-full-access>
 //	sandbox allow-write <path> [<path> ...]
 //	sandbox deny-write <path> [<path> ...]
-//	sandbox exclude-command <pattern> [<pattern> ...]
-//	sandbox fail-if-unavailable [true|false]
 //
 // It writes permissions.sandbox.* so the sandbox is configured in crushrc
 // alongside the rest of the configuration, with no second file format.
@@ -31,7 +29,7 @@ func handleSandbox(ctx context.Context, args []string, stdin io.Reader, stdout, 
 		return nil
 	}
 	if len(args) < 2 {
-		return usage(stderr, "usage: sandbox mode|allow-write|deny-write|exclude-command|fail-if-unavailable ...")
+		return usage(stderr, "usage: sandbox mode|allow-write|deny-write ...")
 	}
 
 	perms := b.section("permissions")
@@ -54,24 +52,9 @@ func handleSandbox(ctx context.Context, args []string, stdin io.Reader, stdout, 
 		return sandboxList(box, "allow_write", args, "sandbox allow-write <path> [<path> ...]", stderr)
 	case "deny-write":
 		return sandboxList(box, "deny_write", args, "sandbox deny-write <path> [<path> ...]", stderr)
-	case "exclude-command":
-		return sandboxList(box, "exclude_commands", args, "sandbox exclude-command <pattern> [<pattern> ...]", stderr)
-
-	case "fail-if-unavailable":
-		value := true
-		if len(args) >= 3 {
-			parsed, err := parseBool(args[2])
-			if err != nil {
-				return usage(stderr, fmt.Sprintf("sandbox fail-if-unavailable expects true/false, got %q", args[2]))
-			}
-			value = parsed
-		}
-		box["fail_if_unavailable"] = value
-		slog.Info("Sandbox fail-if-unavailable set in shell config", "value", value)
-		return nil
 
 	default:
-		return usage(stderr, fmt.Sprintf("sandbox: unknown subcommand %q (expected mode, allow-write, deny-write, exclude-command, or fail-if-unavailable)", args[1]))
+		return usage(stderr, fmt.Sprintf("sandbox: unknown subcommand %q (expected mode, allow-write, or deny-write)", args[1]))
 	}
 }
 

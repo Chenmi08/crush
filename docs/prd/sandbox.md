@@ -1,7 +1,19 @@
 # PRD: Filesystem Sandbox for Tool Execution
 
-> Status: draft. Scope: write confinement only — no network isolation, no
-> read restriction. See [Out of Scope](#out-of-scope) for why.
+> Status: revised for this fork. Scope: write confinement only — no network
+> isolation, no read restriction. See [Out of Scope](#out-of-scope) for why.
+>
+> **Fork revision.** With the sandbox as the foundation, the approval question
+> collapses to one rule: only an operation that leaves the boundary prompts.
+> The legacy pre-sandbox defenses (the command ban list, the safe-read-only
+> allowlist, `dangerous_commands`, `exclude_commands`,
+> `fail_if_unavailable`, and the in-process fence backend) were removed in
+> that revision; where this document still describes them, the code no longer
+> does. Two consequences define the fork's posture: `danger-full-access` is
+> full delegation (nothing prompts, including network commands), and network
+> egress is the one capability that still prompts under a confined policy —
+> covered by a built-in network command list plus the user's
+> `permissions.network_commands` additions.
 
 ## Problem Statement
 
@@ -129,15 +141,17 @@ call after the user approves it.
 20. As a developer, I want commands that run inside the sandbox to be
     auto-approved, so that the sandbox reduces interruptions instead of adding
     them.
-21. As a developer, I want configured dangerous commands to still prompt even
-    inside the sandbox, so that grants like `git push` are never granted
-    implicitly.
-22. As a developer, I want commands excluded from the sandbox to keep the
-    normal approval flow, so that removing isolation always requires a
-    decision.
-23. As a developer, I want a stable, minimal set of exclusions for tools that
-    cannot work confined (`docker`, PTY-dependent CLIs), so that I do not have
-    to disable the sandbox to run them.
+21. As a developer, I want commands that leave the sandbox's boundary —
+    network egress, privilege escalation — to prompt even inside the sandbox,
+    so that operations like `git push` are never granted implicitly.
+    *(Fork: replaces the configured `dangerous` list; egress is the only
+    remaining prompt.)*
+22. *(Fork: removed. Command exclusions are gone — the boundary is the
+    sandbox, and removing isolation is a mode change, not a per-command
+    carve-out.)*
+23. *(Fork: removed with the exclusions. A tool that cannot work confined
+    prompts on its network use, fails on its writes, or is run under
+    danger-full-access.)*
 24. As a developer, I want YOLO to disable prompts but keep the sandbox, so
     that "trust the model" and "trust the model with my whole disk" are
     separate decisions.
@@ -276,8 +290,8 @@ refused. It never runs unconfined. The error names the missing dependency, the
 platform, and the two remedies (install it, or deliberately select
 `danger-full-access`).
 
-An opt-in setting requires the sandbox at startup and exits if it cannot be
-established, for managed or repeatable environments.
+*(Fork: the opt-in startup requirement (`fail_if_unavailable`) was removed;
+the execution-time refusal above remains.)*
 
 ### Where enforcement attaches
 
@@ -312,9 +326,10 @@ cannot be re-allowed:
   repositories): `.bashrc`, `.zshrc`, `.profile`, fish config.
 
 Mechanism per backend: bubblewrap re-mounts the path read-only after the
-writable mount; Seatbelt appends a trailing deny form (last match wins); the
-in-process fence checks before the syscall. Landlock cannot express this, which
-is why it reports `partial` and why bubblewrap is preferred.
+writable mount; Seatbelt appends a trailing deny form (last match wins).
+Landlock cannot express this, which is why it reports `partial` and why
+bubblewrap is preferred. (The PRD draft proposed an in-process fence backend
+that checked before the syscall; the fork removed it — see the header note.)
 
 ### Project configuration trust
 
@@ -331,14 +346,22 @@ repository can be trusted and still must not be modifiable by the agent.
 ### Approval interaction
 
 - A command that is actually confined runs without a prompt.
-- Configured dangerous commands still prompt, even when confined.
-- Commands matching a configured exclusion run unconfined and take the normal
-  prompt path; the prompt is titled to say the command is unsandboxed.
+- A command that leaves the boundary — matching the built-in network list
+  (`curl`, `wget`, `ssh`, `scp`, `rsync`, `nc`, `git push`, `gh`, `sudo`,
+  `su`, `doas`, and others) or the configured `network_commands` additions —
+  prompts, even when confined. Every invocation in a command line is checked,
+  including piped and chained ones.
+- `danger-full-access` is full delegation: nothing prompts, network commands
+  included.
 - Hooks, MCP servers, and LSP servers remain outside the sandbox and are
   documented as such. Project-level hooks additionally require the project to
   be trusted.
 - YOLO disables prompts but no longer disables the sandbox. Disabling the
   sandbox is a separate, explicitly named flag.
+- *(Fork: the `dangerous` list and `exclude_commands` are removed. The
+  network list is a prompt filter, not a boundary — an interpreter such as
+  `python -c` can still reach the network unprompted; the miss costs one
+  confined call, which is accepted.)*
 
 ### Escalation
 
@@ -390,14 +413,16 @@ A `sandbox` builtin in `crushrc`, alongside `permissions`:
 sandbox mode workspace-write
 sandbox allow-write ~/.kube
 sandbox deny-write ./secrets
-sandbox exclude-command "docker *"
-option sandbox-fail-if-unavailable true
+permissions network "docker push"
 ```
 
 And the equivalent under `permissions.sandbox` in JSON. Project-level
-configuration may only add denials and exclusions; it may not add write roots,
-widen the mode, or disable the sandbox. The generated JSON schema is
+configuration may only add denials; it may not add write roots, widen the
+mode, or disable the sandbox. The generated JSON schema is
 regenerated as part of the change.
+
+*(Fork: `sandbox exclude-command` and `sandbox fail-if-unavailable` are
+removed; `permissions network` replaces the `dangerous` list.)*
 
 CLI: a mode flag, an explicit disable flag that prints a warning, a status
 subcommand that prints the resolved policy and backend, and an execution
@@ -444,9 +469,10 @@ matters; the rest exist to keep most of the logic testable without a kernel.
    generated rules must describe the same writable set. This is the seam that
    catches "one backend granted `$TMPDIR` and another hard-coded `/tmp`".
 4. **Permission service (existing).** The existing mock permission service is
-   reused to assert: confined execution is auto-approved, dangerous commands
-   still prompt, exclusions prompt, and escalation requests are approved once
-   and never persisted.
+   reused to assert: confined execution is auto-approved, network commands
+   still prompt, escalation requests are approved once and never persisted.
+   *(Fork: dangerous-command and exclusion assertions were removed with the
+   features.)*
 5. **File tools (existing).** The write, edit, multiedit, and download tools are
    table-tested against a temp workspace with a policy attached, asserting that
    a denied write produces the standard denial marker and leaves no directory
@@ -509,7 +535,11 @@ backend, by injecting an unavailable backend.
   A confined command can still reach the network. This is the single largest
   deliberate gap and must be stated in user-facing documentation, because it
   changes the meaning of the mode names: `read-only` means "does not write",
-  not "cannot exfiltrate".
+  not "cannot exfiltrate". *(Fork: mitigated, not solved — a network command
+  list prompts on the common egress commands; interpreters remain unprompted.
+  Backend-level isolation via `--unshare-net` / `(deny network*)` is the
+  clean future fix, at the cost of dropping the Landlock backend, which
+  cannot express it.)*
 - **Read confinement.** Reads are unrestricted in every mode. The agent can
   read `~/.ssh`, `~/.aws`, and every `.env` on the machine. Adding a read-deny
   list later is a separate feature with its own consequences (it removes the

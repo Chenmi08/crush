@@ -53,7 +53,7 @@ func (c *coordinator) SetSandboxMode(mode sandbox.Mode, approved bool) error {
 	// Every agent built by this coordinator shares the policy; update them
 	// all so sub-agents do not keep running under the old boundary.
 	for _, agent := range c.agents {
-		agent.SetSandboxPolicy(rt.Policy, rt.Configuration.ExcludeCommands)
+		agent.SetSandboxPolicy(rt.Policy)
 	}
 
 	slog.Info("Sandbox mode changed", "from", current, "to", mode, "enforcement", c.cfg.SandboxStatus(rt).Enforcement)

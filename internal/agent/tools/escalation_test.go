@@ -91,8 +91,8 @@ func TestEscalation_RejectedBeforeExecution(t *testing.T) {
 	})
 	require.True(t, resp.IsError)
 	require.Contains(t, resp.Content, "justification")
-	_, err := statPath(target)
-	require.True(t, isNotExist(err))
+	_, err := os.Stat(target)
+	require.True(t, os.IsNotExist(err))
 }
 
 // TestEscalation_MustBeStrictlyWider verifies a request for the same or a
@@ -133,7 +133,7 @@ func TestEscalation_AppliesToExactlyOneCall(t *testing.T) {
 		Justification:      "Writing outside the workspace once.",
 	})
 	require.False(t, resp.IsError, "the approved escalation must let the call proceed")
-	content, err := readFile(outside)
+	content, err := os.ReadFile(outside)
 	require.NoError(t, err)
 	require.Equal(t, "x", string(content))
 
@@ -147,8 +147,8 @@ func TestEscalation_AppliesToExactlyOneCall(t *testing.T) {
 	resp = runWriteTool(t, tool, ctx, WriteParams{FilePath: second, Content: "y"})
 	require.True(t, resp.IsError)
 	require.Contains(t, resp.Content, sandbox.Marker)
-	_, statErr := statPath(second)
-	require.True(t, isNotExist(statErr))
+	_, statErr := os.Stat(second)
+	require.True(t, os.IsNotExist(statErr))
 }
 
 // TestEscalation_RejectionStopsTheTurn verifies a denied escalation leaves the
@@ -171,8 +171,8 @@ func TestEscalation_RejectionStopsTheTurn(t *testing.T) {
 	require.True(t, resp.StopTurn, "the turn must stop so the model does not retry another route")
 	require.Contains(t, resp.Content, "escalation-denied")
 	require.Contains(t, resp.Content, "do not retry")
-	_, err := statPath(outside)
-	require.True(t, isNotExist(err))
+	_, err := os.Stat(outside)
+	require.True(t, os.IsNotExist(err))
 }
 
 // TestEscalation_RequestIsDistinct verifies the request is marked as an
@@ -215,11 +215,11 @@ func TestEscalation_DenialCarriesHint(t *testing.T) {
 	d.EscalationHint = true
 
 	msg := d.Error()
-	idx := indexOf(msg, sandbox.Marker)
+	idx := strings.Index(msg, sandbox.Marker)
 	require.NotEqual(t, -1, idx)
 	require.Contains(t, msg, "mode=workspace-write")
 	require.Contains(t, msg, "hint=sandbox escalation is available")
-	require.Greater(t, indexOf(msg, "hint="), idx,
+	require.Greater(t, strings.Index(msg, "hint="), idx,
 		"the hint must follow the marker")
 }
 
@@ -271,7 +271,7 @@ func TestEscalation_ShellTool(t *testing.T) {
 		Justification:      "Writing one file outside the workspace.",
 	})
 	require.False(t, resp.IsError)
-	content, err := readFile(outside)
+	content, err := os.ReadFile(outside)
 	require.NoError(t, err)
 	require.Equal(t, "hi\n", string(content))
 	require.Equal(t, 1, perms.requestCount, "the escalation prompt is the only prompt")
@@ -385,15 +385,3 @@ func TestEscalation_SchemaMatchesDecoding(t *testing.T) {
 			v.FieldByName("Justification").String(), "%T", tc.params)
 	}
 }
-
-// statPath reports file info for the assertions above.
-func statPath(path string) (os.FileInfo, error) { return os.Stat(path) }
-
-// isNotExist reports whether err is a not-exist error.
-func isNotExist(err error) bool { return os.IsNotExist(err) }
-
-// readFile reads a file for the assertions above.
-func readFile(path string) ([]byte, error) { return os.ReadFile(path) }
-
-// indexOf is strings.Index, kept local so the test reads cleanly.
-func indexOf(haystack, needle string) int { return strings.Index(haystack, needle) }

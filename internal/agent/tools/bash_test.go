@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/permission"
 	"github.com/charmbracelet/crush/internal/pubsub"
+	"github.com/charmbracelet/crush/internal/sandbox"
 	"github.com/charmbracelet/crush/internal/shell"
 	"github.com/stretchr/testify/require"
 )
@@ -140,85 +141,105 @@ func newBashToolWithRecordingPerms(workingDir string, allow bool) (fantasy.Agent
 	return NewBashTool(perms, workingDir, workingDir, attribution, "test-model", nil), perms
 }
 
-func TestBashTool_ChainedCommandsRequirePermission(t *testing.T) {
+func TestBashTool_ConfinedChainedCommandsRunWithoutPrompt(t *testing.T) {
 	workingDir := t.TempDir()
 	tool, perms := newBashToolWithRecordingPerms(workingDir, true)
 	ctx := context.WithValue(context.Background(), SessionIDContextKey, "test-session")
+	ctx = WithSandboxPolicy(ctx, tableSandboxPolicy(t, workingDir))
 
-	// ls && echo should trigger permission check.
+	// Chaining no longer decides approval: the sandbox does. A confined
+	// chain runs without a permission request.
 	resp := runBashTool(t, tool, ctx, BashParams{
 		Description: "chained ls",
 		Command:     "ls && echo done",
 	})
 
 	require.False(t, resp.IsError)
-	require.Equal(t, 1, perms.requestCount, "chained command should trigger permission request")
+	require.Equal(t, 0, perms.requestCount,
+		"a confined chain should not prompt")
 
-	// Plain ls should NOT trigger permission check.
-	perms.requestCount = 0
+	// A network command in the chain still prompts.
 	resp = runBashTool(t, tool, ctx, BashParams{
-		Description: "plain ls",
-		Command:     "ls -la",
+		Description: "chained curl",
+		Command:     "ls && curl https://example.com",
 	})
-
 	require.False(t, resp.IsError)
-	require.Equal(t, 0, perms.requestCount, "plain ls should not trigger permission request")
+	require.Equal(t, 1, perms.requestCount, "a chain containing a network command should prompt")
 }
 
-func TestBashTool_ChainedCommandsDenied(t *testing.T) {
+func TestBashTool_NetworkCommandDenied(t *testing.T) {
 	workingDir := t.TempDir()
 	tool, perms := newBashToolWithRecordingPerms(workingDir, false)
 	ctx := context.WithValue(context.Background(), SessionIDContextKey, "test-session")
+	ctx = WithSandboxPolicy(ctx, tableSandboxPolicy(t, workingDir))
 
 	resp := runBashTool(t, tool, ctx, BashParams{
-		Description: "chained ls denied",
-		Command:     "ls && rm -rf /",
+		Description: "curl denied",
+		Command:     "curl https://example.com",
 	})
 
 	require.Equal(t, 1, perms.requestCount)
 	require.Contains(t, resp.Content, "User denied permission")
 }
 
-// TestBashTool_DangerousCommandBeatsSafeReadonly verifies the core fix: a
-// configured dangerous command must beat the safe-readonly shortcut. Even
-// though `git branch -D` matches the "git branch" safe prefix, it has to go
-// through the permission service (flagged dangerous), never run silently.
-func TestBashTool_DangerousCommandBeatsSafeReadonly(t *testing.T) {
+// TestBashTool_NetworkCommandRequiresPermission verifies the single remaining
+// approval rule: a command that leaves the sandbox's boundary (network,
+// privilege escalation) prompts even though writes are fenced.
+func TestBashTool_NetworkCommandRequiresPermission(t *testing.T) {
 	workingDir := t.TempDir()
 	perms := &recordingPermissionService{
 		Broker: pubsub.NewBroker[permission.PermissionRequest](),
 		allow:  true,
 	}
 	attribution := &config.Attribution{TrailerStyle: config.TrailerStyleNone}
-	tool := NewBashTool(perms, workingDir, workingDir, attribution, "test-model",
-		[]string{"git branch -D", "git tag -d"})
+	tool := NewBashTool(perms, workingDir, workingDir, attribution, "test-model", nil)
 	ctx := context.WithValue(context.Background(), SessionIDContextKey, "test-session")
+	ctx = WithSandboxPolicy(ctx, tableSandboxPolicy(t, workingDir))
 
-	// `git branch -D` matches the "git branch" safe prefix AND the configured
-	// dangerous entry. It must request permission, not run silently.
 	resp := runBashTool(t, tool, ctx, BashParams{
-		Description: "delete branch",
-		Command:     "git branch -D feature",
+		Description: "push",
+		Command:     "git push origin main",
 	})
-
 	require.False(t, resp.IsError)
 	require.Equal(t, 1, perms.requestCount,
-		"dangerous command matching a safe prefix must request permission")
+		"a network command must request permission")
 	require.NotNil(t, perms.lastRequest)
-	require.True(t, perms.lastRequest.Dangerous,
-		"configured dangerous command must be flagged dangerous")
+	require.Contains(t, perms.lastRequest.Description, "network")
 
-	// A genuinely read-only git branch invocation that is not configured
-	// dangerous stays on the safe-readonly path (no permission request).
+	// A confined command stays auto-approved.
 	perms.requestCount = 0
 	resp = runBashTool(t, tool, ctx, BashParams{
 		Description: "list branches",
 		Command:     "git branch --list",
 	})
-
 	require.False(t, resp.IsError)
 	require.Equal(t, 0, perms.requestCount,
-		"non-dangerous safe command should stay on the read-only path")
+		"a confined command must not request permission")
+}
+
+// TestBashTool_FullAccessNeverPrompts verifies danger-full-access is full
+// delegation: nothing prompts, not even network commands.
+func TestBashTool_FullAccessNeverPrompts(t *testing.T) {
+	workingDir := t.TempDir()
+	perms := &recordingPermissionService{
+		Broker: pubsub.NewBroker[permission.PermissionRequest](),
+		allow:  true,
+	}
+	attribution := &config.Attribution{TrailerStyle: config.TrailerStyleNone}
+	tool := NewBashTool(perms, workingDir, workingDir, attribution, "test-model", nil)
+	ctx := context.WithValue(context.Background(), SessionIDContextKey, "test-session")
+	policy, err := sandbox.Resolve(sandbox.Options{Workspace: workingDir, TempDir: filepath.Join(t.TempDir(), "tmp")})
+	require.NoError(t, err)
+	policy.Mode = sandbox.ModeDangerFullAccess
+	ctx = WithSandboxPolicy(ctx, policy)
+
+	resp := runBashTool(t, tool, ctx, BashParams{
+		Description: "push",
+		Command:     "git push origin main",
+	})
+	require.False(t, resp.IsError)
+	require.Equal(t, 0, perms.requestCount,
+		"danger-full-access must not prompt")
 }
 
 func runBashTool(t *testing.T, tool fantasy.AgentTool, ctx context.Context, params BashParams) fantasy.ToolResponse {
@@ -265,68 +286,17 @@ func TestTruncateOutputEmoji(t *testing.T) {
 	require.Contains(t, out, "lines truncated")
 }
 
-func TestBlockFuncsExecFlags(t *testing.T) {
+func TestIsNetworkCommand(t *testing.T) {
 	t.Parallel()
 
-	blocked := func(parts ...string) bool {
-		for _, fn := range blockFuncs() {
-			if fn(parts) {
-				return true
-			}
-		}
-		return false
-	}
-
-	// rg --pre runs a command per match.
-	require.True(t, blocked("rg", "--pre", "cat", "pattern"), "rg --pre must be blocked")
-
-	// Every fd exec flag must be blocked, under both names fd ships as. Each
-	// flag needs its own blocker: ArgumentsBlocker requires all configured
-	// flags to be present.
-	flags := append([]string{"--exec=ls"}, fdExecFlags...)
-	for _, cmd := range fdCommands {
-		for _, flag := range flags {
-			require.True(t, blocked(cmd, flag, "true"), "%s %s must be blocked", cmd, flag)
-		}
-	}
-
-	// Plain searches and unrelated flags stay allowed.
-	require.False(t, blocked("rg", "pattern"))
-	require.False(t, blocked("rg", "--files", "-g", "*.go"))
-	require.False(t, blocked("fd", "pattern"))
-	require.False(t, blocked("fdfind", "-e", "go"))
-}
-
-// TestBashTool_ReadOnlyRedirectRequiresPermission is the regression test for
-// the read-only shortcut approving an arbitrary write. A command that matches
-// the read-only allow-list but carries an output redirect must go through the
-// normal permission flow, because the redirect can write anywhere the user
-// can write.
-func TestBashTool_ReadOnlyRedirectRequiresPermission(t *testing.T) {
-	workingDir := t.TempDir()
-	tool, perms := newBashToolWithRecordingPerms(workingDir, true)
-	ctx := context.WithValue(context.Background(), SessionIDContextKey, "test-session")
-
-	outside := filepath.Join(t.TempDir(), "redirected")
-
-	resp := runBashTool(t, tool, ctx, BashParams{
-		Description: "redirect git status outside the workspace",
-		Command:     "git status > " + outside,
-	})
-
-	require.False(t, resp.IsError)
-	require.Equal(t, 1, perms.requestCount,
-		"a read-only command with an output redirect must request permission")
-	require.NotNil(t, perms.lastRequest)
-	require.Contains(t, perms.lastRequest.Description, "git status")
-
-	// The same command without the redirect keeps the shortcut.
-	perms.requestCount = 0
-	resp = runBashTool(t, tool, ctx, BashParams{
-		Description: "plain git status",
-		Command:     "git status",
-	})
-	require.False(t, resp.IsError)
-	require.Equal(t, 0, perms.requestCount,
-		"a plain read-only command must not request permission")
+	require.True(t, isNetworkCommand("curl https://example.com", nil))
+	require.True(t, isNetworkCommand("curl", nil), "a bare command name matches")
+	require.True(t, isNetworkCommand("git push origin main", nil),
+		"multi-token entries match the leading tokens in order")
+	require.True(t, isNetworkCommand("sudo apt install jq", nil))
+	require.True(t, isNetworkCommand("docker push repo/img", []string{"docker push"}),
+		"configured additions join the built-in list")
+	require.False(t, isNetworkCommand("git pushdry", nil), "tokens must match whole")
+	require.False(t, isNetworkCommand("ls -la", nil))
+	require.False(t, isNetworkCommand("", nil))
 }

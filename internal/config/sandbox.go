@@ -74,11 +74,9 @@ func ResolveSandbox(cfg Sandbox, opts SandboxResolveOptions) (*sandbox.Policy, e
 		GlobalConfigDir: opts.GlobalConfigDir,
 		GlobalDataDir:   opts.GlobalDataDir,
 		Config: sandbox.Config{
-			Mode:              mode,
-			AllowWrite:        resolveAgainstWorkspace(cfg.AllowWrite, opts.Workspace),
-			DenyWrite:         resolveAgainstWorkspace(cfg.DenyWrite, opts.Workspace),
-			ExcludeCommands:   cfg.ExcludeCommands,
-			FailIfUnavailable: cfg.FailIfUnavailable,
+			Mode:       mode,
+			AllowWrite: resolveAgainstWorkspace(cfg.AllowWrite, opts.Workspace),
+			DenyWrite:  resolveAgainstWorkspace(cfg.DenyWrite, opts.Workspace),
 		},
 	})
 }
@@ -147,12 +145,6 @@ func ValidateSandbox(cfg Sandbox) error {
 	return nil
 }
 
-// IsSandboxExcluded reports whether a command matches a configured exclusion.
-// It delegates to the sandbox package so every caller uses one matcher.
-func IsSandboxExcluded(command string, patterns []string) bool {
-	return sandbox.IsSandboxExcludedCommand(command, patterns)
-}
-
 // DefaultSandboxTempDir returns the private per-run temp directory for a data
 // directory. Keeping it under the data directory means it is removed with the
 // rest of the run's state and never shares a namespace with /tmp.
@@ -164,18 +156,13 @@ func DefaultSandboxTempDir(dataDir string) string {
 }
 
 // mergeSandboxTighten merges user-level and project-level sandbox settings.
-// Project settings may only add denials and exclusions; everything else comes
-// from the user-level settings.
+// Project settings may only add denials; everything else comes from the
+// user-level settings.
 func mergeSandboxTighten(base, project Sandbox) Sandbox {
 	merged := base
 	for _, deny := range project.DenyWrite {
 		if !slices.Contains(merged.DenyWrite, deny) {
 			merged.DenyWrite = append(merged.DenyWrite, deny)
-		}
-	}
-	for _, ex := range project.ExcludeCommands {
-		if !slices.Contains(merged.ExcludeCommands, ex) {
-			merged.ExcludeCommands = append(merged.ExcludeCommands, ex)
 		}
 	}
 	return merged

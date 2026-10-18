@@ -59,25 +59,11 @@ func TestSandboxBuiltin_Lists(t *testing.T) {
 	store := loadCrushShWithGlobalSettings(t, `sandbox allow-write ~/.kube
 sandbox allow-write ~/.kube
 sandbox deny-write ./secrets
-sandbox deny-write ./secrets
-sandbox exclude-command "docker *"
-sandbox exclude-command "gh *"
-sandbox exclude-command "docker *"`)
+sandbox deny-write ./secrets`)
 
 	box := store.Config().Permissions.SandboxConfig()
 	require.Len(t, box.AllowWrite, 1, "duplicate allow-write entries must be deduplicated")
 	require.Equal(t, []string{"./secrets"}, box.DenyWrite)
-	require.Equal(t, []string{"docker *", "gh *"}, box.ExcludeCommands)
-}
-
-// TestSandboxBuiltin_FailIfUnavailable verifies the option accepts a bare form
-// and an explicit boolean.
-func TestSandboxBuiltin_FailIfUnavailable(t *testing.T) {
-	store := loadCrushSh(t, `sandbox fail-if-unavailable`)
-	require.True(t, store.Config().Permissions.SandboxConfig().FailIfUnavailable)
-
-	store = loadCrushSh(t, `sandbox fail-if-unavailable false`)
-	require.False(t, store.Config().Permissions.SandboxConfig().FailIfUnavailable)
 }
 
 // TestSandboxBuiltin_UnknownSubcommand verifies an unknown subcommand reports
@@ -95,7 +81,7 @@ func TestSandboxConfig_JSONSchemaIncludesSettings(t *testing.T) {
 	schema, err := os.ReadFile(filepath.Join("..", "..", "schema.json"))
 	require.NoError(t, err)
 	text := string(schema)
-	for _, key := range []string{`"sandbox"`, `"allow_write"`, `"deny_write"`, `"exclude_commands"`, `"fail_if_unavailable"`} {
+	for _, key := range []string{`"sandbox"`, `"allow_write"`, `"deny_write"`} {
 		require.Contains(t, text, key)
 	}
 	require.Contains(t, text, `"danger-full-access"`)
@@ -121,9 +107,7 @@ func TestSandboxConfig_JSONSettingsWork(t *testing.T) {
 		[]byte(`{"permissions": {"sandbox": {
 			"mode": "workspace-write",
 			"allow_write": ["`+extra+`"],
-			"deny_write": ["./secrets"],
-			"exclude_commands": ["docker *"],
-			"fail_if_unavailable": true
+			"deny_write": ["./secrets"]
 		}}}`),
 		0o644,
 	))
@@ -134,8 +118,6 @@ func TestSandboxConfig_JSONSettingsWork(t *testing.T) {
 	require.Equal(t, "workspace-write", box.Mode)
 	require.Equal(t, []string{extra}, box.AllowWrite)
 	require.Equal(t, []string{"./secrets"}, box.DenyWrite)
-	require.Equal(t, []string{"docker *"}, box.ExcludeCommands)
-	require.True(t, box.FailIfUnavailable)
 }
 
 // TestSandboxConfig_InvalidKeyFailsLoad verifies a configuration error names
@@ -217,24 +199,6 @@ func TestResolveSandbox_DenialsPrecedence(t *testing.T) {
 	require.NoError(t, policy.CheckWrite(filepath.Join(workspace, "ordinary")))
 }
 
-// TestSandboxExclusions verifies exclusion patterns match as documented and do
-// not silently widen to interpreters or wrappers.
-func TestSandboxExclusions(t *testing.T) {
-	t.Parallel()
-
-	patterns := []string{"docker *", "gh"}
-	require.True(t, config.IsSandboxExcluded("docker run alpine", patterns))
-	require.True(t, config.IsSandboxExcluded("gh", patterns))
-	require.True(t, config.IsSandboxExcluded("gh pr create", patterns))
-	require.False(t, config.IsSandboxExcluded("go test ./...", patterns))
-	require.False(t, config.IsSandboxExcluded("sudo docker run alpine", patterns),
-		"a wrapper must not inherit another command's exclusion")
-	require.False(t, config.IsSandboxExcluded("bash -c 'docker run alpine'", patterns),
-		"an interpreter must not inherit another command's exclusion")
-	require.False(t, config.IsSandboxExcluded("docker", []string{"docker *"}),
-		"a pattern with args must not match the bare command name")
-}
-
 // TestProjectSandbox_TightensOnly verifies project-level configuration may add
 // denials and exclusions but cannot widen the mode, add a writable root, or
 // disable the sandbox.
@@ -242,11 +206,10 @@ func TestProjectSandbox_TightensOnly(t *testing.T) {
 	t.Parallel()
 	base := config.Sandbox{Mode: "read-only", AllowWrite: []string{"/opt/one"}}
 
-	t.Run("denials and exclusions are allowed", func(t *testing.T) {
+	t.Run("denials are allowed", func(t *testing.T) {
 		t.Parallel()
 		err := config.CheckProjectSandboxTightens(config.Sandbox{
-			DenyWrite:       []string{"./secrets"},
-			ExcludeCommands: []string{"docker *"},
+			DenyWrite: []string{"./secrets"},
 		}, base)
 		require.NoError(t, err)
 	})
@@ -281,11 +244,6 @@ func TestProjectSandbox_TightensOnly(t *testing.T) {
 		require.ErrorIs(t, err, config.ErrProjectWidensSandbox)
 	})
 
-	t.Run("requiring the sandbox is a tightening", func(t *testing.T) {
-		t.Parallel()
-		err := config.CheckProjectSandboxTightens(config.Sandbox{FailIfUnavailable: true}, base)
-		require.NoError(t, err)
-	})
 }
 
 // TestSandboxMode_DangerRequiresExplicitSelection verifies an absent or
@@ -310,8 +268,8 @@ func TestSandboxMode_DangerRequiresExplicitSelection(t *testing.T) {
 }
 
 // TestSandboxLayers_ProjectTightenOnlyEndToEnd verifies a repository-local
-// crushrc may add denials and exclusions on top of the user's settings, and
-// that a project-level attempt to widen the sandbox fails the load with the
+// crushrc may add denials on top of the user's settings, and that a
+// project-level attempt to widen the sandbox fails the load with the
 // offending key named.
 func TestSandboxLayers_ProjectTightenOnlyEndToEnd(t *testing.T) {
 	home := t.TempDir()
@@ -327,18 +285,16 @@ func TestSandboxLayers_ProjectTightenOnlyEndToEnd(t *testing.T) {
 	require.NoError(t, os.WriteFile(
 		filepath.Join(globalDir, "crushrc"),
 		[]byte(`sandbox mode workspace-write
-sandbox exclude-command "gh *"
 `),
 		0o644,
 	))
 
-	t.Run("project may add denials and exclusions", func(t *testing.T) {
+	t.Run("project may add denials", func(t *testing.T) {
 		workDir := t.TempDir()
 		dataDir := t.TempDir()
 		require.NoError(t, os.WriteFile(
 			filepath.Join(workDir, "crushrc"),
 			[]byte(`sandbox deny-write ./secrets
-sandbox exclude-command "docker *"
 `),
 			0o644,
 		))
@@ -349,8 +305,6 @@ sandbox exclude-command "docker *"
 		box := store.Config().Permissions.SandboxConfig()
 		require.Equal(t, "workspace-write", box.Mode)
 		require.Equal(t, []string{"./secrets"}, box.DenyWrite)
-		require.Equal(t, []string{"gh *", "docker *"}, box.ExcludeCommands,
-			"the project's exclusion is added to the user's, not instead of it")
 	})
 
 	t.Run("project may not add a writable root", func(t *testing.T) {
@@ -384,33 +338,6 @@ sandbox exclude-command "docker *"
 		require.ErrorIs(t, err, config.ErrProjectWidensSandbox)
 		require.Contains(t, err.Error(), "mode")
 	})
-}
-
-// TestSandboxRuntime_FailIfUnavailable verifies the opt-in exits with the same
-// actionable message the runtime refusal uses when no backend is usable.
-func TestSandboxRuntime_FailIfUnavailable(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
-	t.Setenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
-	t.Setenv("CRUSH_GLOBAL_CONFIG", filepath.Join(home, ".config", "crush"))
-	t.Setenv("CRUSH_GLOBAL_DATA", filepath.Join(home, ".local", "share", "crush"))
-
-	globalDir := filepath.Join(home, ".config", "crush")
-	require.NoError(t, os.MkdirAll(globalDir, 0o755))
-	require.NoError(t, os.WriteFile(
-		filepath.Join(globalDir, "crush.json"),
-		[]byte(`{"permissions": {"sandbox": {"fail_if_unavailable": true}}}`),
-		0o644,
-	))
-
-	workDir := t.TempDir()
-	store, err := config.Load(workDir, t.TempDir(), false)
-	require.NoError(t, err)
-
-	// On this host a backend is available, so the requirement is satisfied.
-	rt := store.ResolveSandboxRuntime()
-	require.NoError(t, store.EnsureSandboxAvailable(rt))
 }
 
 // TestSandboxRuntime_ExplicitDisable verifies the separate disable override

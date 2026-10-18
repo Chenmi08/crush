@@ -11,15 +11,6 @@ import (
 	"github.com/charmbracelet/crush/internal/sandbox"
 )
 
-// The escalation parameter descriptions below are the canonical wording for
-// the sandbox_permissions and justification struct tags in every confined
-// tool's parameter struct. Struct tags cannot reference constants, so each
-// tool repeats these literals verbatim; keep them in sync.
-const sandboxPermissionsDescription = "Request a wider sandbox mode for this one call only. Requires justification. The user is asked to approve leaving the sandbox; approval never carries to another call. Accepted: read-only, workspace-write, danger-full-access"
-
-// justificationDescription pairs with sandbox_permissions.
-const justificationDescription = "A sentence explaining why this call needs a wider sandbox mode. Required whenever sandbox_permissions is set, and ignored when it is not. Shown to the user in the approval dialog: state what the call will do, why it must leave the sandbox, and any alternative considered"
-
 // escalationRequest is a validated single-call escalation.
 type escalationRequest struct {
 	mode          sandbox.Mode

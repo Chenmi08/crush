@@ -167,7 +167,7 @@ func TestFence_BackgroundJobCarriesPolicy(t *testing.T) {
 	manager := testBackgroundShellManager(t)
 
 	outside := filepath.Join(t.TempDir(), "bg.txt")
-	job, err := manager.StartWithPolicy(t.Context(), policy.Workspace, nil, policy,
+	job, err := manager.StartWithPolicy(t.Context(), policy.Workspace, policy,
 		"echo x > "+outside, "fenced background job")
 	require.NoError(t, err)
 	job.Wait()
@@ -177,7 +177,7 @@ func TestFence_BackgroundJobCarriesPolicy(t *testing.T) {
 	require.True(t, os.IsNotExist(statErr), "a background job must not outlive its confinement")
 
 	inside := filepath.Join(policy.Workspace, "bg.txt")
-	job, err = manager.StartWithPolicy(t.Context(), policy.Workspace, nil, policy,
+	job, err = manager.StartWithPolicy(t.Context(), policy.Workspace, policy,
 		"echo ok > "+inside, "allowed background job")
 	require.NoError(t, err)
 	job.Wait()
@@ -274,7 +274,7 @@ func TestFence_ProtectedPathRefusedThroughShell(t *testing.T) {
 // Crush process and would bypass both the file-open hook and the backend.
 func TestFence_GoCoreutilsDisabledUnderPolicy(t *testing.T) {
 	policy := fencePolicy(t)
-	for _, handler := range standardHandlers(nil, policy) {
+	for _, handler := range standardHandlers(policy) {
 		require.NotEqual(t, fmt.Sprintf("%p", coreUtilsExecHandler), fmt.Sprintf("%p", handler),
 			"the Go coreutils middleware must not be installed under a policy")
 	}
@@ -282,7 +282,7 @@ func TestFence_GoCoreutilsDisabledUnderPolicy(t *testing.T) {
 	// Without a policy, the existing behavior is unchanged.
 	if coreUtilsExecHandler != nil && useGoCoreUtils {
 		found := false
-		for _, handler := range standardHandlers(nil, nil) {
+		for _, handler := range standardHandlers(nil) {
 			if fmt.Sprintf("%p", handler) == fmt.Sprintf("%p", coreUtilsExecHandler) {
 				found = true
 			}

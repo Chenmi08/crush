@@ -210,14 +210,14 @@ func TestLoadShellConfig_PermissionsDeny(t *testing.T) {
 		"deny must not create a permissions section")
 }
 
-// TestLoadShellConfig_PermissionsDangerous verifies that `permissions
-// dangerous` writes to permissions.dangerous_commands, deduplicating
+// TestLoadShellConfig_PermissionsNetwork verifies that `permissions
+// network` writes to permissions.network_commands, deduplicating
 // repeated entries and preserving multi-word command patterns.
-func TestLoadShellConfig_PermissionsDangerous(t *testing.T) {
+func TestLoadShellConfig_PermissionsNetwork(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	script := `permissions dangerous "git push" "git branch -d" rm rm`
+	script := `permissions network "docker push" "docker pull" rm rm`
 	path := filepath.Join(dir, "crushrc")
 
 	jsonBytes, err := LoadShellConfig(t.Context(), path, []byte(script))
@@ -227,9 +227,9 @@ func TestLoadShellConfig_PermissionsDangerous(t *testing.T) {
 	require.NoError(t, json.Unmarshal(jsonBytes, &result))
 
 	perms := result["permissions"].(map[string]any)
-	dangerous := perms["dangerous_commands"].([]any)
-	require.Equal(t, []any{"git push", "git branch -d", "rm"}, dangerous,
-		"dangerous_commands should hold unique patterns in order")
+	network := perms["network_commands"].([]any)
+	require.Equal(t, []any{"docker push", "docker pull", "rm"}, network,
+		"network_commands should hold unique patterns in order")
 }
 
 // TestLoadShellConfig_Hook verifies the hook builtin.

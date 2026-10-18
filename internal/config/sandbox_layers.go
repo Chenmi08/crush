@@ -26,7 +26,7 @@ type sandboxLayer struct {
 //
 // The user-level documents are merged freely: they are all the user's own
 // choice, and later files win. A repository-local document is compared against
-// the user-level result and may only add denials and exclusions. A widening key
+// the user-level result and may only add denials. A widening key
 // is rejected with the offending key named, so a repository cannot quietly
 // widen its own sandbox.
 func checkSandboxLayerOrder(layers []sandboxLayer) error {
@@ -69,8 +69,6 @@ func mergeSandboxUserLevel(base, next Sandbox) Sandbox {
 	}
 	merged.AllowWrite = appendUnique(base.AllowWrite, next.AllowWrite...)
 	merged.DenyWrite = appendUnique(base.DenyWrite, next.DenyWrite...)
-	merged.ExcludeCommands = appendUnique(base.ExcludeCommands, next.ExcludeCommands...)
-	merged.FailIfUnavailable = base.FailIfUnavailable || next.FailIfUnavailable
 	return merged
 }
 
@@ -87,8 +85,7 @@ func appendUnique(base []string, values ...string) []string {
 
 // IsZero reports whether the settings are entirely unset.
 func (s Sandbox) IsZero() bool {
-	return s.Mode == "" && len(s.AllowWrite) == 0 && len(s.DenyWrite) == 0 &&
-		len(s.ExcludeCommands) == 0 && !s.FailIfUnavailable
+	return s.Mode == "" && len(s.AllowWrite) == 0 && len(s.DenyWrite) == 0
 }
 
 // mergeSandboxLayers merges the sandbox settings from every document, applying

@@ -221,15 +221,6 @@ func TestDescribe_ReportsEnforcementForSelectedBackend(t *testing.T) {
 	}
 }
 
-// TestFenceBackend_ReportsPartial pins the honest reporting of the in-process
-// fence: child processes are not confined, so it is never full.
-func TestFenceBackend_ReportsPartial(t *testing.T) {
-	t.Parallel()
-	p := testPolicy(t)
-	require.Equal(t, EnforcementPartial, fenceBackend{}.Enforcement(p))
-	require.Equal(t, "in-process", fenceBackend{}.Name())
-}
-
 // TestCanonicalProtectedPaths_SortedAndDeduped pins the shape of the
 // protected set: sorted input-independent output with no duplicates, which is
 // what makes generated backend rules stable in golden files.

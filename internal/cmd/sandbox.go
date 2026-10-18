@@ -53,14 +53,12 @@ var sandboxStatusCmd = &cobra.Command{
 				DenyWrites         []string `json:"deny_writes,omitempty"`
 				Protected          int      `json:"protected_paths,omitempty"`
 				Missing            string   `json:"missing,omitempty"`
-				Excluded           []string `json:"excluded_commands,omitempty"`
 				ConfigurationError string   `json:"configuration_error,omitempty"`
 			}{
 				Mode:        string(rt.RequestedMode),
 				Backend:     status.Backend,
 				Enforcement: string(status.Enforcement),
 				Missing:     status.Missing,
-				Excluded:    rt.Configuration.ExcludeCommands,
 			}
 			if rt.Err != nil {
 				out.ConfigurationError = rt.Err.Error()
@@ -102,9 +100,6 @@ var sandboxStatusCmd = &cobra.Command{
 				}
 			}
 			cmd.Printf("protected_paths: %d\n", len(rt.Policy.Protected))
-		}
-		if len(rt.Configuration.ExcludeCommands) > 0 {
-			cmd.Printf("excluded_commands: %s\n", strings.Join(rt.Configuration.ExcludeCommands, ", "))
 		}
 		cmd.Println("reads: unrestricted (the sandbox confines writes only)")
 		cmd.Println("network: not isolated")

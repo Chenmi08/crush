@@ -418,9 +418,6 @@ func writeSandbox(b *strings.Builder, cfg *config.ConfigStore) {
 		}
 		fmt.Fprintf(b, "protected_paths = %d\n", len(rt.Policy.Protected))
 	}
-	if len(rt.Configuration.ExcludeCommands) > 0 {
-		fmt.Fprintf(b, "excluded_commands = %s\n", strings.Join(rt.Configuration.ExcludeCommands, ", "))
-	}
 	b.WriteString("reads = unrestricted (the sandbox confines writes only)\n")
 	b.WriteString("\n")
 }

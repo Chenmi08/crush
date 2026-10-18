@@ -1,6 +1,6 @@
 Execute shell commands; long-running commands automatically move to background and return a shell ID.
 
-Banned commands ({{ .BannedCommands }}) return an error - explain to the user instead of retrying. Safe read-only commands execute without prompts. Output is truncated beyond {{ .MaxOutputLength }} characters. The truncation marker names a file holding the complete output - read it with the view tool when the omitted middle matters.
+Writes are confined to the sandbox, so most commands run without prompts. Commands that reach the network (curl, ssh, git push, package installs to global locations, and similar) require user approval and return an error if declined - explain to the user instead of retrying. Output is truncated beyond {{ .MaxOutputLength }} characters. The truncation marker names a file holding the complete output - read it with the view tool when the omitted middle matters.
 
 - Use the dedicated View/Edit tools instead of `cat`/`sed` for reading and editing files.
 - Chain commands with ';' or '&&'; avoid newlines except in quoted strings. Each call runs in an independent shell (no state persists between calls).

@@ -42,11 +42,7 @@ const probeWindow = 128
 //
 // Non-path-prefixed argv[0] and empty args are passed straight through; this
 // handler is a no-op for ordinary commands like `echo` or `jq`.
-//
-// blockFuncs is the block list used when building the nested runner for the
-// shell-source case, so deny rules apply recursively to commands invoked
-// from in-process scripts.
-func scriptDispatchHandler(blockFuncs []BlockFunc, policy *sandbox.Policy) execMiddleware {
+func scriptDispatchHandler(policy *sandbox.Policy) execMiddleware {
 	return func(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
 		return func(ctx context.Context, args []string) error {
 			if len(args) == 0 || !isPathPrefixed(args[0]) {
@@ -68,7 +64,7 @@ func scriptDispatchHandler(blockFuncs []BlockFunc, policy *sandbox.Policy) execM
 			case isBinary(probe):
 				return next(ctx, args)
 			default:
-				return runShellSource(ctx, scriptPath, args, blockFuncs, policy)
+				return runShellSource(ctx, scriptPath, args, policy)
 			}
 		}
 	}
@@ -399,7 +395,7 @@ func parseEnvShebang(rest string) (*shebang, error) {
 // This is the only branch that reads the full file; probeFile keeps its
 // read to probeWindow bytes so the binary/shebang paths never touch more
 // than 128 bytes of I/O.
-func runShellSource(ctx context.Context, path string, args []string, blockFuncs []BlockFunc, policy *sandbox.Policy) error {
+func runShellSource(ctx context.Context, path string, args []string, policy *sandbox.Policy) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -417,7 +413,7 @@ func runShellSource(ctx context.Context, path string, args []string, blockFuncs 
 		interp.Interactive(false),
 		interp.Env(hc.Env),
 		interp.Dir(hc.Dir),
-		execHandlerOption(blockFuncs, policy),
+		execHandlerOption(policy),
 	}
 	if policy != nil {
 		opts = append(opts, interp.OpenHandler(openHandler(policy)))

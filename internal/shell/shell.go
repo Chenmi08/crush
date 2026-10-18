@@ -16,12 +16,10 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"slices"
 	"strings"
 	"sync"
 
 	"github.com/charmbracelet/crush/internal/sandbox"
-	"github.com/charmbracelet/x/exp/slice"
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -59,17 +57,13 @@ type noopLogger struct{}
 
 func (noopLogger) InfoPersist(msg string, keysAndValues ...any) {}
 
-// BlockFunc is a function that determines if a command should be blocked
-type BlockFunc func(args []string) bool
-
 // Shell provides cross-platform shell execution with optional state persistence
 type Shell struct {
-	env        []string
-	cwd        string
-	mu         sync.Mutex
-	logger     Logger
-	blockFuncs []BlockFunc
-	policy     *sandbox.Policy
+	env    []string
+	cwd    string
+	mu     sync.Mutex
+	logger Logger
+	policy *sandbox.Policy
 }
 
 // Options for creating a new shell
@@ -77,7 +71,6 @@ type Options struct {
 	WorkingDir string
 	Env        []string
 	Logger     Logger
-	BlockFuncs []BlockFunc
 	// Policy is the sandbox policy this shell executes under. It is carried
 	// per shell instance, not stored globally, so two concurrent sessions
 	// with different modes do not interfere.
@@ -114,11 +107,10 @@ func NewShell(opts *Options) *Shell {
 	}
 
 	return &Shell{
-		cwd:        cwd,
-		env:        env,
-		logger:     logger,
-		blockFuncs: opts.BlockFuncs,
-		policy:     opts.Policy,
+		cwd:    cwd,
+		env:    env,
+		logger: logger,
+		policy: opts.Policy,
 	}
 }
 
@@ -199,70 +191,10 @@ func (s *Shell) Policy() *sandbox.Policy {
 	return s.policy
 }
 
-// SetBlockFuncs sets the command block functions for the shell
-func (s *Shell) SetBlockFuncs(blockFuncs []BlockFunc) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.blockFuncs = blockFuncs
-}
-
-// CommandsBlocker creates a BlockFunc that blocks exact command matches
-func CommandsBlocker(cmds []string) BlockFunc {
-	bannedSet := make(map[string]struct{})
-	for _, cmd := range cmds {
-		bannedSet[cmd] = struct{}{}
-	}
-
-	return func(args []string) bool {
-		if len(args) == 0 {
-			return false
-		}
-		_, ok := bannedSet[args[0]]
-		return ok
-	}
-}
-
-// ArgumentsBlocker creates a BlockFunc that blocks specific subcommand
-func ArgumentsBlocker(cmd string, args []string, flags []string) BlockFunc {
-	return func(parts []string) bool {
-		if len(parts) == 0 || parts[0] != cmd {
-			return false
-		}
-
-		argParts, flagParts := splitArgsFlags(parts[1:])
-		if len(argParts) < len(args) || len(flagParts) < len(flags) {
-			return false
-		}
-
-		argsMatch := slices.Equal(argParts[:len(args)], args)
-		flagsMatch := slice.IsSubset(flags, flagParts)
-
-		return argsMatch && flagsMatch
-	}
-}
-
-func splitArgsFlags(parts []string) (args []string, flags []string) {
-	args = make([]string, 0, len(parts))
-	flags = make([]string, 0, len(parts))
-	for _, part := range parts {
-		if strings.HasPrefix(part, "-") {
-			// Extract flag name before '=' if present
-			flag := part
-			if before, _, ok := strings.Cut(part, "="); ok {
-				flag = before
-			}
-			flags = append(flags, flag)
-		} else {
-			args = append(args, part)
-		}
-	}
-	return args, flags
-}
-
 // newInterp creates a new interpreter with the current shell state. A nil
 // stdin is equivalent to an empty input stream.
 func (s *Shell) newInterp(stdin io.Reader, stdout, stderr io.Writer) (*interp.Runner, error) {
-	return newRunnerWithPolicy(s.cwd, s.env, stdin, stdout, stderr, s.blockFuncs, s.policy)
+	return newRunnerWithPolicy(s.cwd, s.env, stdin, stdout, stderr, s.policy)
 }
 
 // updateShellFromRunner updates the shell from the interpreter after execution.

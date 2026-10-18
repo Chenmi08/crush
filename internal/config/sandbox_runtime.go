@@ -117,26 +117,6 @@ func sandboxCacheDir() string {
 	return dir
 }
 
-// EnsureSandboxAvailable implements the fail-if-unavailable contract: when the
-// user requires a sandbox, startup fails loudly with the same actionable
-// message the runtime refusal uses.
-func (s *ConfigStore) EnsureSandboxAvailable(rt SandboxRuntime) error {
-	if !rt.Configuration.FailIfUnavailable || rt.Policy == nil {
-		if rt.Err != nil && rt.Configuration.FailIfUnavailable {
-			return fmt.Errorf("sandbox required but could not be configured: %w", rt.Err)
-		}
-		return nil
-	}
-	if rt.Policy.Mode == sandbox.ModeDangerFullAccess {
-		return fmt.Errorf("sandbox-fail-if-unavailable is set but the sandbox mode is danger-full-access")
-	}
-	status := sandbox.Describe(context.Background(), rt.Policy)
-	if status.Backend == "none" {
-		return fmt.Errorf("sandbox required but unavailable: %s", status.Missing)
-	}
-	return nil
-}
-
 // SandboxStatus describes the current policy and enforcement for display.
 func (s *ConfigStore) SandboxStatus(rt SandboxRuntime) sandbox.Status {
 	return sandbox.Describe(context.Background(), rt.Policy)

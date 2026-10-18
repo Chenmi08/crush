@@ -36,15 +36,15 @@ func TestApproval_ConfinedCommandIsAutoApproved(t *testing.T) {
 		"a confined command must not prompt")
 }
 
-// TestApproval_DangerousCommandStillPrompts verifies a configured dangerous
-// command prompts even when it is confined.
-func TestApproval_DangerousCommandStillPrompts(t *testing.T) {
+// TestApproval_NetworkCommandPrompts verifies a command that leaves the
+// sandbox's boundary prompts, and the request says it is confined.
+func TestApproval_NetworkCommandPrompts(t *testing.T) {
 	t.Parallel()
 	workspace := t.TempDir()
 	policy := tableSandboxPolicy(t, workspace)
 	perms := &recordingPermissionService{Broker: pubsubBroker(), allow: true}
 	attribution := &config.Attribution{TrailerStyle: config.TrailerStyleNone}
-	tool := NewBashTool(perms, workspace, workspace, attribution, "test-model", []string{"git push"})
+	tool := NewBashTool(perms, workspace, workspace, attribution, "test-model", nil)
 
 	ctx := context.WithValue(context.Background(), SessionIDContextKey, "test-session")
 	ctx = WithSandboxPolicy(ctx, policy)
@@ -52,60 +52,26 @@ func TestApproval_DangerousCommandStillPrompts(t *testing.T) {
 	resp := runBashTool(t, tool, ctx, BashParams{Description: "push", Command: "git push origin main"})
 	require.False(t, resp.IsError)
 	require.Equal(t, 1, perms.requestCount,
-		"a dangerous command must prompt even when confined")
+		"a network command must prompt")
 	require.NotNil(t, perms.lastRequest)
-	require.True(t, perms.lastRequest.Dangerous)
+	require.Contains(t, perms.lastRequest.Description, "network")
 }
 
-// TestApproval_ExcludedCommandPromptsUnsandboxed verifies an excluded command
-// prompts and the prompt says it runs unsandboxed.
-func TestApproval_ExcludedCommandPromptsUnsandboxed(t *testing.T) {
+// TestApproval_NoPolicyNeverPrompts verifies that with no policy attached
+// (hooks, diagnostics) nothing prompts: there is no boundary to leave.
+func TestApproval_NoPolicyNeverPrompts(t *testing.T) {
 	t.Parallel()
 	workspace := t.TempDir()
-	policy := tableSandboxPolicy(t, workspace)
 	perms := &recordingPermissionService{Broker: pubsubBroker(), allow: true}
 	attribution := &config.Attribution{TrailerStyle: config.TrailerStyleNone}
 	tool := NewBashTool(perms, workspace, workspace, attribution, "test-model", nil)
 
 	ctx := context.WithValue(context.Background(), SessionIDContextKey, "test-session")
-	ctx = WithSandboxPolicy(ctx, policy)
-	ctx = WithSandboxExclusions(ctx, []string{"docker *"})
 
-	resp := runBashTool(t, tool, ctx, BashParams{Description: "docker", Command: "docker ps"})
+	resp := runBashTool(t, tool, ctx, BashParams{Description: "write", Command: "echo hi > inside.txt"})
 	require.False(t, resp.IsError)
-	require.Equal(t, 1, perms.requestCount)
-	require.NotNil(t, perms.lastRequest)
-	require.False(t, perms.lastRequest.Sandboxed)
-	require.Contains(t, perms.lastRequest.Description, "unsandboxed")
-	require.Contains(t, perms.lastRequest.Description, "excluded from the sandbox")
-}
-
-// TestApproval_NoBackendPromptsUnsandboxed verifies a confined mode with no
-// usable backend prompts rather than running silently, and the prompt states
-// it is unsandboxed.
-func TestApproval_NoBackendPromptsUnsandboxed(t *testing.T) {
-	workspace := t.TempDir()
-	policy := tableSandboxPolicy(t, workspace)
-
-	sandbox.ResetSelectionForTest()
-	t.Cleanup(sandbox.ResetSelectionForTest)
-	sandbox.ForceSelectionForTest(sandbox.Selection{Enforcement: sandbox.EnforcementNone, Reason: "no backend"})
-
-	perms := &recordingPermissionService{Broker: pubsubBroker(), allow: true}
-	attribution := &config.Attribution{TrailerStyle: config.TrailerStyleNone}
-	tool := NewBashTool(perms, workspace, workspace, attribution, "test-model", nil)
-
-	ctx := context.WithValue(context.Background(), SessionIDContextKey, "test-session")
-	ctx = WithSandboxPolicy(ctx, policy)
-
-	resp := runBashTool(t, tool, ctx, BashParams{Description: "no backend", Command: "echo hi > inside.txt"})
-	require.False(t, resp.IsError)
-	require.Equal(t, 1, perms.requestCount,
-		"a command with no usable backend must prompt")
-	require.NotNil(t, perms.lastRequest)
-	require.False(t, perms.lastRequest.Sandboxed)
-	require.Contains(t, perms.lastRequest.Description, "unsandboxed")
-	require.Contains(t, perms.lastRequest.Description, "no sandbox backend")
+	require.Equal(t, 0, perms.requestCount,
+		"no policy means no approval question")
 }
 
 // TestApproval_YoloKeepsBoundary verifies YOLO disables prompts but not the
@@ -132,9 +98,8 @@ func TestApproval_YoloKeepsBoundary(t *testing.T) {
 		"YOLO must not disable the boundary")
 }
 
-// TestApproval_RequestCarriesSandboxState verifies the request records whether
-// the operation was sandboxed, so the prompt and audit subscribers can
-// distinguish the two.
+// TestApproval_RequestCarriesSandboxState verifies the request records the
+// mode, so the prompt and audit subscribers can state the posture.
 func TestApproval_RequestCarriesSandboxState(t *testing.T) {
 	t.Parallel()
 	workspace := t.TempDir()
@@ -145,13 +110,12 @@ func TestApproval_RequestCarriesSandboxState(t *testing.T) {
 
 	ctx := context.WithValue(context.Background(), SessionIDContextKey, "test-session")
 	ctx = WithSandboxPolicy(ctx, policy)
-	ctx = WithSandboxExclusions(ctx, []string{"docker *"})
+	ctx = WithSandboxPolicy(ctx, policy)
 
-	runBashTool(t, tool, ctx, BashParams{Description: "docker", Command: "docker ps"})
+	runBashTool(t, tool, ctx, BashParams{Description: "push", Command: "git push origin main"})
 	require.NotNil(t, perms.lastRequest)
-	require.False(t, perms.lastRequest.Sandboxed)
-	require.Equal(t, "workspace-write", perms.lastRequest.SandboxMode,
-		"the request states the mode that would have applied")
+	require.True(t, perms.lastRequest.Sandboxed)
+	require.Equal(t, "workspace-write", perms.lastRequest.SandboxMode)
 }
 
 // TestApproval_HookAndSessionGrantsDoNotBypassBoundary verifies the sandbox is

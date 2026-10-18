@@ -73,7 +73,6 @@ var bashDescriptionTpl = template.Must(
 )
 
 type bashDescriptionData struct {
-	BannedCommands  string
 	MaxOutputLength int
 	Attribution     config.Attribution
 	ModelID         string
@@ -84,84 +83,9 @@ type bashDescriptionData struct {
 	GhAvailable bool
 }
 
-var bannedCommands = []string{
-	// Network/Download tools
-	"alias",
-	"aria2c",
-	"axel",
-	"chrome",
-	"curl",
-	"curlie",
-	"firefox",
-	"http-prompt",
-	"httpie",
-	"links",
-	"lynx",
-	"nc",
-	"safari",
-	"scp",
-	"ssh",
-	"telnet",
-	"w3m",
-	"wget",
-	"xh",
-
-	// System administration
-	"doas",
-	"su",
-	"sudo",
-
-	// Package managers
-	"apk",
-	"apt",
-	"apt-cache",
-	"apt-get",
-	"dnf",
-	"dpkg",
-	"emerge",
-	"home-manager",
-	"makepkg",
-	"opkg",
-	"pacman",
-	"paru",
-	"pkg",
-	"pkg_add",
-	"pkg_delete",
-	"portage",
-	"rpm",
-	"yay",
-	"yum",
-	"zypper",
-
-	// System modification
-	"at",
-	"batch",
-	"chkconfig",
-	"crontab",
-	"fdisk",
-	"mkfs",
-	"mount",
-	"parted",
-	"service",
-	"systemctl",
-	"umount",
-
-	// Network configuration
-	"firewall-cmd",
-	"ifconfig",
-	"ip",
-	"iptables",
-	"netstat",
-	"pfctl",
-	"route",
-	"ufw",
-}
-
 func bashDescription(attribution *config.Attribution, modelID string) string {
-	bannedCommandsStr := strings.Join(bannedCommands, ", ")
 	var out bytes.Buffer
 	if err := bashDescriptionTpl.Execute(&out, bashDescriptionData{
-		BannedCommands:  bannedCommandsStr,
 		MaxOutputLength: MaxOutputLength,
 		Attribution:     *attribution,
 		ModelID:         modelID,
@@ -175,56 +99,8 @@ func bashDescription(attribution *config.Attribution, modelID string) string {
 	return out.String()
 }
 
-// fdExecFlags make fd run an arbitrary command for every match.
-var fdExecFlags = []string{"-x", "-X", "--exec", "--exec-batch"}
-
-func blockFuncs() []shell.BlockFunc {
-	blockers := []shell.BlockFunc{
-		shell.CommandsBlocker(bannedCommands),
-
-		// System package managers
-		shell.ArgumentsBlocker("apk", []string{"add"}, nil),
-		shell.ArgumentsBlocker("apt", []string{"install"}, nil),
-		shell.ArgumentsBlocker("apt-get", []string{"install"}, nil),
-		shell.ArgumentsBlocker("dnf", []string{"install"}, nil),
-		shell.ArgumentsBlocker("pacman", nil, []string{"-S"}),
-		shell.ArgumentsBlocker("pkg", []string{"install"}, nil),
-		shell.ArgumentsBlocker("yum", []string{"install"}, nil),
-		shell.ArgumentsBlocker("zypper", []string{"install"}, nil),
-
-		// Language-specific package managers
-		shell.ArgumentsBlocker("brew", []string{"install"}, nil),
-		shell.ArgumentsBlocker("cargo", []string{"install"}, nil),
-		shell.ArgumentsBlocker("gem", []string{"install"}, nil),
-		shell.ArgumentsBlocker("go", []string{"install"}, nil),
-		shell.ArgumentsBlocker("npm", []string{"install"}, []string{"--global"}),
-		shell.ArgumentsBlocker("npm", []string{"install"}, []string{"-g"}),
-		shell.ArgumentsBlocker("pip", []string{"install"}, []string{"--user"}),
-		shell.ArgumentsBlocker("pip3", []string{"install"}, []string{"--user"}),
-		shell.ArgumentsBlocker("pnpm", []string{"add"}, []string{"--global"}),
-		shell.ArgumentsBlocker("pnpm", []string{"add"}, []string{"-g"}),
-		shell.ArgumentsBlocker("yarn", []string{"global", "add"}, nil),
-
-		// `go test -exec` can run arbitrary commands
-		shell.ArgumentsBlocker("go", []string{"test"}, []string{"-exec"}),
-
-		// rg --pre runs a command per match.
-		shell.ArgumentsBlocker("rg", nil, []string{"--pre"}),
-	}
-
-	// fd's exec flags each need their own blocker: ArgumentsBlocker requires
-	// every configured flag to be present, so passing them as alternatives
-	// would match nothing.
-	for _, cmd := range fdCommands {
-		for _, flag := range fdExecFlags {
-			blockers = append(blockers, shell.ArgumentsBlocker(cmd, nil, []string{flag}))
-		}
-	}
-
-	return blockers
-}
-
-func NewBashTool(permissions permission.Service, workingDir, spillDir string, attribution *config.Attribution, modelID string, dangerousCommands []string) fantasy.AgentTool {
+// NewBashTool builds the bash tool.
+func NewBashTool(permissions permission.Service, workingDir, spillDir string, attribution *config.Attribution, modelID string, networkCommands []string) fantasy.AgentTool {
 	return fantasy.NewAgentTool(
 		BashToolName,
 		withSandboxNote(bashDescription(attribution, modelID)),
@@ -242,18 +118,6 @@ func NewBashTool(permissions permission.Service, workingDir, spillDir string, at
 
 			// Determine working directory
 			execWorkingDir := cmp.Or(params.WorkingDir, workingDir)
-
-			// Dangerous commands are checked before the read-only shortcut: a
-			// configured dangerous command must never be silently approved by
-			// the safe-command list (e.g. `git branch -D` matches the
-			// "git branch" safe prefix). They always fall through to a
-			// permission request below, with Dangerous set so a session grant
-			// can't approve them.
-			dangerous := isDangerousCommand(params.Command, dangerousCommands)
-
-			// A confined command is auto-approved, so the read-only shortcut
-			// is only needed when no sandbox policy is attached.
-			isSafeReadOnly := isSafeReadOnlyCommand(params.Command, dangerous)
 
 			sessionID := GetSessionFromContext(ctx)
 			if sessionID == "" {
@@ -277,33 +141,25 @@ func NewBashTool(permissions permission.Service, workingDir, spillDir string, at
 				ctx = withEscalationApproval(ctx, call.ID)
 			}
 
-			// Decide which policy applies to this command before asking for
-			// approval: a confined command is auto-approved, an excluded or
-			// unconfined one keeps the normal approval flow.
-			execPolicy := sandboxPolicyForCommand(ctx, params.Command)
-			sandboxed, reason := execPolicy.Sandboxed, execPolicy.Reason
-			_, sandboxMode := execPolicy.SandboxState()
-
-			if execPolicy.RequiresApproval(isSafeReadOnly, dangerous) {
-				description := fmt.Sprintf("Execute command: %s", params.Command)
-				if !sandboxed && reason != "" {
-					description = fmt.Sprintf("Execute command (unsandboxed: %s): %s", reason, params.Command)
-				}
+			// The approval question is now exactly one: does this command
+			// leave the sandbox's boundary? Under a sandbox, only network
+			// commands do (writes are fenced, not prompted); under
+			// danger-full-access the user has delegated fully and nothing
+			// prompts.
+			policy := SandboxPolicyFromContext(ctx)
+			if requiresApproval(policy, isNetworkCommand(params.Command, networkCommands)) {
 				p, err := requestPermission(
 					ctx,
 					permissions,
-					permission.CreatePermissionRequest{
+					sandboxedRequest(ctx, permission.CreatePermissionRequest{
 						SessionID:   sessionID,
 						Path:        execWorkingDir,
 						ToolCallID:  call.ID,
 						ToolName:    BashToolName,
 						Action:      "execute",
-						Description: description,
+						Description: fmt.Sprintf("Execute command (network): %s", params.Command),
 						Params:      BashPermissionsParams(params),
-						Dangerous:   dangerous,
-						Sandboxed:   sandboxed,
-						SandboxMode: sandboxMode,
-					},
+					}),
 				)
 				if err != nil {
 					return fantasy.ToolResponse{}, err
@@ -319,7 +175,7 @@ func NewBashTool(permissions permission.Service, workingDir, spillDir string, at
 				bgManager := shell.GetBackgroundShellManager()
 				bgManager.Cleanup()
 				// Use background context so it continues after tool returns
-				bgShell, err := bgManager.StartWithPolicy(context.Background(), execWorkingDir, blockFuncs(), execPolicy.Policy, params.Command, params.Description)
+				bgShell, err := bgManager.StartWithPolicy(context.Background(), execWorkingDir, SandboxPolicyFromContext(ctx), params.Command, params.Description)
 				if err != nil {
 					return fantasy.ToolResponse{}, fmt.Errorf("error starting background shell: %w", err)
 				}
@@ -376,7 +232,7 @@ func NewBashTool(permissions permission.Service, workingDir, spillDir string, at
 			// Start with detached context so it can survive if moved to background
 			bgManager := shell.GetBackgroundShellManager()
 			bgManager.Cleanup()
-			bgShell, err := bgManager.StartWithPolicy(context.Background(), execWorkingDir, blockFuncs(), execPolicy.Policy, params.Command, params.Description)
+			bgShell, err := bgManager.StartWithPolicy(context.Background(), execWorkingDir, SandboxPolicyFromContext(ctx), params.Command, params.Description)
 			if err != nil {
 				return fantasy.ToolResponse{}, fmt.Errorf("error starting shell: %w", err)
 			}

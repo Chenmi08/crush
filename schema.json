@@ -701,16 +701,15 @@
           "type": "array",
           "description": "List of tools that don't require permission prompts"
         },
-        "dangerous_commands": {
+        "network_commands": {
           "items": {
             "type": "string",
             "examples": [
-              "git push",
-              "git branch -d"
+              "docker push"
             ]
           },
           "type": "array",
-          "description": "Commands that always require a fresh permission prompt even when the session has allowed bash"
+          "description": "Extra shell commands that leave the sandbox boundary and require a prompt, besides the built-in network list"
         },
         "sandbox": {
           "$ref": "#/$defs/Sandbox",
@@ -857,22 +856,6 @@
           },
           "type": "array",
           "description": "Paths kept unwritable even inside a writable root. Denials take precedence over grants"
-        },
-        "exclude_commands": {
-          "items": {
-            "type": "string",
-            "examples": [
-              "docker *",
-              "gh *"
-            ]
-          },
-          "type": "array",
-          "description": "Command patterns that run outside the sandbox and go through the normal approval flow"
-        },
-        "fail_if_unavailable": {
-          "type": "boolean",
-          "description": "Exit at startup when no sandbox backend is usable",
-          "default": false
         }
       },
       "additionalProperties": false,

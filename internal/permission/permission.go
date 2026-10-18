@@ -43,15 +43,8 @@ type CreatePermissionRequest struct {
 	Action      string `json:"action"`
 	Params      any    `json:"params"`
 	Path        string `json:"path"`
-	// Dangerous marks a destructive or irreversible operation (e.g. rm -rf,
-	// git push) that a one-time "allow for session" grant must never silently
-	// approve. Such requests always fall through to a fresh prompt; only
-	// YOLO mode, the configured allow-list, and PreToolUse hook approval can
-	// skip them.
-	Dangerous bool `json:"dangerous,omitempty"`
 	// Sandboxed reports whether the operation will run confined by the
-	// sandbox. A confined operation does not need approval; an excluded or
-	// unconfined one does, and the prompt states so.
+	// sandbox. The prompt states the posture.
 	Sandboxed bool `json:"sandboxed,omitempty"`
 	// SandboxMode is the mode that applies to the operation, when sandboxed.
 	SandboxMode string `json:"sandbox_mode,omitempty"`
@@ -306,10 +299,10 @@ func (s *permissionService) Request(ctx context.Context, opts CreatePermissionRe
 	}
 
 	// A session grant ("allow for session") covers the tool/action/path key.
-	// Dangerous requests and escalation requests are exempt from it: a single
-	// session grant must not silently approve destructive operations or
-	// leaving the sandbox, so both always fall through to a fresh prompt.
-	if !opts.Dangerous && !opts.Escalation {
+	// Escalation requests are exempt from it: a single session grant must
+	// not silently approve leaving the sandbox, so those always fall
+	// through to a fresh prompt.
+	if !opts.Escalation {
 		if _, ok := s.sessionPermissions.Get(PermissionKey{
 			SessionID: permission.SessionID,
 			ToolName:  permission.ToolName,

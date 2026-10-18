@@ -27,7 +27,7 @@ type mockSessionAgent struct {
 	sandboxPolicy *sandbox.Policy
 }
 
-func (m *mockSessionAgent) SetSandboxPolicy(policy *sandbox.Policy, _ []string) {
+func (m *mockSessionAgent) SetSandboxPolicy(policy *sandbox.Policy) {
 	m.sandboxPolicy = policy
 }
 

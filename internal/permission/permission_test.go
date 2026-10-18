@@ -650,10 +650,10 @@ func TestPermissionService_ResolveIdempotency(t *testing.T) {
 	})
 }
 
-func TestPermissionService_DangerousRequestsIgnoreSessionGrant(t *testing.T) {
+func TestPermissionService_EscalationRequestsIgnoreSessionGrant(t *testing.T) {
 	t.Parallel()
 
-	t.Run("non-dangerous request is auto-approved after session grant", func(t *testing.T) {
+	t.Run("ordinary request is auto-approved after session grant", func(t *testing.T) {
 		service := NewPermissionService("/tmp", false, nil)
 
 		// First request: the user grants it for the session.
@@ -673,7 +673,7 @@ func TestPermissionService_DangerousRequestsIgnoreSessionGrant(t *testing.T) {
 		wg.Wait()
 		require.True(t, granted, "first request should be granted")
 
-		// A second, identical non-dangerous request is covered by the grant.
+		// A second, identical request is covered by the grant.
 		ok, err := service.Request(t.Context(), CreatePermissionRequest{
 			SessionID:  "s1",
 			ToolName:   "bash",
@@ -682,10 +682,10 @@ func TestPermissionService_DangerousRequestsIgnoreSessionGrant(t *testing.T) {
 			ToolCallID: "call-2",
 		})
 		require.NoError(t, err)
-		require.True(t, ok, "non-dangerous request should be covered by the session grant")
+		require.True(t, ok, "ordinary request should be covered by the session grant")
 	})
 
-	t.Run("dangerous request still prompts despite session grant", func(t *testing.T) {
+	t.Run("escalation request still prompts despite session grant", func(t *testing.T) {
 		service := NewPermissionService("/tmp", false, nil)
 
 		// Grant bash:execute for the session.
@@ -705,19 +705,19 @@ func TestPermissionService_DangerousRequestsIgnoreSessionGrant(t *testing.T) {
 		wg.Wait()
 		require.True(t, granted)
 
-		// A dangerous request must NOT be silently granted by the session
+		// An escalation request must NOT be silently granted by the session
 		// grant: it publishes a fresh prompt.
-		var dangerousGranted bool
+		var escalatedGranted bool
 		var err error
 		wg.Go(func() {
-			dangerousGranted, err = service.Request(t.Context(), CreatePermissionRequest{
+			escalatedGranted, err = service.Request(t.Context(), CreatePermissionRequest{
 				SessionID:   "s1",
 				ToolName:    "bash",
 				Action:      "execute",
 				Path:        "/tmp",
-				Description: "rm -rf /",
+				Description: "leave the sandbox",
 				ToolCallID:  "call-2",
-				Dangerous:   true,
+				Escalation:  true,
 			})
 		})
 
@@ -725,9 +725,9 @@ func TestPermissionService_DangerousRequestsIgnoreSessionGrant(t *testing.T) {
 		service.Grant(event.Payload) // user explicitly approves this one
 		wg.Wait()
 		require.NoError(t, err)
-		require.True(t, dangerousGranted, "dangerous request resolved by explicit grant")
+		require.True(t, escalatedGranted, "escalation request resolved by explicit grant")
 
-		// The next dangerous request must prompt again: the one-time grant
+		// The next escalation request must prompt again: the one-time grant
 		// above does not carry over, and the session grant must not cover it.
 		var again bool
 		wg.Go(func() {
@@ -736,43 +736,43 @@ func TestPermissionService_DangerousRequestsIgnoreSessionGrant(t *testing.T) {
 				ToolName:    "bash",
 				Action:      "execute",
 				Path:        "/tmp",
-				Description: "git push",
+				Description: "leave the sandbox",
 				ToolCallID:  "call-3",
-				Dangerous:   true,
+				Escalation:  true,
 			})
 		})
 		event = <-events
 		service.Deny(event.Payload)
 		wg.Wait()
-		require.False(t, again, "each dangerous request must prompt independently")
+		require.False(t, again, "each escalation request must prompt independently")
 	})
 
-	t.Run("YOLO mode still allows dangerous requests", func(t *testing.T) {
+	t.Run("YOLO mode still allows escalation requests", func(t *testing.T) {
 		service := NewPermissionService("/tmp", true, nil)
 		ok, err := service.Request(t.Context(), CreatePermissionRequest{
 			SessionID:  "s1",
 			ToolName:   "bash",
 			Action:     "execute",
 			Path:       "/tmp",
-			Dangerous:  true,
+			Escalation: true,
 			ToolCallID: "call-1",
 		})
 		require.NoError(t, err)
-		require.True(t, ok, "YOLO mode should allow dangerous requests")
+		require.True(t, ok, "YOLO mode should allow escalation requests")
 	})
 
-	t.Run("allow-list still allows dangerous requests", func(t *testing.T) {
+	t.Run("allow-list still allows escalation requests", func(t *testing.T) {
 		service := NewPermissionService("/tmp", false, []string{"bash:execute"})
 		ok, err := service.Request(t.Context(), CreatePermissionRequest{
 			SessionID:  "s1",
 			ToolName:   "bash",
 			Action:     "execute",
 			Path:       "/tmp",
-			Dangerous:  true,
+			Escalation: true,
 			ToolCallID: "call-1",
 		})
 		require.NoError(t, err)
-		require.True(t, ok, "configured allow-list should allow dangerous requests")
+		require.True(t, ok, "configured allow-list should allow escalation requests")
 	})
 }
 

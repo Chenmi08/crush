@@ -431,11 +431,9 @@ Usage:
   sandbox [command]
 
 Available Commands:
-  mode                 Select the sandbox mode
-  allow-write          Grant extra writable directories
-  deny-write           Keep paths unwritable inside a writable root
-  exclude-command      Run matching commands outside the sandbox
-  fail-if-unavailable  Refuse to start when no sandbox backend is usable
+  mode          Select the sandbox mode
+  allow-write   Grant extra writable directories
+  deny-write    Keep paths unwritable inside a writable root
 ```
 
 #### `sandbox mode`
@@ -469,31 +467,6 @@ Usage:
 
 Paths that stay unwritable even inside a writable root. Denials take
 precedence over grants, and a denial inside a denial is harmless.
-
-#### `sandbox exclude-command`
-
-```text
-Usage:
-  sandbox exclude-command <pattern> [<pattern> ...]
-```
-
-Commands matching a pattern run outside the sandbox and therefore go through
-the normal approval flow. Patterns are glob-style: `docker *` matches any
-command starting with `docker `. A pattern matches the command text, not a
-wrapped or interpreted command, so `docker *` does not match
-`bash -c 'docker run'`. Add the interpreter or wrapper explicitly if that is
-what you mean.
-
-#### `sandbox fail-if-unavailable`
-
-```text
-Usage:
-  sandbox fail-if-unavailable [true|false]
-```
-
-Refuse to start when the sandbox cannot be established, for managed or
-repeatable environments. The exit message is the same actionable message a
-runtime refusal prints.
 
 ### Sandbox model
 
@@ -570,12 +543,6 @@ sandbox allow-write ~/.kube
 
 # Keep a secrets directory unwritable inside the workspace.
 sandbox deny-write ./secrets
-
-# Let docker run outside the sandbox (with a prompt).
-sandbox exclude-command "docker *"
-
-# Refuse to start on a host without a usable sandbox.
-sandbox fail-if-unavailable
 ```
 
 The equivalent JSON lives under `permissions.sandbox`:
@@ -586,9 +553,7 @@ The equivalent JSON lives under `permissions.sandbox`:
     "sandbox": {
       "mode": "workspace-write",
       "allow_write": ["~/.kube"],
-      "deny_write": ["./secrets"],
-      "exclude_commands": ["docker *"],
-      "fail_if_unavailable": true
+      "deny_write": ["./secrets"]
     }
   }
 }
@@ -597,8 +562,10 @@ The equivalent JSON lives under `permissions.sandbox`:
 ### permissions
 
 Configure tool permissions. `allow` skips approval prompts; `deny` hides tools
-from the agent entirely; `dangerous` marks shell commands that always require
-a fresh approval prompt even when the session has already allowed `bash`.
+from the agent entirely; `network` marks shell commands that leave the
+sandbox's boundary (network access, privilege escalation) and therefore
+require an approval prompt. Everything else the sandbox confines runs without
+prompting.
 
 ```text
 Usage:
@@ -607,7 +574,7 @@ Usage:
 Available Commands:
   allow       Allow tools without prompting
   deny        Hide tools from the agent
-  dangerous   Always prompt for matching shell commands
+  network     Prompt for commands that leave the sandbox
 ```
 
 #### `permissions allow`
@@ -628,26 +595,21 @@ Usage:
   permissions deny <tool> [<tool> ...]
 ```
 
-#### `permissions dangerous`
+#### `permissions network`
 
-Mark shell command patterns that always require a fresh approval prompt, even
-when the session has already allowed `bash` with "allow for session". A
-one-time session grant can never silently approve these. Entries are
-command-name patterns; multi-word commands must be quoted.
+Mark shell commands that leave the sandbox's boundary — network access,
+privilege escalation — and therefore require an approval prompt. Entries are
+command-name prefixes; multi-word commands must be quoted. Every invocation
+in a command line is checked, including piped and chained ones.
 
 ```text
 Usage:
-  permissions dangerous <command> [<command> ...]
+  permissions network <command> [<command> ...]
 ```
 
-The command name part of an entry is matched in order; option tokens after it
-must all be present (order-independent), with combined short flags expanded.
-Configure just the command name to catch every invocation, or include options
-to narrow it:
-
-```bash
-permissions dangerous "git push" "git branch -d" rm
-```
+The built-in list already covers the common egress commands (`curl`, `wget`,
+`ssh`, `scp`, `rsync`, `nc`, `git push`, `gh`, `sudo`, `su`, `doas`, and
+others). Add what it misses:
 
 ```bash
 permissions allow view ls grep edit

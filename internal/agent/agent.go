@@ -172,7 +172,7 @@ type SessionAgent interface {
 	BeginAccepted(sessionID string) *AcceptedRun
 	SetModels(large Model, small Model)
 	// SetSandboxPolicy swaps the sandbox policy carried into every tool call.
-	SetSandboxPolicy(policy *sandbox.Policy, exclusions []string)
+	SetSandboxPolicy(policy *sandbox.Policy)
 	SetTools(tools []fantasy.AgentTool)
 	SetSystemPrompt(systemPrompt string)
 	Cancel(sessionID string)
@@ -231,9 +231,6 @@ type sessionAgent struct {
 	// sandboxPolicy is the resolved policy carried into every tool call for
 	// this agent. Nil means no fence is attached.
 	sandboxPolicy *sandbox.Policy
-	// sandboxExclusions are the command patterns that run outside the
-	// sandbox and take the normal approval flow.
-	sandboxExclusions []string
 
 	messageQueue   *csync.Map[string, []SessionAgentCall]
 	activeRequests *csync.Map[string, *activeCancel]
@@ -296,8 +293,6 @@ type SessionAgentOptions struct {
 	// SandboxPolicy is the resolved confinement for this agent's tool
 	// calls. Nil leaves tool calls unconfined.
 	SandboxPolicy *sandbox.Policy
-	// SandboxExclusions are command patterns that run outside the sandbox.
-	SandboxExclusions []string
 }
 
 func NewSessionAgent(
@@ -319,7 +314,6 @@ func NewSessionAgent(
 		runComplete:          opts.RunComplete,
 		allSkills:            opts.AllSkills,
 		sandboxPolicy:        opts.SandboxPolicy,
-		sandboxExclusions:    opts.SandboxExclusions,
 		messageQueue:         csync.NewMap[string, []SessionAgentCall](),
 		activeRequests:       csync.NewMap[string, *activeCancel](),
 		dispatchMu:           csync.NewMap[string, *sync.Mutex](),
@@ -328,12 +322,11 @@ func NewSessionAgent(
 	}
 }
 
-// SetSandboxPolicy swaps the sandbox policy and exclusions carried into every
-// subsequent tool call. It is safe to call concurrently with runs: the fields
-// are read under the same value semantics as the rest of the agent.
-func (a *sessionAgent) SetSandboxPolicy(policy *sandbox.Policy, exclusions []string) {
+// SetSandboxPolicy swaps the sandbox policy carried into every
+// subsequent tool call. It is safe to call concurrently with runs: the field
+// is read under the same value semantics as the rest of the agent.
+func (a *sessionAgent) SetSandboxPolicy(policy *sandbox.Policy) {
 	a.sandboxPolicy = policy
-	a.sandboxExclusions = exclusions
 }
 
 // AcceptedRun owns exactly one accept reservation taken by
@@ -731,7 +724,6 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	// is not lost.
 	runCtx := context.WithValue(ctx, tools.SessionIDContextKey, call.SessionID)
 	runCtx = tools.WithSandboxPolicy(runCtx, a.sandboxPolicy)
-	runCtx = tools.WithSandboxExclusions(runCtx, a.sandboxExclusions)
 	genCtx, cancel = context.WithCancel(runCtx)
 	ac := &activeCancel{cancel: cancel}
 	a.activeRequests.Set(call.SessionID, ac)
@@ -882,7 +874,6 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	// mutex above for both the accepted and in-process paths.
 	ctx = context.WithValue(ctx, tools.SessionIDContextKey, call.SessionID)
 	ctx = tools.WithSandboxPolicy(ctx, a.sandboxPolicy)
-	ctx = tools.WithSandboxExclusions(ctx, a.sandboxExclusions)
 
 	history, files := a.preparePrompt(msgs, largeModel.CatwalkCfg.SupportsImages, call.Attachments...)
 

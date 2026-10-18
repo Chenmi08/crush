@@ -445,12 +445,11 @@ const (
 
 type Permissions struct {
 	AllowedTools []string `json:"allowed_tools,omitempty" jsonschema:"description=List of tools that don't require permission prompts,example=bash,example=view"`
-	// DangerousCommands lists shell command patterns that always require a
-	// fresh permission prompt even when the session has already allowed
-	// bash, so a one-time "allow for session" grant can't silently approve
-	// them. Entries are command-name prefixes, e.g. "git push" or
-	// "git branch -d".
-	DangerousCommands []string `json:"dangerous_commands,omitempty" jsonschema:"description=Commands that always require a fresh permission prompt even when the session has allowed bash,example=git push,example=git branch -d"`
+	// NetworkCommands adds shell command patterns to the list of commands
+	// that leave the sandbox's boundary (network, privilege escalation) and
+	// therefore require a prompt. Entries are command-name prefixes, e.g.
+	// "docker push". The built-in list covers the common egress commands.
+	NetworkCommands []string `json:"network_commands,omitempty" jsonschema:"description=Extra shell commands that leave the sandbox boundary and require a prompt,besides the built-in network list,example=docker push"`
 	// Sandbox configures the filesystem sandbox that confines tool writes.
 	Sandbox *Sandbox `json:"sandbox,omitempty" jsonschema:"description=Filesystem sandbox settings"`
 }
@@ -469,12 +468,6 @@ type Sandbox struct {
 	// DenyWrite lists paths that stay unwritable even inside a writable
 	// root. Denials take precedence over grants.
 	DenyWrite []string `json:"deny_write,omitempty" jsonschema:"description=Paths kept unwritable even inside a writable root. Denials take precedence over grants,example=./secrets"`
-	// ExcludeCommands lists command patterns that run outside the sandbox.
-	// An excluded command takes the normal approval flow.
-	ExcludeCommands []string `json:"exclude_commands,omitempty" jsonschema:"description=Command patterns that run outside the sandbox and go through the normal approval flow,example=docker *,example=gh *"`
-	// FailIfUnavailable refuses to start when the sandbox cannot be
-	// established, for managed or repeatable environments.
-	FailIfUnavailable bool `json:"fail_if_unavailable,omitempty" jsonschema:"description=Exit at startup when no sandbox backend is usable,default=false"`
 }
 
 type TrailerStyle string

@@ -833,7 +833,6 @@ func (c *coordinator) buildAgent(ctx context.Context, prompt *prompt.Prompt, age
 		RunComplete:          c.runComplete,
 		AllSkills:            c.allSkills,
 		SandboxPolicy:        c.sandboxRuntime.Policy,
-		SandboxExclusions:    c.sandboxRuntime.Configuration.ExcludeCommands,
 	})
 
 	// The readiness goroutines below perform one-time setup — building the
@@ -902,16 +901,17 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 		RequireRead: c.cfg.Config().Options.RequireReadBeforeWrite,
 	}
 
-	// Commands that always require a fresh permission prompt even when the
-	// session has allowed bash (permissions.dangerous_commands).
-	var dangerousCommands []string
+	// Extra network commands configured in permissions.network_commands. They
+	// join the built-in list of commands that leave the sandbox's boundary
+	// and therefore prompt.
+	var networkCommands []string
 	if perms := c.cfg.Config().Permissions; perms != nil {
-		dangerousCommands = perms.DangerousCommands
+		networkCommands = perms.NetworkCommands
 	}
 
 	allTools = append(
 		allTools,
-		tools.NewBashTool(c.permissions, c.cfg.WorkingDir(), c.cfg.Config().Options.DataDirectory, c.cfg.Config().Options.Attribution, modelID, dangerousCommands),
+		tools.NewBashTool(c.permissions, c.cfg.WorkingDir(), c.cfg.Config().Options.DataDirectory, c.cfg.Config().Options.Attribution, modelID, networkCommands),
 		tools.NewCrushInfoTool(c.cfg, c.lspManager, c.allSkills, c.sessions, c.skillTracker),
 		tools.NewCrushLogsTool(logFile),
 		tools.NewJobOutputTool(c.cfg.Config().Options.DataDirectory),

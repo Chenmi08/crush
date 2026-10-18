@@ -22,9 +22,8 @@ import (
 //
 // The zero value is not useful; at minimum Command must be set. Stdin,
 // Stdout, and Stderr may be nil (nil readers/writers are treated as
-// empty/discard). BlockFuncs may be nil to disable block-list enforcement —
-// hooks use this to run user-authored commands with the same trust level as
-// a shell alias.
+// empty/discard). Hooks use Run to execute user-authored commands with the
+// same trust level as a shell alias.
 type RunOptions struct {
 	// Command is the shell source to parse and execute.
 	Command string
@@ -43,9 +42,6 @@ type RunOptions struct {
 	Stdout io.Writer
 	// Stderr receives the command's standard error. nil discards output.
 	Stderr io.Writer
-	// BlockFuncs is an optional list of deny-list matchers applied before
-	// each command reaches the exec layer. nil disables blocking entirely.
-	BlockFuncs []BlockFunc
 	// TermWidth is the terminal width in columns for PTY execution.
 	// Zero uses a default of 200.
 	TermWidth int
@@ -91,7 +87,7 @@ func Run(ctx context.Context, opts RunOptions) (err error) {
 		return fmt.Errorf("could not parse command: %w", err)
 	}
 
-	runner, err := newRunnerWithPolicy(opts.Cwd, opts.Env, opts.Stdin, stdout, stderr, opts.BlockFuncs, opts.Policy)
+	runner, err := newRunnerWithPolicy(opts.Cwd, opts.Env, opts.Stdin, stdout, stderr, opts.Policy)
 	if err != nil {
 		return fmt.Errorf("could not run command: %w", err)
 	}
@@ -190,21 +186,19 @@ func RunAndCapturePTY(ctx context.Context, opts RunOptions) (CaptureResult, erro
 // newRunner constructs an [interp.Runner] configured with the standard
 // Crush handler stack. Shared by the stateless [Run] entrypoint and the
 // stateful [Shell] so the two surfaces cannot drift.
-func newRunner(cwd string, env []string, stdin io.Reader, stdout, stderr io.Writer, blockFuncs []BlockFunc) (*interp.Runner, error) {
-	return newRunnerWithPolicy(cwd, env, stdin, stdout, stderr, blockFuncs, nil)
-}
-
-// newRunnerWithPolicy is newRunner with a sandbox policy attached. The policy
-// installs the write-intent file-open hook; read paths, directory listing, and
-// stat keep their defaults because reads are unconfined.
-func newRunnerWithPolicy(cwd string, env []string, stdin io.Reader, stdout, stderr io.Writer, blockFuncs []BlockFunc, policy *sandbox.Policy) (*interp.Runner, error) {
+// newRunnerWithPolicy constructs an [interp.Runner] configured with the
+// standard Crush handler stack and, when a policy is attached, the
+// write-intent file-open hook; read paths, directory listing, and stat keep
+// their defaults because reads are unconfined. Shared by the stateless [Run]
+// entrypoint and the stateful [Shell] so the two surfaces cannot drift.
+func newRunnerWithPolicy(cwd string, env []string, stdin io.Reader, stdout, stderr io.Writer, policy *sandbox.Policy) (*interp.Runner, error) {
 	env = withNonInteractiveEnv(policy.ApplyEnv(env))
 	opts := []interp.RunnerOption{
 		interp.StdIO(stdin, stdout, stderr),
 		interp.Interactive(false),
 		interp.Env(expand.ListEnviron(env...)),
 		interp.Dir(cwd),
-		execHandlerOption(blockFuncs, policy),
+		execHandlerOption(policy),
 	}
 	if policy != nil {
 		opts = append(opts, interp.OpenHandler(openHandler(policy)))
@@ -255,10 +249,10 @@ func writeIntent(flag int) bool {
 // isolation. Without isolation, shells like zsh that set up job control
 // when sourcing framework files can send SIGINT/SIGTERM to Crush's process
 // group and crash the parent.
-func execHandlerOption(blockFuncs []BlockFunc, policy *sandbox.Policy) interp.RunnerOption {
+func execHandlerOption(policy *sandbox.Policy) interp.RunnerOption {
 	base := processGroupExecHandler(defaultKillTimeout, policy)
 	handler := base
-	for _, mw := range slices.Backward(standardHandlers(blockFuncs, policy)) {
+	for _, mw := range slices.Backward(standardHandlers(policy)) {
 		handler = mw(handler)
 	}
 	// ExecHandlers always appends DefaultExecHandler which lacks process
@@ -348,8 +342,7 @@ type execMiddleware = func(next interp.ExecHandlerFunc) interp.ExecHandlerFunc
 //     argv[0], no-op for bare commands) — runs before the block list so
 //     that deny rules see the already-resolved argv of anything the
 //     script exec's rather than the outer path-prefixed wrapper;
-//  3. block list;
-//  4. optional Go coreutils (only when useGoCoreUtils is on).
+//  3. optional Go coreutils (only when useGoCoreUtils is on).
 //
 // The Go coreutils are skipped when a sandbox policy is attached: they write
 // files (cp, mv, rm, mkdir, touch, tar) inside the Crush process, bypassing
@@ -357,11 +350,10 @@ type execMiddleware = func(next interp.ExecHandlerFunc) interp.ExecHandlerFunc
 // out makes those commands resolve to real binaries, which the selected
 // backend confines. On a platform with no backend the command is then refused,
 // which is the intended fail-closed behavior rather than an unconfined write.
-func standardHandlers(blockFuncs []BlockFunc, policy *sandbox.Policy) []execMiddleware {
+func standardHandlers(policy *sandbox.Policy) []execMiddleware {
 	handlers := []execMiddleware{
 		builtinHandler(),
-		scriptDispatchHandler(blockFuncs, policy),
-		blockHandler(blockFuncs),
+		scriptDispatchHandler(policy),
 	}
 	if useGoCoreUtils && coreUtilsExecHandler != nil && policy == nil {
 		handlers = append(handlers, coreUtilsExecHandler)
@@ -382,25 +374,6 @@ func builtinHandler() execMiddleware {
 			if h, ok := builtins[args[0]]; ok {
 				hc := interp.HandlerCtx(ctx)
 				return h(ctx, args, hc.Stdin, hc.Stdout, hc.Stderr)
-			}
-			return next(ctx, args)
-		}
-	}
-}
-
-// blockHandler returns middleware that rejects commands matched by any of
-// the provided [BlockFunc]s before they reach the underlying exec path.
-// A nil or empty blockFuncs slice is a no-op.
-func blockHandler(blockFuncs []BlockFunc) execMiddleware {
-	return func(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
-		return func(ctx context.Context, args []string) error {
-			if len(args) == 0 {
-				return next(ctx, args)
-			}
-			for _, blockFunc := range blockFuncs {
-				if blockFunc(args) {
-					return fmt.Errorf("command is not allowed for security reasons: %q", args[0])
-				}
 			}
 			return next(ctx, args)
 		}
