@@ -226,3 +226,57 @@ func TestLandlock_HelperRequiresTarget(t *testing.T) {
 	require.True(t, handled)
 	require.NotZero(t, code)
 }
+
+// TestLandlock_HelperArgvNamesSubcommand verifies the re-exec path passes the
+// hidden subcommand token. Without it the Crush binary treats the target as a
+// command of its own and the fallback backend is unusable.
+func TestLandlock_HelperArgvNamesSubcommand(t *testing.T) {
+	policy, _ := landlockTestPolicy(t)
+
+	exe, err := os.Executable()
+	require.NoError(t, err)
+	previous := ExecutablePath
+	ExecutablePath = func() (string, error) { return exe, nil }
+	t.Cleanup(func() { ExecutablePath = previous })
+
+	cmd := exec.Command("/bin/echo", "hello")
+	backend := &landlockBackend{}
+	cleanup, err := backend.Wrap(t.Context(), policy, cmd)
+	require.NoError(t, err)
+	if cleanup != nil {
+		t.Cleanup(cleanup)
+	}
+
+	require.Equal(t, exe, cmd.Path)
+	require.GreaterOrEqual(t, len(cmd.Args), 3)
+	require.Equal(t, HelperSubcommand, cmd.Args[1], "the helper must be invoked as a subcommand")
+	require.Equal(t, "/bin/echo", cmd.Args[2], "the target command follows the subcommand token")
+	require.Equal(t, "hello", cmd.Args[3])
+}
+
+// TestLandlock_HelperKeepsCommandEnv verifies the command's own environment is
+// preserved and wins over the parent's: appending os.Environ() after it let
+// the parent override exports set on the command.
+func TestLandlock_HelperKeepsCommandEnv(t *testing.T) {
+	policy, _ := landlockTestPolicy(t)
+
+	exe, err := os.Executable()
+	require.NoError(t, err)
+	previous := ExecutablePath
+	ExecutablePath = func() (string, error) { return exe, nil }
+	t.Cleanup(func() { ExecutablePath = previous })
+
+	cmd := exec.Command("/bin/true")
+	cmd.Env = []string{"PATH=/custom/bin", "FOO=command"}
+	backend := &landlockBackend{}
+	cleanup, err := backend.Wrap(t.Context(), policy, cmd)
+	require.NoError(t, err)
+	if cleanup != nil {
+		t.Cleanup(cleanup)
+	}
+
+	require.Equal(t, []string{"PATH=/custom/bin", "FOO=command"}, cmd.Env[:2],
+		"the command's environment must come first and stay intact")
+	require.Contains(t, cmd.Env, HelperEnv+"=1")
+	require.Contains(t, cmd.Env, PolicyFDEnv+"=3")
+}

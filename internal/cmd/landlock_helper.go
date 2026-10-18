@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"os"
 
 	"github.com/charmbracelet/crush/internal/sandbox"
@@ -13,7 +14,7 @@ import (
 // itself with the target command; the Crush process itself is never
 // restricted.
 var landlockHelperCmd = &cobra.Command{
-	Use:    "landlock-helper [command] [args...]",
+	Use:    sandbox.HelperSubcommand + " [command] [args...]",
 	Hidden: true,
 	Short:  "Internal: apply a Landlock ruleset and exec a command",
 	// The helper must not print usage or parse flags: its argv is the target
@@ -21,7 +22,13 @@ var landlockHelperCmd = &cobra.Command{
 	DisableFlagParsing: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		handled, code := sandbox.RunLandlockHelper(args)
-		if handled && code != 0 {
+		if !handled {
+			// Reaching here means the helper was invoked without the
+			// environment the backend sets up. Say so instead of exiting
+			// successfully without applying anything.
+			return errors.New("landlock-helper must be invoked by the sandbox backend")
+		}
+		if code != 0 {
 			os.Exit(code)
 		}
 		return nil

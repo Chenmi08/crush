@@ -52,6 +52,10 @@ const (
 	// ProbeEnv asks the helper to apply a trivial ruleset and exit, without
 	// replacing itself with a target command.
 	ProbeEnv = "CRUSH_LANDLOCK_PROBE"
+	// HelperSubcommand is the hidden CLI subcommand that runs the helper. It
+	// must be the first argv token: the helper is entered through the Cobra
+	// command tree, not by inspecting the environment alone.
+	HelperSubcommand = "landlock-helper"
 )
 
 // landlockBackend confines a child process with the kernel's Landlock LSM.
@@ -128,7 +132,7 @@ func (b *landlockBackend) Available(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("cannot locate the Crush executable for the landlock helper: %w", err)
 	}
-	cmd := exec.CommandContext(ctx, exe)
+	cmd := exec.CommandContext(ctx, exe, HelperSubcommand)
 	cmd.Env = append(os.Environ(),
 		HelperEnv+"=1",
 		ProbeEnv+"=1",
@@ -171,14 +175,24 @@ func (b *landlockBackend) Wrap(ctx context.Context, p *Policy, cmd *exec.Cmd) (f
 	target := cmd.Path
 	targetArgs := cmd.Args[1:]
 
+	// The helper is a hidden subcommand, so its argv must name it: without
+	// the "landlock-helper" token the Crush binary would treat the target as
+	// a command name of its own and exit with a usage error, making the
+	// fallback backend unusable.
 	cmd.Path = exe
-	cmd.Args = append([]string{exe}, target)
+	cmd.Args = append([]string{exe, HelperSubcommand}, target)
 	cmd.Args = append(cmd.Args, targetArgs...)
 	// ExtraFiles[0] becomes fd 3 in the child; the descriptor number is all
 	// the environment carries.
 	cmd.ExtraFiles = append(cmd.ExtraFiles, readEnd)
-	cmd.Env = append(cmd.Env, os.Environ()...)
-	cmd.Env = append(cmd.Env,
+	// The command's environment wins over the parent's: cmd.Env was built by
+	// the caller (the shell), and appending os.Environ() after it would let
+	// the parent's values override exports set on the command.
+	env := cmd.Env
+	if env == nil {
+		env = os.Environ()
+	}
+	cmd.Env = append(env,
 		HelperEnv+"=1",
 		PolicyFDEnv+"=3",
 	)
@@ -364,6 +378,13 @@ var ExecutablePath = os.Executable
 func RunLandlockHelper(args []string) (handled bool, code int) {
 	if os.Getenv(HelperEnv) == "" {
 		return false, 0
+	}
+
+	// The subcommand token is part of argv when the helper is reached
+	// through the CLI, and absent when a test binary calls this directly.
+	// Strip it so the remaining argv is exactly the target command.
+	if len(args) > 0 && args[0] == HelperSubcommand {
+		args = args[1:]
 	}
 
 	if os.Getenv(ProbeEnv) != "" {
