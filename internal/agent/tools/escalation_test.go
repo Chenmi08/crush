@@ -321,10 +321,14 @@ func TestEscalation_SessionGrantNeverApplies(t *testing.T) {
 		Path:      key.Path,
 	})
 
+	// An attached approval surface keeps the request on the prompt path; a
+	// cancelled context then proves it waited for a prompt (which blocks)
+	// rather than being resolved by the session grant (which returns
+	// immediately). Without a subscriber the service now fails fast instead.
+	_ = svc.Subscribe(t.Context())
+
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	// A cancelled context proves the request reached the prompt path (which
-	// blocks) rather than the session grant (which returns immediately).
 	granted, err := svc.Request(ctx, permission.CreatePermissionRequest{
 		SessionID:  "s",
 		ToolName:   WriteToolName,

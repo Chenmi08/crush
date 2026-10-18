@@ -2,6 +2,8 @@ package permission
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -12,6 +14,12 @@ import (
 	"github.com/charmbracelet/crush/internal/pubsub"
 	"github.com/google/uuid"
 )
+
+// ErrApprovalUnavailable reports that a request needed a human decision but no
+// approval surface is attached (a non-interactive run, a headless caller). It
+// is distinct from a denial: nothing was decided, and the caller should tell
+// the model the option is unavailable rather than that the user refused.
+var ErrApprovalUnavailable = errors.New("no approval surface is attached; this request cannot be answered")
 
 // hookApprovalKey is the unexported context key used to mark a tool call as
 // pre-approved by a PreToolUse hook. The value is the tool call ID so an
@@ -218,13 +226,22 @@ func (s *permissionService) Deny(permission PermissionRequest) bool {
 }
 
 func (s *permissionService) Request(ctx context.Context, opts CreatePermissionRequest) (bool, error) {
+	// YOLO is "trust the model": it covers the sandbox boundary too, so an
+	// escalation is granted without a prompt. The boundary itself still
+	// applies (the wider mode is only this call's policy), so trusting the
+	// model stays a different decision from disabling the sandbox.
 	if s.skip.Load() {
+		s.publishGranted(opts)
 		return true, nil
 	}
 
-	// Check if the tool/action combination is in the allowlist
+	// Check if the tool/action combination is in the allowlist. The
+	// allow-list is a statement about a tool, not about the sandbox around
+	// it: an allowed tool still cannot widen its own boundary.
 	commandKey := opts.ToolName + ":" + opts.Action
-	if slices.Contains(s.allowedTools, commandKey) || slices.Contains(s.allowedTools, opts.ToolName) {
+	if !opts.Escalation &&
+		(slices.Contains(s.allowedTools, commandKey) || slices.Contains(s.allowedTools, opts.ToolName)) {
+		s.publishGranted(opts)
 		return true, nil
 	}
 
@@ -239,11 +256,7 @@ func (s *permissionService) Request(ctx context.Context, opts CreatePermissionRe
 	// the leave-sandbox dialog, mirroring how session grants and
 	// persistent grants are already barred from approving escalations.
 	if hookApproved(ctx, opts.ToolCallID) && !opts.Escalation {
-		s.notificationBroker.Publish(pubsub.CreatedEvent, PermissionNotification{
-			SessionID:  opts.SessionID,
-			ToolCallID: opts.ToolCallID,
-			Granted:    true,
-		})
+		s.publishGranted(opts)
 		return true, nil
 	}
 
@@ -256,6 +269,15 @@ func (s *permissionService) Request(ctx context.Context, opts CreatePermissionRe
 		ToolCallID: opts.ToolCallID,
 	})
 
+	// An escalation with no surface that can ask the user must not stall the
+	// turn until the context expires: report the option as unavailable so the
+	// model continues confined or stops and explains.
+	if opts.Escalation && !s.hasApprovalSurface() {
+		slog.Warn("Sandbox escalation refused: no approval surface is attached",
+			"session_id", opts.SessionID, "tool", opts.ToolName, "mode", opts.EscalationMode)
+		return false, ErrApprovalUnavailable
+	}
+
 	s.autoApproveSessionsMu.RLock()
 	autoApprove := s.autoApproveSessions[opts.SessionID]
 	s.autoApproveSessionsMu.RUnlock()
@@ -267,11 +289,7 @@ func (s *permissionService) Request(ctx context.Context, opts CreatePermissionRe
 	// normal path, so the escalation still reaches an approval surface (or
 	// fails closed when none is available).
 	if autoApprove && !opts.Escalation {
-		s.notificationBroker.Publish(pubsub.CreatedEvent, PermissionNotification{
-			SessionID:  opts.SessionID,
-			ToolCallID: opts.ToolCallID,
-			Granted:    true,
-		})
+		s.publishGranted(opts)
 		return true, nil
 	}
 
@@ -315,11 +333,7 @@ func (s *permissionService) Request(ctx context.Context, opts CreatePermissionRe
 			Action:    permission.Action,
 			Path:      permission.Path,
 		}); ok {
-			s.notificationBroker.Publish(pubsub.CreatedEvent, PermissionNotification{
-				SessionID:  opts.SessionID,
-				ToolCallID: opts.ToolCallID,
-				Granted:    true,
-			})
+			s.publishGranted(opts)
 			return true, nil
 		}
 	}
@@ -359,6 +373,23 @@ func (s *permissionService) ActiveRequest() (PermissionRequest, bool) {
 		return PermissionRequest{}, false
 	}
 	return *active, true
+}
+
+// publishGranted notifies subscribers that a request was resolved without a
+// prompt, so the UI and the audit trail see the outcome.
+func (s *permissionService) publishGranted(opts CreatePermissionRequest) {
+	s.notificationBroker.Publish(pubsub.CreatedEvent, PermissionNotification{
+		SessionID:  opts.SessionID,
+		ToolCallID: opts.ToolCallID,
+		Granted:    true,
+	})
+}
+
+// hasApprovalSurface reports whether anyone is listening for permission
+// requests. Only prompt-style subscriptions count: the notification stream is
+// a write-only audit channel and cannot answer a request.
+func (s *permissionService) hasApprovalSurface() bool {
+	return s.GetSubscriberCount() > 0
 }
 
 func (s *permissionService) AutoApproveSession(sessionID string) {

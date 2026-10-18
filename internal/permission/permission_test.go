@@ -799,18 +799,30 @@ func TestPermissionService_EscalationRequestsIgnoreSessionGrant(t *testing.T) {
 		require.True(t, escalated, "escalation resolved by explicit grant, not the auto-approval")
 	})
 
-	t.Run("allow-list still allows escalation requests", func(t *testing.T) {
+	t.Run("allow-list does not approve escalation requests", func(t *testing.T) {
+		// The allow-list is about a tool, not about the sandbox around it:
+		// an allowed tool must not be able to widen its own boundary.
 		service := NewPermissionService("/tmp", false, []string{"bash:execute"})
-		ok, err := service.Request(t.Context(), CreatePermissionRequest{
-			SessionID:  "s1",
-			ToolName:   "bash",
-			Action:     "execute",
-			Path:       "/tmp",
-			Escalation: true,
-			ToolCallID: "call-1",
+		events := service.Subscribe(t.Context())
+
+		var escalated bool
+		var wg sync.WaitGroup
+		wg.Go(func() {
+			escalated, _ = service.Request(t.Context(), CreatePermissionRequest{
+				SessionID:   "s1",
+				ToolName:    "bash",
+				Action:      "execute",
+				Path:        "/tmp",
+				Description: "leave the sandbox",
+				Escalation:  true,
+				ToolCallID:  "call-1",
+			})
 		})
-		require.NoError(t, err)
-		require.True(t, ok, "configured allow-list should allow escalation requests")
+		event := <-events
+		require.True(t, event.Payload.Escalation, "the request must reach the prompt")
+		service.Grant(event.Payload)
+		wg.Wait()
+		require.True(t, escalated, "the escalation is resolved by the prompt, not the allow-list")
 	})
 }
 
@@ -916,4 +928,52 @@ func TestNotificationsCarrySessionID(t *testing.T) {
 	second := <-notifications
 	assert.Equal(t, "s-notify", second.Payload.SessionID)
 	assert.True(t, second.Payload.Granted)
+}
+
+// TestPermissionService_EscalationApprovalRules pins the three ways an
+// escalation can be resolved without a prompt, and the one it cannot:
+//   - YOLO ("trust the model") approves it, because the boundary still
+//     applies to the wider call only;
+//   - no approval surface fails fast instead of hanging the turn;
+//   - the allow-list does NOT approve it (see the escalation test above).
+func TestPermissionService_EscalationApprovalRules(t *testing.T) {
+	t.Run("YOLO approves escalation", func(t *testing.T) {
+		service := NewPermissionService("/tmp", true, nil)
+		ok, err := service.Request(t.Context(), CreatePermissionRequest{
+			SessionID:      "s1",
+			ToolName:       "bash",
+			Action:         "escalate",
+			Path:           "/tmp",
+			Escalation:     true,
+			EscalationMode: "danger-full-access",
+			ToolCallID:     "call-1",
+		})
+		require.NoError(t, err)
+		require.True(t, ok, "YOLO trusts the model with the sandbox boundary too")
+	})
+
+	t.Run("no approval surface fails fast", func(t *testing.T) {
+		// Nothing subscribes to permission requests: there is no user to ask,
+		// so waiting would only stall until the context deadline.
+		service := NewPermissionService("/tmp", false, nil)
+		service.AutoApproveSession("s1")
+
+		ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+		defer cancel()
+		start := time.Now()
+		ok, err := service.Request(ctx, CreatePermissionRequest{
+			SessionID:      "s1",
+			ToolName:       "write",
+			Action:         "escalate",
+			Path:           "/tmp",
+			Escalation:     true,
+			EscalationMode: "danger-full-access",
+			ToolCallID:     "call-1",
+		})
+		require.ErrorIs(t, err, ErrApprovalUnavailable,
+			"the caller must be able to tell 'nobody can decide' from 'the user refused'")
+		require.False(t, ok)
+		require.Less(t, time.Since(start), 40*time.Millisecond,
+			"the request must not wait for a prompt nobody can answer")
+	})
 }

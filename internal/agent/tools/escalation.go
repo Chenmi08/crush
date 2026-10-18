@@ -118,6 +118,9 @@ func resolveEscalation(
 		Sandboxed:      false,
 	})
 	if err != nil {
+		if errors.Is(err, permission.ErrApprovalUnavailable) {
+			return effective, escalationUnavailableResponse(), nil
+		}
 		return effective, fantasy.ToolResponse{}, err
 	}
 	if !granted {
@@ -131,6 +134,17 @@ func resolveEscalation(
 		return effective, fantasy.NewTextErrorResponse(err.Error()), nil
 	}
 	return widened, fantasy.ToolResponse{}, nil
+}
+
+// nextWiderMode returns the narrowest mode strictly wider than m. It is what
+// an automatic fence escalation asks for: enough to allow the write, no more.
+func nextWiderMode(m sandbox.Mode) sandbox.Mode {
+	for _, candidate := range sandbox.Modes() {
+		if sandbox.IsWiderMode(candidate, m) {
+			return candidate
+		}
+	}
+	return sandbox.ModeDangerFullAccess
 }
 
 // escalatePolicy builds the wider policy for a single call. It is derived from
@@ -209,8 +223,12 @@ func applyEscalation(
 // shell command may have partially run before the refusal and replaying it is
 // not safe.
 //
-// The requested mode is the widest one that still keeps the boundary
-// meaningful: danger-full-access for this call, as chosen by the dialog.
+// The requested mode is one step wider, not the widest: a refusal to write
+// outside the writable roots is answered by workspace-write (which keeps the
+// protected set and the temp directory), and only a refusal from read-only
+// needs workspace-write's broader roots. Asking for danger-full-access on
+// every out-of-tree write would hand over the whole disk to answer a much
+// smaller question.
 func fenceEscalation(
 	ctx context.Context,
 	permissions permission.Service,
@@ -223,10 +241,10 @@ func fenceEscalation(
 		return ctx, nil, nil
 	}
 	req := &escalationRequest{
-		mode: sandbox.ModeDangerFullAccess,
+		mode: nextWiderMode(effective.Mode),
 		justification: fmt.Sprintf(
-			"The sandbox refused a write to %s (mode %s). Approving lets this one %s call write the file; denying sends the refusal back to the model, which can ask you differently or use a path inside the workspace.",
-			d.Path, d.Mode, toolName),
+			"The sandbox refused a write to %s (mode %s). Approving lets this one %s call write the file under %s; denying sends the refusal back to the model, which can ask you differently or use a path inside the workspace.",
+			d.Path, d.Mode, toolName, nextWiderMode(effective.Mode)),
 	}
 	return applyEscalation(ctx, permissions, toolName, req, call)
 }

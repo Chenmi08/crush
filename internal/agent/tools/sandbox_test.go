@@ -287,3 +287,15 @@ func TestSandboxedRequest_CarriesSandboxState(t *testing.T) {
 
 	require.False(t, sandboxedRequest(context.Background(), CreatePermissionRequestStub()).Sandboxed)
 }
+
+// TestFenceEscalation_AsksOneStepWider pins the blast radius of an automatic
+// fence escalation. An out-of-tree write under workspace-write needs the disk,
+// but asking for danger-full-access from read-only would skip a level: one
+// extra step, no more.
+func TestFenceEscalation_AsksOneStepWider(t *testing.T) {
+	t.Parallel()
+	require.Equal(t, sandbox.ModeWorkspaceWrite, nextWiderMode(sandbox.ModeReadOnly))
+	require.Equal(t, sandbox.ModeDangerFullAccess, nextWiderMode(sandbox.ModeWorkspaceWrite))
+	// Nothing is wider than danger-full-access; the caller never asks.
+	require.Equal(t, sandbox.ModeDangerFullAccess, nextWiderMode(sandbox.ModeDangerFullAccess))
+}
