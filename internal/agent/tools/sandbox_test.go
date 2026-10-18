@@ -116,6 +116,31 @@ func TestWriteTool_SandboxRefusalAsksOnce(t *testing.T) {
 	require.Equal(t, "x", string(content))
 }
 
+// TestWriteTool_SandboxRefusalExplainsItself verifies the fence-raised dialog
+// carries the user-facing explanation: what was refused, what approving
+// means, and what denying does.
+func TestWriteTool_SandboxRefusalExplainsItself(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+	perms := &recordingPermissionService{
+		Broker: pubsubBroker(),
+		allow:  true,
+	}
+	tool := NewWriteTool(nil, perms, &mockHistoryService{}, mockFileTrackerService{}, workspace, FileWriteOptions{})
+	ctx := sandboxTestContext(t, workspace)
+
+	outside := filepath.Join(t.TempDir(), "file.txt")
+	resp := runWriteTool(t, tool, ctx, WriteParams{FilePath: outside, Content: "x"})
+	require.False(t, resp.IsError)
+
+	require.NotNil(t, perms.lastRequest)
+	require.True(t, perms.lastRequest.Escalation)
+	require.Contains(t, perms.lastRequest.Reasoning, outside,
+		"the explanation names the refused path")
+	require.Contains(t, perms.lastRequest.Reasoning, "denying",
+		"the explanation says what denying does")
+}
+
 // TestWriteTool_SandboxRefusalDeniedKeepsDenial verifies the deny path: the
 // user refusing the dialog leaves the operation denied with the standard
 // vocabulary and nothing written.

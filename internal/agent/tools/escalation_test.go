@@ -106,8 +106,8 @@ func TestEscalation_MustBeStrictlyWider(t *testing.T) {
 
 	outside := filepath.Join(t.TempDir(), "file.txt")
 	resp := runWriteTool(t, tool, ctx, WriteParams{
-		FilePath: outside,
-		Content:  "x",
+		FilePath:           outside,
+		Content:            "x",
 		SandboxPermissions: "workspace-write",
 		Justification:      "Same mode, not wider.",
 	})
@@ -127,8 +127,8 @@ func TestEscalation_AppliesToExactlyOneCall(t *testing.T) {
 
 	outside := filepath.Join(t.TempDir(), "first.txt")
 	resp := runWriteTool(t, tool, ctx, WriteParams{
-		FilePath: outside,
-		Content:  "x",
+		FilePath:           outside,
+		Content:            "x",
 		SandboxPermissions: "danger-full-access",
 		Justification:      "Writing outside the workspace once.",
 	})
@@ -162,8 +162,8 @@ func TestEscalation_RejectionStopsTheTurn(t *testing.T) {
 
 	outside := filepath.Join(t.TempDir(), "file.txt")
 	resp := runWriteTool(t, tool, ctx, WriteParams{
-		FilePath: outside,
-		Content:  "x",
+		FilePath:           outside,
+		Content:            "x",
 		SandboxPermissions: "danger-full-access",
 		Justification:      "Need to write outside.",
 	})
@@ -185,8 +185,8 @@ func TestEscalation_RequestIsDistinct(t *testing.T) {
 	ctx := sandboxTestContext(t, workspace)
 
 	runWriteTool(t, tool, ctx, WriteParams{
-		FilePath: filepath.Join(t.TempDir(), "x"),
-		Content:  "x",
+		FilePath:           filepath.Join(t.TempDir(), "x"),
+		Content:            "x",
 		SandboxPermissions: "danger-full-access",
 		Justification:      "Need to write outside.",
 	})
@@ -196,6 +196,8 @@ func TestEscalation_RequestIsDistinct(t *testing.T) {
 	require.False(t, perms.lastRequest.Sandboxed,
 		"the requested operation is not sandboxed, which the prompt must state")
 	require.Contains(t, perms.lastRequest.Description, "Leave the sandbox")
+	require.Equal(t, "Need to write outside.", perms.lastRequest.Reasoning,
+		"the model's justification must reach the dialog for the user to read")
 }
 
 // TestEscalation_DenialCarriesHint verifies the model-facing denial carries
@@ -230,8 +232,8 @@ func TestEscalation_UnavailableWithoutApprovalChannel(t *testing.T) {
 	ctx := sandboxTestContext(t, workspace)
 
 	resp := runWriteTool(t, tool, ctx, WriteParams{
-		FilePath: filepath.Join(t.TempDir(), "file.txt"),
-		Content:  "x",
+		FilePath:           filepath.Join(t.TempDir(), "file.txt"),
+		Content:            "x",
 		SandboxPermissions: "danger-full-access",
 		Justification:      "Need to write outside.",
 	})
@@ -253,8 +255,8 @@ func TestEscalation_ShellTool(t *testing.T) {
 	ctx = WithSandboxPolicy(ctx, policy)
 
 	resp := runBashTool(t, tool, ctx, BashParams{
-		Description: "half a pair",
-		Command:     "true",
+		Description:        "half a pair",
+		Command:            "true",
 		SandboxPermissions: "danger-full-access",
 	})
 	require.True(t, resp.IsError)
@@ -263,8 +265,8 @@ func TestEscalation_ShellTool(t *testing.T) {
 	// A valid pair widens the policy for the command.
 	outside := filepath.Join(t.TempDir(), "escape.txt")
 	resp = runBashTool(t, tool, ctx, BashParams{
-		Description: "escalated write",
-		Command:     "echo hi > " + outside,
+		Description:        "escalated write",
+		Command:            "echo hi > " + outside,
 		SandboxPermissions: "danger-full-access",
 		Justification:      "Writing one file outside the workspace.",
 	})

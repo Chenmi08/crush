@@ -18,7 +18,7 @@ import (
 const sandboxPermissionsDescription = "Request a wider sandbox mode for this one call only. Requires justification. The user is asked to approve leaving the sandbox; approval never carries to another call. Accepted: read-only, workspace-write, danger-full-access"
 
 // justificationDescription pairs with sandbox_permissions.
-const justificationDescription = "A sentence explaining why this call needs a wider sandbox mode. Required whenever sandbox_permissions is set, and ignored when it is not"
+const justificationDescription = "A sentence explaining why this call needs a wider sandbox mode. Required whenever sandbox_permissions is set, and ignored when it is not. Shown to the user in the approval dialog: state what the call will do, why it must leave the sandbox, and any alternative considered"
 
 // escalationRequest is a validated single-call escalation.
 type escalationRequest struct {
@@ -123,6 +123,7 @@ func resolveEscalation(
 		Params:         req,
 		Escalation:     true,
 		EscalationMode: string(req.mode),
+		Reasoning:      req.justification,
 		Sandboxed:      false,
 	})
 	if err != nil {
@@ -231,8 +232,10 @@ func fenceEscalation(
 		return ctx, nil, nil
 	}
 	req := &escalationRequest{
-		mode:          sandbox.ModeDangerFullAccess,
-		justification: "the sandbox refused a write to " + d.Path,
+		mode: sandbox.ModeDangerFullAccess,
+		justification: fmt.Sprintf(
+			"The sandbox refused a write to %s (mode %s). Approving lets this one %s call write the file; denying sends the refusal back to the model, which can ask you differently or use a path inside the workspace.",
+			d.Path, d.Mode, toolName),
 	}
 	return applyEscalation(ctx, permissions, toolName, req, call)
 }

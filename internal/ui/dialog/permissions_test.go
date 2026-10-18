@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/crush/internal/permission"
 	"github.com/charmbracelet/crush/internal/ui/common"
 	"github.com/charmbracelet/crush/internal/ui/styles"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/require"
 )
 
@@ -95,4 +96,49 @@ func TestPermissions_EscapeDenies(t *testing.T) {
 	resp, ok := action.(ActionPermissionResponse)
 	require.True(t, ok)
 	require.Equal(t, PermissionDeny, resp.Action)
+}
+
+// TestPermissions_EscalationRendersReasoning verifies the Leave Sandbox
+// dialog shows the model's explanation of why it needs to leave, and omits
+// the block entirely when the request carries none.
+func TestPermissions_EscalationRendersReasoning(t *testing.T) {
+	t.Parallel()
+
+	s := styles.CharmtonePantera()
+	com := &common.Common{Styles: &s}
+
+	t.Run("with reasoning", func(t *testing.T) {
+		t.Parallel()
+		perm := permission.PermissionRequest{
+			ID:             "perm-test",
+			ToolName:       "bash",
+			Escalation:     true,
+			EscalationMode: "danger-full-access",
+			Reasoning:      "Delete the report cache outside the workspace; no workspace path applies.",
+		}
+		p := NewPermissions(com, perm)
+
+		view := p.renderHeader(100)
+		require.Contains(t, view, "Leave Sandbox?")
+		require.Contains(t, view, "Why")
+		require.Contains(t, view, "Delete the report cache")
+		// Inline layout: the reasoning follows on the same line as the
+		// Why key, like every other Key/value row in the dialog.
+		require.Regexp(t, `Why\s+Delete the report cache`, ansi.Strip(view))
+	})
+
+	t.Run("without reasoning", func(t *testing.T) {
+		t.Parallel()
+		perm := permission.PermissionRequest{
+			ID:             "perm-test",
+			ToolName:       "bash",
+			Escalation:     true,
+			EscalationMode: "danger-full-access",
+		}
+		p := NewPermissions(com, perm)
+
+		view := p.renderHeader(100)
+		require.Contains(t, view, "Leave Sandbox?")
+		require.NotContains(t, view, "Why")
+	})
 }

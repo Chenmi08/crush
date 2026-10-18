@@ -60,6 +60,10 @@ type CreatePermissionRequest struct {
 	Escalation bool `json:"escalation,omitempty"`
 	// EscalationMode is the wider mode being requested.
 	EscalationMode string `json:"escalation_mode,omitempty"`
+	// Reasoning is the model's explanation of why the call needs to leave
+	// the sandbox: what it will do, why, and any alternative. The user
+	// reads it in the approval dialog.
+	Reasoning string `json:"reasoning,omitempty"`
 }
 
 type PermissionNotification struct {
@@ -87,6 +91,9 @@ type PermissionRequest struct {
 	Escalation bool `json:"escalation,omitempty"`
 	// EscalationMode is the requested wider mode.
 	EscalationMode string `json:"escalation_mode,omitempty"`
+	// Reasoning is the explanation shown in the approval dialog for why
+	// this call needs to leave the sandbox.
+	Reasoning string `json:"reasoning,omitempty"`
 }
 
 type Service interface {
@@ -295,6 +302,7 @@ func (s *permissionService) Request(ctx context.Context, opts CreatePermissionRe
 		SandboxMode:    opts.SandboxMode,
 		Escalation:     opts.Escalation,
 		EscalationMode: opts.EscalationMode,
+		Reasoning:      opts.Reasoning,
 	}
 
 	// A session grant ("allow for session") covers the tool/action/path key.

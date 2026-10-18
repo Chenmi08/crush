@@ -464,6 +464,12 @@ func (p *Permissions) renderHeader(contentWidth int) string {
 		title = common.DialogTitle(t, "Leave Sandbox?", contentWidth-t.Dialog.Title.GetHorizontalFrameSize(), t.Dialog.TitleGradFromColor, t.Dialog.TitleGradToColor)
 		lines[0] = t.Dialog.Title.Render(title)
 		lines = append(lines, p.renderKeyValue("Escalation", "widen to "+p.permission.EscalationMode+" for this call only", contentWidth))
+		// The model's explanation of why it needs to leave the sandbox:
+		// what the call does, why, and any alternative. Empty when the
+		// request carries no reasoning.
+		if reasoning := strings.TrimSpace(p.permission.Reasoning); reasoning != "" {
+			lines = append(lines, p.renderKeyValue("Why", reasoning, contentWidth))
+		}
 	case !p.permission.Sandboxed:
 		lines = append(lines, p.renderKeyValue("Sandbox", "none — this command runs unsandboxed", contentWidth))
 	}
