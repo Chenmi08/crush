@@ -51,7 +51,7 @@ func NewReplaceSymbolTool(
 ) fantasy.AgentTool {
 	return fantasy.NewAgentTool(
 		ReplaceSymbolToolName,
-		replaceSymbolDescription,
+		withSandboxNote(replaceSymbolDescription),
 		func(ctx context.Context, params ReplaceSymbolParams, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 			if params.Symbol == "" {
 				return fantasy.NewTextErrorResponse("symbol is required"), nil
@@ -77,6 +77,9 @@ func NewReplaceSymbolTool(
 			// write/edit/multiedit: confinement must not depend on which tool
 			// the agent happened to pick. A refusal asks the user once via
 			// the "Leave Sandbox?" dialog.
+			// The returned context carries the widened policy when the user
+			// approved leaving the sandbox for this call, so the edit below
+			// runs under it.
 			ctx, denied, fenceErr := handleFenceDenial(ctx, permissions, ReplaceSymbolToolName, params.FilePath, call)
 			if fenceErr != nil {
 				return fantasy.ToolResponse{}, fenceErr
@@ -84,7 +87,6 @@ func NewReplaceSymbolTool(
 			if denied != nil {
 				return *denied, nil
 			}
-			_ = ctx
 
 			lspManager.Start(ctx, params.FilePath)
 

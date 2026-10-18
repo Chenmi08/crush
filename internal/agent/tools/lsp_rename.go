@@ -37,7 +37,7 @@ func NewRenameTool(
 ) fantasy.AgentTool {
 	return fantasy.NewAgentTool(
 		RenameToolName,
-		renameDescription,
+		withSandboxNote(renameDescription),
 		func(ctx context.Context, params RenameParams, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 			if params.Symbol == "" {
 				return fantasy.NewTextErrorResponse("symbol is required"), nil
@@ -63,13 +63,34 @@ func NewRenameTool(
 				return fantasy.NewTextResponse(fmt.Sprintf("No rename edits generated for symbol '%s'", params.Symbol)), nil
 			}
 
+			affectedFiles := collectAffectedFiles(edit)
+
+			// A rename rewrites files, so it goes through the same fence as
+			// write/edit/multiedit: confinement must not depend on which tool
+			// the agent happened to pick. Every affected file is checked
+			// before anything is written, so a refusal never leaves a
+			// half-renamed tree. Approval widens the policy for this call.
+			for _, path := range affectedFiles {
+				var fenceErr error
+				var denied *fantasy.ToolResponse
+				ctx, denied, fenceErr = handleFenceDenial(ctx, permissions, RenameToolName, path, call)
+				if fenceErr != nil {
+					return fantasy.ToolResponse{}, fenceErr
+				}
+				if denied != nil {
+					return *denied, nil
+				}
+			}
+
 			sessionID := GetSessionFromContext(ctx)
 			if sessionID != "" && permissions != nil {
-				granted, err := permissions.Request(ctx, permission.CreatePermissionRequest{
+				granted, err := requestPermission(ctx, permissions, sandboxedRequest(ctx, permission.CreatePermissionRequest{
 					SessionID:   sessionID,
+					ToolCallID:  call.ID,
 					ToolName:    RenameToolName,
+					Action:      "write",
 					Description: fmt.Sprintf("Rename '%s' to '%s'", params.Symbol, params.NewName),
-				})
+				}))
 				if err != nil {
 					return fantasy.ToolResponse{}, fmt.Errorf("permission request failed: %w", err)
 				}
@@ -77,8 +98,6 @@ func NewRenameTool(
 					return NewPermissionDeniedResponse(), nil
 				}
 			}
-
-			affectedFiles := collectAffectedFiles(edit)
 
 			if files != nil && sessionID != "" {
 				for _, path := range affectedFiles {

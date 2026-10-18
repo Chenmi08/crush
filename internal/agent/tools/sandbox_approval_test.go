@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"charm.land/fantasy"
+
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/permission"
 	"github.com/charmbracelet/crush/internal/pubsub"
@@ -146,4 +148,40 @@ func TestApproval_HookAndSessionGrantsDoNotBypassBoundary(t *testing.T) {
 // sandboxAttribution returns the attribution used by tool tests.
 func sandboxAttribution() *config.Attribution {
 	return &config.Attribution{TrailerStyle: config.TrailerStyleNone}
+}
+
+// TestApproval_LSPWriteToolsAreFenced pins that the LSP write tools use the
+// same fence as write/edit/multiedit. Confinement must not depend on which
+// tool the model picked; lsp_rename previously applied its workspace edit
+// directly, with no policy check at all.
+func TestApproval_LSPWriteToolsAreFenced(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+	policy := tableSandboxPolicy(t, workspace)
+
+	// The user declines the leave-sandbox prompt: the original denial comes
+	// back to the model with the shared marker.
+	deniedPerms := &recordingPermissionService{Broker: pubsubBroker(), allow: false}
+	call := fantasy.ToolCall{ID: "call-lsp", Name: ReplaceSymbolToolName}
+
+	ctx := context.WithValue(context.Background(), SessionIDContextKey, "test-session")
+	ctx = WithSandboxPolicy(ctx, policy)
+
+	outside := filepath.Join(t.TempDir(), "outside.go")
+	_, denied, err := handleFenceDenial(ctx, deniedPerms, RenameToolName, outside, call)
+	require.NoError(t, err)
+	require.NotNil(t, denied, "the fence must refuse %s", outside)
+	require.Contains(t, denied.Content, sandbox.Marker)
+	require.True(t, denied.StopTurn)
+	require.Equal(t, 1, deniedPerms.requestCount,
+		"the refusal asks the user once via the leave-sandbox dialog")
+
+	// A path inside the workspace is allowed through without a prompt: it
+	// is confined, so there is no boundary to leave.
+	inside := filepath.Join(workspace, "inside.go")
+	_, denied, err = handleFenceDenial(ctx, deniedPerms, RenameToolName, inside, call)
+	require.NoError(t, err)
+	require.Nil(t, denied)
+	require.Equal(t, 1, deniedPerms.requestCount,
+		"a confined write must not add another prompt")
 }
