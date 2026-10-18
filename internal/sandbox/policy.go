@@ -430,6 +430,22 @@ func selfOrAncestor(a, b string) bool {
 	return a == b
 }
 
+// CheckRead reports whether path may be read without prompting under the
+// policy. Reads are not confined in general, but a session's own spill
+// files are: truncated tool output lands in the policy's private temp
+// directory, and the view tool is told to read it back. Prompting for that
+// read would be noise, so paths inside the temp directory read without
+// permission. Only the temp directory is covered — the cache directory and
+// the workspace keep prompting, because they are broadly readable by
+// design and exempting them would swallow every out-of-workdir read. A nil
+// policy leaves the caller's existing behavior in place.
+func (p *Policy) CheckRead(path string) bool {
+	if p == nil || p.TempDir == "" {
+		return false
+	}
+	return within(CanonicalPath(path), p.TempDir)
+}
+
 // CheckWrite reports whether path may be written under the policy. It resolves
 // symlinks first, so a link inside a root pointing outside it is refused.
 func (p *Policy) CheckWrite(path string) error {

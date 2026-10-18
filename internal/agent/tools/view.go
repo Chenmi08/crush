@@ -132,8 +132,12 @@ func NewViewTool(
 				return fantasy.ToolResponse{}, fmt.Errorf("session ID is required for accessing files outside working directory")
 			}
 
-			// Request permission for files outside working directory, unless it's a skill file.
-			if isOutsideWorkDir && !isSkillFile {
+			// Request permission for files outside working directory, unless
+			// it's a skill file or the session's own spill output: the
+			// sandbox's private temp directory holds truncated tool output
+			// the model is told to read back, and prompting for it is noise.
+			if isOutsideWorkDir && !isSkillFile &&
+				!SandboxPolicyFromContext(ctx).CheckRead(absFilePath) {
 				granted, permReqErr := permissions.Request(
 					ctx,
 					permission.CreatePermissionRequest{

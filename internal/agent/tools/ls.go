@@ -95,7 +95,11 @@ func NewLsTool(permissions permission.Service, workingDir string, lsConfig confi
 			}
 
 			relPath, err := filepath.Rel(absWorkingDir, absSearchPath)
-			if err != nil || strings.HasPrefix(relPath, "..") {
+			// The sandbox's private temp directory holds spill output the
+			// model is told to read back, so listing it is exempt like the
+			// view tool's read of the files themselves.
+			if (err != nil || strings.HasPrefix(relPath, "..")) &&
+				!SandboxPolicyFromContext(ctx).CheckRead(absSearchPath) {
 				// Directory is outside working directory, request permission
 				sessionID := GetSessionFromContext(ctx)
 				if sessionID == "" {

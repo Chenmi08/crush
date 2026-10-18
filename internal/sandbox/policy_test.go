@@ -101,6 +101,28 @@ func TestSubagentPolicyFor(t *testing.T) {
 	})
 }
 
+func TestCheckRead_TempDirOnly(t *testing.T) {
+	t.Parallel()
+	p := testPolicy(t)
+
+	require.True(t, p.CheckRead(filepath.Join(p.TempDir, "spill.txt")),
+		"the session's own spill files read without prompting")
+	require.True(t, p.CheckRead(filepath.Join(p.TempDir, "nested", "out.md")),
+		"reads inside the temp directory are covered at any depth")
+	require.False(t, p.CheckRead(filepath.Join(p.Workspace, "file.go")),
+		"CheckRead is not a general read exemption")
+	require.False(t, p.CheckRead(p.TempDir+"-sibling/file"),
+		"a sibling directory sharing a prefix is not inside the temp directory")
+
+	// A nil policy leaves the caller's behavior in place.
+	var nilPolicy *Policy
+	require.False(t, nilPolicy.CheckRead("/any/path"))
+
+	// A policy with no temp directory grants no read exemption.
+	noTemp := &Policy{Mode: ModeWorkspaceWrite}
+	require.False(t, noTemp.CheckRead("/any/path"))
+}
+
 func TestResolve_DefaultModeAndRoots(t *testing.T) {
 	t.Parallel()
 	p := testPolicy(t)
