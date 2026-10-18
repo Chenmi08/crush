@@ -25,6 +25,13 @@ type Workspace struct {
 	// Channels lists the MCP servers opted in as channels for this workspace
 	// (from the --channels flag).
 	Channels []string `json:"channels,omitempty"`
+	// SandboxMode is the sandbox mode requested on the command line
+	// (--sandbox). Empty uses the configuration. The server applies it as a
+	// runtime override, exactly as the in-process path does.
+	SandboxMode string `json:"sandbox_mode,omitempty"`
+	// DisableSandbox is the --no-sandbox flag: an explicit, warned decision
+	// to run the workspace unconfined.
+	DisableSandbox bool `json:"disable_sandbox,omitempty"`
 	// Skills carries the snapshot of skill discovery state at workspace
 	// creation time. Subsequent updates flow through the SSE event
 	// stream.

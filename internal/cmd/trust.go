@@ -44,7 +44,12 @@ crush trust --cwd /path/to/project --revoke`,
 		yes, _ := cmd.Flags().GetBool("yes")
 		revoke, _ := cmd.Flags().GetBool("revoke")
 
-		project := config.CanonicalProjectPath(cwd)
+		// Trust is keyed by the project boundary (the git working tree root
+		// when there is one), which is also what the loader consults. Using
+		// the plain cwd here recorded a key the loader never checks: `crush
+		// trust --yes` from a subdirectory reported success but had no
+		// effect, and `--revoke` reported revocation without revoking.
+		project := config.ProjectTrustKey(cwd)
 		switch {
 		case revoke:
 			if err := config.RevokeProjectTrust(project); err != nil {
@@ -132,7 +137,7 @@ func promptForProjectTrust(cwd string) error {
 	if !ok {
 		return nil
 	}
-	project := config.CanonicalProjectPath(cwd)
+	project := config.ProjectTrustKey(cwd)
 	if config.IsProjectTrusted(project) {
 		return nil
 	}

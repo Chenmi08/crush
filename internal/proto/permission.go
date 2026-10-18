@@ -21,6 +21,9 @@ type CreatePermissionRequest struct {
 	Escalation bool `json:"escalation,omitempty"`
 	// EscalationMode is the requested wider mode.
 	EscalationMode string `json:"escalation_mode,omitempty"`
+	// Reasoning is the model's explanation of why the call needs to leave
+	// the sandbox. The approval dialog shows it.
+	Reasoning string `json:"reasoning,omitempty"`
 }
 
 // PermissionNotification represents a notification about a permission change.
@@ -49,6 +52,9 @@ type PermissionRequest struct {
 	Escalation bool `json:"escalation,omitempty"`
 	// EscalationMode is the requested wider mode.
 	EscalationMode string `json:"escalation_mode,omitempty"`
+	// Reasoning is the explanation shown in the approval dialog for why this
+	// call needs to leave the sandbox.
+	Reasoning string `json:"reasoning,omitempty"`
 }
 
 // UnmarshalJSON implements the json.Unmarshaler interface. This is needed

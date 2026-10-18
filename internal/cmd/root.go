@@ -33,6 +33,7 @@ import (
 	crushlog "github.com/charmbracelet/crush/internal/log"
 	"github.com/charmbracelet/crush/internal/projects"
 	"github.com/charmbracelet/crush/internal/proto"
+	"github.com/charmbracelet/crush/internal/sandbox"
 	"github.com/charmbracelet/crush/internal/server"
 	"github.com/charmbracelet/crush/internal/session"
 	"github.com/charmbracelet/crush/internal/skills"
@@ -296,8 +297,10 @@ func setupLocalWorkspace(cmd *cobra.Command) (workspace.Workspace, func(), error
 	}
 
 	cfg := store.Config()
-	store.Overrides().SkipPermissionRequests = yolo
-	store.Overrides().EnabledChannels = channels
+	store.UpdateOverrides(func(o *config.RuntimeOverrides) {
+		o.SkipPermissionRequests = yolo
+		o.EnabledChannels = channels
+	})
 
 	if err := applySandboxFlags(cmd, store); err != nil {
 		return nil, nil, err
@@ -425,14 +428,29 @@ func connectToServer(cmd *cobra.Command) (*client.Client, *proto.Workspace, func
 		return nil, nil, nil, err
 	}
 
+	sandboxMode, err := cmd.Flags().GetString("sandbox")
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	validatedMode, err := config.ValidateSandboxModeFlag(sandboxMode)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	noSandbox, err := cmd.Flags().GetBool("no-sandbox")
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
 	wsReq := proto.Workspace{
-		Path:     cwd,
-		DataDir:  dataDir,
-		Debug:    debug,
-		YOLO:     yolo,
-		Channels: channels,
-		Version:  version.Version,
-		Env:      os.Environ(),
+		Path:           cwd,
+		DataDir:        dataDir,
+		Debug:          debug,
+		YOLO:           yolo,
+		Channels:       channels,
+		Version:        version.Version,
+		Env:            os.Environ(),
+		SandboxMode:    string(validatedMode),
+		DisableSandbox: noSandbox || validatedMode == sandbox.ModeDangerFullAccess,
 	}
 
 	ws, err := createWorkspaceOnLiveServer(cmd.Context(), c, wsReq, func() error {

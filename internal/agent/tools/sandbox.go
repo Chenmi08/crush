@@ -37,15 +37,6 @@ func requiresApproval(policy *sandbox.Policy, leavesBoundary bool) bool {
 	return leavesBoundary
 }
 
-// sandboxStateForPolicy describes the request for the prompt and audit
-// subscribers. A nil policy is unconfined.
-func sandboxStateForPolicy(policy *sandbox.Policy) (sandboxed bool, mode string) {
-	if policy == nil {
-		return false, ""
-	}
-	return true, string(policy.Mode)
-}
-
 // escalationApprovalKey marks a context whose tool call was approved to leave
 // the sandbox. It carries the tool call ID so the approval cannot leak to
 // another call.

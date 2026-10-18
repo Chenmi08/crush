@@ -79,6 +79,7 @@ func Load(workingDir, dataDir string, debug bool) (*ConfigStore, error) {
 		}
 		merged, mergeErr := loadFromBytes(append([][]byte{mustMarshalConfig(cfg)}, wsData))
 		if mergeErr == nil {
+			applyWorkspaceSandboxTighten(merged, cfg)
 			// Preserve defaults that setDefaults already applied.
 			dataDir := cfg.Options.DataDirectory
 			*cfg = *merged
@@ -1118,6 +1119,38 @@ func loadFromConfigPaths(ctx context.Context, configPaths []string) (*Config, []
 		cfg.Permissions.Sandbox = &merged
 	}
 	return cfg, loaded, nil
+}
+
+// applyWorkspaceSandboxTighten keeps the machine-owned workspace state file
+// from widening the sandbox. The file is written by Crush into the data
+// directory, which for the documented `--data-dir .crush` layout sits inside
+// the workspace the agent can write. It is merged after the tighten-only
+// layer check, so without this it could set danger-full-access or add a
+// writable root and no layer would object.
+//
+// Only tightening keys survive: a narrower mode and additional denials. A
+// wider mode and extra write roots are dropped, with a warning naming the
+// problem.
+func applyWorkspaceSandboxTighten(merged, current *Config) {
+	wsBox := merged.Permissions.SandboxConfig()
+	if wsBox.IsZero() {
+		return
+	}
+	base := current.Permissions.SandboxConfig()
+	if err := CheckProjectSandboxTightens(wsBox, base); err != nil {
+		slog.Warn("Workspace config attempted to widen the sandbox; ignoring the widening keys",
+			"error", err)
+	}
+	tightened := mergeSandboxTighten(base, wsBox)
+
+	if merged.Permissions == nil {
+		merged.Permissions = &Permissions{}
+	}
+	if tightened.IsZero() {
+		merged.Permissions.Sandbox = nil
+		return
+	}
+	merged.Permissions.Sandbox = &tightened
 }
 
 // addTopLevelKeys records the top-level JSON keys present in data into the

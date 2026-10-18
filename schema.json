@@ -33,7 +33,7 @@
       "properties": {
         "max_depth": {
           "type": "integer",
-          "description": "Maximum depth for the ls tool",
+          "description": "Maximum depth for path completion",
           "default": 0,
           "examples": [
             10
@@ -41,7 +41,7 @@
         },
         "max_items": {
           "type": "integer",
-          "description": "Maximum number of items to return for the ls tool",
+          "description": "Maximum number of path completions to return",
           "default": 1000,
           "examples": [
             100

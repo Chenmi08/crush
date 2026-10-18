@@ -47,7 +47,7 @@ model large anthropic/claude-sonnet-4-20250514 --max-tokens 16384
 model small anthropic/claude-haiku-4-20250514
 
 option skill-path ./skills
-permissions allow view ls grep edit
+permissions allow view edit bash
 ```
 
 Values are ordinary Bash — quote and expand normally (`"$VAR"`, `$(cmd)`,
@@ -365,7 +365,7 @@ The `$schema` property enables IDE autocomplete but is optional.
 | `mcp add gh --type http --url U`     | `mcp.gh = {"type":"http","url":"U"}`                   |
 | `lsp add go --command gopls`         | `lsp.go = {"command":"gopls"}`                         |
 | `hook add PreToolUse --command C`    | append to `hooks.PreToolUse[]`                         |
-| `permissions allow view ls`          | `permissions.allowed_tools = ["view","ls"]`            |
+| `permissions allow view edit`        | `permissions.allowed_tools = ["view","edit"]`          |
 | `permissions deny bash`              | `options.disabled_tools = ["bash"]`                    |
 | `permissions network "docker push"`  | `permissions.network_commands = ["docker push"]`       |
 | `option skill-path ./skills`         | `options.skills_paths = ["./skills"]`                  |

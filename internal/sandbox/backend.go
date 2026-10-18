@@ -11,9 +11,6 @@ import (
 	"sync"
 )
 
-// As is a tiny wrapper so the rest of the package reads uniformly.
-func As[T any](err error, target *T) bool { return errors.As(err, target) }
-
 // Backend is an OS primitive that confines a child process to a policy.
 //
 // The boundary applies to the process and everything it starts. A backend
@@ -299,12 +296,4 @@ func availableOnPath(name string) (string, bool) {
 		return abs, true
 	}
 	return path, true
-}
-
-// ForceSelectionForTest overrides the cached backend selection. It exists so
-// tests can assert fail-closed and prompt behaviour without uninstalling a
-// backend; production code never calls it.
-func ForceSelectionForTest(sel Selection) {
-	selectionOnce.Do(func() {})
-	selection = sel
 }

@@ -1451,6 +1451,7 @@ func (s *ConfigStore) reloadFromDiskLocked(ctx context.Context) error {
 		}
 		merged, mergeErr := loadFromBytes(append([][]byte{mustMarshalConfig(cfg)}, wsData))
 		if mergeErr == nil {
+			applyWorkspaceSandboxTighten(merged, cfg)
 			dataDir := cfg.Options.DataDirectory
 			*cfg = *merged
 			cfg.setDefaults(s.workingDir, dataDir)

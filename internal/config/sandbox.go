@@ -1,8 +1,12 @@
 package config
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 
@@ -145,21 +149,81 @@ func ValidateSandbox(cfg Sandbox) error {
 	return nil
 }
 
+// sandboxTempPathLimit is the longest path the temp directory may produce
+// before tools that bind Unix sockets inside it fail with EINVAL. Linux's
+// sun_path is 108 bytes including the terminator, and a socket name costs at
+// least a few more, so leave generous headroom.
+const sandboxTempPathLimit = 60
+
 // DefaultSandboxTempDir returns the private per-run temp directory for a data
-// directory. Keeping it under the data directory means it is removed with the
-// rest of the run's state and never shares a namespace with /tmp.
+// directory.
+//
+// It normally lives under the data directory, so it is removed with the rest
+// of the project's state and never shares a namespace with /tmp. A deeply
+// nested data directory (the default per-project layout under
+// $XDG_DATA_HOME already exceeds 60 bytes) is replaced by a short path under
+// the system temp directory instead: TMPDIR is exported to every confined
+// command, and a too-long value makes every Unix-socket bind inside it fail.
+// The directory is still private to the project (0700) and carry a stable
+// suffix so it is reused across runs rather than accumulating.
 func DefaultSandboxTempDir(dataDir string) string {
 	if dataDir == "" {
 		return ""
 	}
-	return filepath.Join(dataDir, "sandbox", "tmp")
+	candidate := filepath.Join(dataDir, "sandbox", "tmp")
+	if len(candidate) <= sandboxTempPathLimit {
+		return candidate
+	}
+	// The system temp directory is not necessarily short (it is TMPDIR, which
+	// may itself be a deep path), so prefer whichever known base produces a
+	// path that fits. /tmp is checked last because it is the conventional
+	// short location.
+	name := "crush-" + shortPathHash(dataDir)
+	for _, base := range tempDirCandidates() {
+		path := filepath.Join(base, name)
+		if len(path) <= sandboxTempPathLimit {
+			return path
+		}
+	}
+	return filepath.Join(tempDirCandidates()[0], name)
+}
+
+// tempDirCandidates lists the locations a too-deep project data directory may
+// fall back to, shortest first.
+func tempDirCandidates() []string {
+	candidates := []string{os.TempDir()}
+	if runtime.GOOS != "windows" {
+		candidates = append(candidates, "/tmp")
+	}
+	return candidates
+}
+
+// shortPathHash returns a short, stable digest of a path, used to keep
+// per-project state distinct when the project data directory is too deep to
+// live under.
+func shortPathHash(path string) string {
+	sum := sha256.Sum256([]byte(filepath.Clean(path)))
+	return hex.EncodeToString(sum[:6])
 }
 
 // mergeSandboxTighten merges user-level and project-level sandbox settings.
-// Project settings may only add denials; everything else comes from the
-// user-level settings.
+//
+// A project may only tighten, so it contributes two things: additional write
+// denials, and a narrower mode (checked by [CheckProjectSandboxTightens]).
+// Everything else — in particular write roots — comes from the user-level
+// settings. Dropping a narrower project mode would silently ignore the safer
+// of the two configurations.
 func mergeSandboxTighten(base, project Sandbox) Sandbox {
 	merged := base
+	if project.Mode != "" {
+		effective := base.Mode
+		if effective == "" {
+			effective = string(sandbox.DefaultMode)
+		}
+		if !widensMode(sandbox.Mode(project.Mode), sandbox.Mode(effective)) {
+			merged.Mode = project.Mode
+		}
+	}
 	for _, deny := range project.DenyWrite {
 		if !slices.Contains(merged.DenyWrite, deny) {
 			merged.DenyWrite = append(merged.DenyWrite, deny)

@@ -29,23 +29,34 @@ func (c *coordinator) SetSandboxMode(mode sandbox.Mode, approved bool) error {
 		return fmt.Errorf("widening the sandbox from %s to %s requires approval", current, mode)
 	}
 
-	// The override makes the choice survive config reloads and restarts.
+	// The override makes the choice survive config reloads. It is a runtime
+	// override, so it does not survive a restart: the configured mode does.
+	//
 	// The previous values are captured so a failed resolution can restore
 	// exactly what was there, not what the current mode happens to be (they
 	// differ when the effective mode came from config rather than an
-	// override).
-	previousMode := c.cfg.Overrides().SandboxMode
-	previousDisable := c.cfg.Overrides().DisableSandbox
-	c.cfg.Overrides().SandboxMode = string(mode)
-	c.cfg.Overrides().DisableSandbox = mode == sandbox.ModeDangerFullAccess
+	// override). Both fields are written under one lock so a concurrent
+	// resolution cannot see the mode widened before its disable flag.
+	type overrideFields struct {
+		mode    string
+		disable bool
+	}
+	var previous overrideFields
+	c.cfg.UpdateOverrides(func(o *config.RuntimeOverrides) {
+		previous = overrideFields{mode: o.SandboxMode, disable: o.DisableSandbox}
+		o.SandboxMode = string(mode)
+		o.DisableSandbox = mode == sandbox.ModeDangerFullAccess
+	})
 	if mode == sandbox.ModeDangerFullAccess {
 		warnSandboxDisabledByCommand()
 	}
 
 	rt := c.cfg.ResolveSandboxRuntime()
 	if rt.Err != nil {
-		c.cfg.Overrides().SandboxMode = previousMode
-		c.cfg.Overrides().DisableSandbox = previousDisable
+		c.cfg.UpdateOverrides(func(o *config.RuntimeOverrides) {
+			o.SandboxMode = previous.mode
+			o.DisableSandbox = previous.disable
+		})
 		return fmt.Errorf("sandbox mode %s could not be resolved: %w", mode, rt.Err)
 	}
 	c.sandboxRuntime = rt

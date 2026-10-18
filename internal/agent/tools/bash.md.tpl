@@ -1,6 +1,6 @@
 Execute shell commands; long-running commands automatically move to background and return a shell ID.
 
-Writes are confined to the sandbox, so most commands run without prompts. Commands that reach the network (curl, ssh, git push, package installs to global locations, and similar) require user approval and return an error if declined - explain to the user instead of retrying. Output is truncated beyond {{ .MaxOutputLength }} characters. The truncation marker names a file holding the complete output - read it with the view tool when the omitted middle matters.
+Writes are confined to the sandbox, so most commands run without prompts. Commands on the network list (curl, wget, ssh, scp, rsync, nc, git push, gh, sudo, su, doas, and the user's extra entries) require approval and return an error if declined - explain to the user instead of retrying. The list matches command names, not their effects, so an interpreter (`python -c`, `go run`) reaches the network without a prompt; that is a known limit of the prompt, not of the sandbox. Output is truncated beyond {{ .MaxOutputLength }} characters. The truncation marker names a file holding the complete output - read it with the view tool when the omitted middle matters.
 
 - Use the dedicated View/Edit tools instead of `cat`/`sed` for reading and editing files.
 - Chain commands with ';' or '&&'; avoid newlines except in quoted strings. Each call runs in an independent shell (no state persists between calls).

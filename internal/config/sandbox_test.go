@@ -243,7 +243,6 @@ func TestProjectSandbox_TightensOnly(t *testing.T) {
 		require.Error(t, err)
 		require.ErrorIs(t, err, config.ErrProjectWidensSandbox)
 	})
-
 }
 
 // TestSandboxMode_DangerRequiresExplicitSelection verifies an absent or

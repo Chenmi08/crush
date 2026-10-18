@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/crush/internal/message"
 	"github.com/charmbracelet/crush/internal/proto"
 	"github.com/charmbracelet/crush/internal/pubsub"
+	"github.com/charmbracelet/crush/internal/sandbox"
 	"github.com/charmbracelet/crush/internal/shell"
 )
 
@@ -284,8 +285,15 @@ func (b *Backend) RunShellCommand(ctx context.Context, workspaceID string, req p
 	// build workspaces without a config store; those fall back to the
 	// system temp directory.
 	var dataDir string
+	var policy *sandbox.Policy
 	if ws.Cfg != nil {
 		dataDir = ws.Cfg.Config().Options.DataDirectory
+		// Bang-mode commands follow the session policy here too. The
+		// in-process path already passes it; without this the same command
+		// was confined in one mode of operation and unconfined in the other.
+		if ws.App != nil && ws.App.AgentCoordinator != nil {
+			policy = ws.App.AgentCoordinator.SandboxStatus().Policy
+		}
 	}
 
 	var persist shell.PersistFunc
@@ -300,6 +308,7 @@ func (b *Backend) RunShellCommand(ctx context.Context, workspaceID string, req p
 		Cwd:       ws.Path,
 		Env:       append(os.Environ(), ws.Env...),
 		TermWidth: req.TermWidth,
+		Policy:    policy,
 	}, persist)
 	if err != nil {
 		return proto.ShellCommandResponse{}, err

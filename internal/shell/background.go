@@ -86,7 +86,9 @@ func GetBackgroundShellManager() *BackgroundShellManager {
 	return backgroundManager
 }
 
-// Start creates and starts a new background shell with the given command.
+// Start creates and starts a new background shell with the given command and
+// no sandbox policy. Prefer StartWithPolicy inside a session: a background job
+// must not outlive its confinement.
 func (m *BackgroundShellManager) Start(ctx context.Context, workingDir string, command string, description string) (*BackgroundShell, error) {
 	return m.StartWithPolicy(ctx, workingDir, nil, command, description)
 }

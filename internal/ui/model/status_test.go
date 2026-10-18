@@ -188,3 +188,30 @@ func TestSandboxSwitch_ConfigSnapshot(t *testing.T) {
 	st.SetSandboxFromConfig(after)
 	require.Contains(t, st.SandboxBadge(), "WORKSPACE-WRITE")
 }
+
+// TestSandboxBadge_NoConfigStillShowsDefault pins that a workspace with no
+// sandbox block still shows the badge. The sandbox is on by default, so
+// hiding the indicator when the config has no explicit block meant the mode a
+// user is trusting was invisible on a default install.
+func TestSandboxBadge_NoConfigStillShowsDefault(t *testing.T) {
+	t.Parallel()
+	st := newSandboxTestStatus(t)
+
+	st.SetSandboxFromConfig(&config.Config{})
+	require.Contains(t, st.SandboxBadge(), "WORKSPACE-WRITE")
+
+	st.SetSandboxFromConfig(&config.Config{Permissions: &config.Permissions{}})
+	require.Contains(t, st.SandboxBadge(), "WORKSPACE-WRITE")
+}
+
+// TestSandboxBadge_ConfinedModeIsNotPartial pins that a healthy confined mode
+// does not render as "partial": the status bar does not know the backend's
+// enforcement fact, so claiming partial made every host look degraded.
+func TestSandboxBadge_ConfinedModeIsNotPartial(t *testing.T) {
+	t.Parallel()
+	st := newSandboxTestStatus(t)
+	st.SetSandboxFromConfig(&config.Config{Permissions: &config.Permissions{
+		Sandbox: &config.Sandbox{Mode: "workspace-write"},
+	}})
+	require.Equal(t, "full", st.sandboxLevel)
+}

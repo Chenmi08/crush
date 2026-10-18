@@ -499,8 +499,11 @@ writable root.
 
 **Enforcement.** The boundary is enforced by the OS where possible: `bubblewrap`
 on Linux, falling back to Landlock when bubblewrap is absent or cannot create
-its namespaces, then to the in-process fence, which confines Crush's own tools
-and interpreter but not child processes. Landlock can only union allowlists, so
+its namespaces. (Landlock cannot express protected paths inside a writable
+root, so the status reports `partial` there.) Crush's own file tools and the
+in-process shell interpreter are fenced independently of the backend, so
+redirects and sourcing are confined even on a host whose backend only wraps
+child processes. Landlock can only union allowlists, so
 it cannot subtract protected paths from a writable root: on such a host the
 status reports `partial` and names the missing guarantee. On macOS, Seatbelt via
 `sandbox-exec`. Windows has no backend and reports `unsupported`;
@@ -509,12 +512,20 @@ status` prints the resolved policy, backend, and enforcement level, and
 `crush sandbox exec -- <command>` runs one command under that policy for
 testing.
 
-**Exclusions and no backend.** An excluded command, or any command on a host
-with no usable backend, prompts instead of running silently, and the prompt
-states that it is unsandboxed.
+**No backend.** Confined commands are refused when no backend is usable; they
+never run unconfined. A sandbox configuration that cannot be resolved (a
+`allow_write` path that does not exist, say) fails closed the same way: every
+write is refused until the configuration is fixed, and the status names the
+error.
 
 **YOLO mode and disabling.** `--yolo` disables prompts only; the boundary
-still applies. Disabling the sandbox requires `--no-sandbox` (or `sandbox mode
+still applies. An escalation under YOLO is approved without a prompt, because
+YOLO is the decision to trust the model: the wider mode still applies to that
+one call only, so YOLO never becomes a standing grant to leave the sandbox.
+An allow-list entry for a tool (`permissions allow bash`) is not consent to
+widen the boundary and still prompts. Without an approval surface (for example
+`crush run`), an escalation is reported as unavailable instead of waiting.
+Disabling the sandbox requires `--no-sandbox` (or `sandbox mode
 danger-full-access`) and prints a warning.
 
 **Escalation.** The confined tools (`bash`, `write`, `edit`, `multiedit`,
@@ -524,10 +535,12 @@ applies to exactly one call: it is never recorded as a session grant and never
 carries to the next call. A denied escalation leaves the operation denied and
 tells the model to stop and explain rather than work around the boundary.
 
-**Project configuration.** A repository's `crushrc` or `crush.json` may add
-write denials and exclusions but may not widen the mode, add a writable root,
-or disable the sandbox. A project attempt to widen is rejected at load with the
-offending key named.
+**Project configuration.** A repository's `crushrc` or `crush.json` may narrow
+the mode and add write denials, but may not widen the mode, add a writable
+root, or disable the sandbox. A project attempt to widen is rejected at load
+with the offending key named. The machine-owned workspace state file under the
+data directory is clamped the same way, because with `--data-dir .crush` it
+lives inside the workspace the agent can write.
 
 **Project trust.** Repository-local configuration is shell code, so it is not
 executed until you trust the project. Crush asks once, names the files that
@@ -612,7 +625,7 @@ The built-in list already covers the common egress commands (`curl`, `wget`,
 others). Add what it misses:
 
 ```bash
-permissions allow view ls grep edit
+permissions allow view edit bash
 permissions deny bash
 ```
 

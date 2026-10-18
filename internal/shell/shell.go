@@ -177,20 +177,6 @@ func (s *Shell) SetEnv(key, value string) {
 	s.env = append(s.env, keyPrefix+value)
 }
 
-// SetPolicy sets the sandbox policy for subsequent executions.
-func (s *Shell) SetPolicy(policy *sandbox.Policy) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.policy = policy
-}
-
-// Policy returns the sandbox policy the shell executes under, if any.
-func (s *Shell) Policy() *sandbox.Policy {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.policy
-}
-
 // newInterp creates a new interpreter with the current shell state. A nil
 // stdin is equivalent to an empty input stream.
 func (s *Shell) newInterp(stdin io.Reader, stdout, stderr io.Writer) (*interp.Runner, error) {

@@ -6,7 +6,7 @@ Analyze this codebase and create/update **{{.Config.Options.InitializeAs}}** to 
 
 **Discovery process**:
 
-1. Check directory contents with `ls`
+1. Check directory contents with `ls` in the shell (there is no dedicated ls tool)
 2. Look for existing rule files (`.cursor/rules/*.md`, `.cursorrules`, `.github/copilot-instructions.md`, `claude.md`, `agents.md`) - only read if they exist
 3. Identify project type from config files and directory structure
 4. Find build/test/lint commands from config files, scripts, Makefiles, or CI configs

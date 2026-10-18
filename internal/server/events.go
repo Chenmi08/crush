@@ -75,6 +75,7 @@ func wrapEvent(ev any) *pubsub.Payload {
 				SandboxMode:    e.Payload.SandboxMode,
 				Escalation:     e.Payload.Escalation,
 				EscalationMode: e.Payload.EscalationMode,
+				Reasoning:      e.Payload.Reasoning,
 			},
 		})
 	case pubsub.Event[permission.PermissionNotification]:

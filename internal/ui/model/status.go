@@ -77,18 +77,26 @@ func (s *Status) SetSandbox(mode, level string) {
 // SetSandboxFromConfig derives the indicator from the workspace's sandbox
 // configuration. It is safe to call with a nil config, which hides the
 // indicator (no workspace, nothing to report).
+//
+// The status bar does not know the backend's enforcement fact (that lives in
+// the resolved runtime, which the UI cannot compute per frame), so a confined
+// mode renders as "full" here and the exact level is reported by
+// `crush sandbox status` and `crush info`. Reporting "partial" for every
+// confined mode made the indicator cry wolf on every healthy host.
 func (s *Status) SetSandboxFromConfig(cfg *config.Config) {
-	if cfg == nil || cfg.Permissions == nil || cfg.Permissions.Sandbox == nil {
+	if cfg == nil {
 		s.SetSandbox("", "")
 		return
 	}
-	sandboxCfg := cfg.Permissions.SandboxConfig()
-	mode := cmp.Or(sandboxCfg.Mode, string(sandbox.DefaultMode))
+	mode := string(sandbox.DefaultMode)
+	if cfg.Permissions != nil {
+		mode = cmp.Or(cfg.Permissions.SandboxConfig().Mode, string(sandbox.DefaultMode))
+	}
 	if mode == string(sandbox.ModeDangerFullAccess) {
 		s.SetSandbox(mode, "none")
 		return
 	}
-	s.SetSandbox(mode, "partial")
+	s.SetSandbox(mode, "full")
 }
 
 // SandboxBadge renders the sandbox indicator, or an empty string when no

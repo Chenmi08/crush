@@ -154,7 +154,10 @@ call after the user approves it.
     danger-full-access.)*
 24. As a developer, I want YOLO to disable prompts but keep the sandbox, so
     that "trust the model" and "trust the model with my whole disk" are
-    separate decisions.
+    separate decisions. *(Fork: YOLO also approves escalations without a
+    prompt. Trusting the model is the whole point of the mode; the sandbox is
+    still enforced on the widened call, so the "whole disk" decision remains
+    separate and explicit.)*
 25. As a developer, I want a separate explicit flag to disable the sandbox, so
     that turning it off is a deliberate act with a visible warning.
 26. As a developer, I want the agent to be able to request a wider mode for one
@@ -358,6 +361,14 @@ repository can be trusted and still must not be modifiable by the agent.
   be trusted.
 - YOLO disables prompts but no longer disables the sandbox. Disabling the
   sandbox is a separate, explicitly named flag.
+- *(Fork: an escalation under YOLO is approved without a prompt — "trust the
+  model" covers the one-call widening. The widened policy still applies to
+  exactly one call, so YOLO never becomes a standing grant to leave the
+  boundary. An allow-list entry for a tool is *not* consent to widen: it is a
+  statement about the tool, made before the refusal is known.)*
+- *(Fork: when no approval surface is attached — a non-interactive run, a
+  headless caller — an escalation fails immediately as unavailable instead of
+  waiting for a prompt nobody can answer.)*
 - *(Fork: the `dangerous` list and `exclude_commands` are removed. The
   network list is a prompt filter, not a boundary — an interpreter such as
   `python -c` can still reach the network unprompted; the miss costs one
@@ -375,6 +386,12 @@ The tools that can be confined (`bash`, `write`, `edit`, `multiedit`,
   the check happens at execution, not in the schema, because the effective mode
   is per-call while schemas are global.
 - Approval applies to exactly one call and is not recorded as a session grant.
+- The ways an escalation can be resolved without a prompt are exactly two:
+  YOLO (which is the decision to trust the model) and an explicit user
+  approval. A tool allow-list entry does not apply, and neither does a session
+  grant or a hook allow. *(Fork: YOLO approves escalations.)*
+- With no approval surface attached, an escalation is reported as unavailable
+  immediately; it never waits for a prompt nobody can answer. *(Fork.)*
 - A rejection leaves the operation denied and returns a message telling the
   model to stop and explain rather than retry by another route.
 - The model-facing denial is a fixed marker naming the mode, so a kernel denial
@@ -470,9 +487,10 @@ matters; the rest exist to keep most of the logic testable without a kernel.
    catches "one backend granted `$TMPDIR` and another hard-coded `/tmp`".
 4. **Permission service (existing).** The existing mock permission service is
    reused to assert: confined execution is auto-approved, network commands
-   still prompt, escalation requests are approved once and never persisted.
-   *(Fork: dangerous-command and exclusion assertions were removed with the
-   features.)*
+   still prompt, escalation requests are approved once and never persisted,
+   YOLO approves an escalation, an allow-list entry does not, and a missing
+   approval surface fails fast. *(Fork: dangerous-command and exclusion
+   assertions were removed with the features.)*
 5. **File tools (existing).** The write, edit, multiedit, and download tools are
    table-tested against a temp workspace with a policy attached, asserting that
    a denied write produces the standard denial marker and leaves no directory

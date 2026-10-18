@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -149,4 +150,29 @@ func TestLoad_BrokenTrustStoreDeniesTrust(t *testing.T) {
 	require.NoError(t, os.WriteFile(trustPath, []byte("not json"), 0o600))
 
 	require.False(t, config.IsProjectTrusted(config.CanonicalProjectPath(workDir)))
+}
+
+// TestProjectTrustKeyFollowsBoundary pins the invariant the CLI and the loader
+// share: trust is recorded and checked under the project boundary, not the
+// plain working directory. When they disagreed, `crush trust --yes` in a
+// subdirectory reported success without trusting anything, and `--revoke`
+// reported revocation without revoking.
+func TestProjectTrustKeyFollowsBoundary(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	sub := filepath.Join(root, "internal", "pkg")
+	require.NoError(t, os.MkdirAll(sub, 0o755))
+
+	// A real repository: the boundary comes from git, not from the presence
+	// of a .git directory.
+	gitBin, err := exec.LookPath("git")
+	require.NoError(t, err, "git is required to exercise the project boundary")
+	cmd := exec.Command(gitBin, "init", "--quiet")
+	cmd.Dir = root
+	require.NoError(t, cmd.Run())
+
+	require.Equal(t, config.CanonicalProjectPath(root), config.ProjectTrustKey(sub),
+		"a subdirectory must be keyed by the repository root")
+	require.NotEqual(t, config.CanonicalProjectPath(sub), config.ProjectTrustKey(sub),
+		"the plain working directory is not a trust key")
 }

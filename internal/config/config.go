@@ -405,8 +405,8 @@ func (t *TUIOptions) UnmarshalJSON(data []byte) error {
 
 // Completions defines options for the completions UI.
 type Completions struct {
-	MaxDepth *int `json:"max_depth,omitempty" jsonschema:"description=Maximum depth for the ls tool,default=0,example=10"`
-	MaxItems *int `json:"max_items,omitempty" jsonschema:"description=Maximum number of items to return for the ls tool,default=1000,example=100"`
+	MaxDepth *int `json:"max_depth,omitempty" jsonschema:"description=Maximum depth for path completion,default=0,example=10"`
+	MaxItems *int `json:"max_items,omitempty" jsonschema:"description=Maximum number of path completions to return,default=1000,example=100"`
 }
 
 // Limits returns the configured completion limits. Zero means the user has not

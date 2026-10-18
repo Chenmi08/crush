@@ -433,8 +433,23 @@ func (b *Backend) CreateWorkspace(args proto.Workspace) (*Workspace, proto.Works
 		return nil, proto.Workspace{}, fmt.Errorf("failed to initialize config: %w", err)
 	}
 
-	cfg.Overrides().SkipPermissionRequests = args.YOLO
-	cfg.Overrides().EnabledChannels = args.Channels
+	cfg.UpdateOverrides(func(o *config.RuntimeOverrides) {
+		o.SkipPermissionRequests = args.YOLO
+		o.EnabledChannels = args.Channels
+	})
+	// The sandbox flags travel with the workspace request. Without them a
+	// client/server session silently ignored --sandbox and --no-sandbox and
+	// ran under the configuration alone.
+	cfg.UpdateOverrides(func(o *config.RuntimeOverrides) {
+		o.SandboxMode = args.SandboxMode
+		o.DisableSandbox = args.DisableSandbox
+	})
+	// Validate the resulting policy here, where a bad configuration still has
+	// a caller to report to. The runtime resolves it again and fails closed,
+	// but a workspace that cannot resolve should not be created at all.
+	if rt := cfg.ResolveSandboxRuntime(); rt.Err != nil {
+		return nil, proto.Workspace{}, fmt.Errorf("invalid sandbox configuration: %w", rt.Err)
+	}
 
 	if err := createDotCrushDir(cfg.Config().Options.DataDirectory); err != nil {
 		return nil, proto.Workspace{}, fmt.Errorf("failed to create data directory: %w", err)
@@ -1125,6 +1140,9 @@ func workspaceToProto(ws *Workspace) proto.Workspace {
 	if ws.Skills != nil {
 		out.Skills = skillStatesToProto(ws.Skills.States())
 	}
+	overrides := ws.Cfg.OverridesSnapshot()
+	out.SandboxMode = overrides.SandboxMode
+	out.DisableSandbox = overrides.DisableSandbox
 	return out
 }
 

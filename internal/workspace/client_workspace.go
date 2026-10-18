@@ -66,6 +66,13 @@ type ClientWorkspace struct {
 	// herdrClient reports agent state to herdr when running inside
 	// a herdr-managed pane. Nil when not in a herdr environment.
 	herdrClient *herdr.Client
+
+	// sandboxMode caches the mode last reported by the server. SandboxMode
+	// is called from the render loop, so it must not do an HTTP round trip
+	// per frame; the cache is refreshed by a mode switch and by the
+	// ConfigChanged event, which the server publishes after a change.
+	sandboxMode   string
+	sandboxModeMu sync.RWMutex
 }
 
 // SSE reconnect backoff bounds for the workspace event stream. Declared
@@ -91,6 +98,12 @@ func NewClientWorkspace(c *client.Client, ws proto.Workspace) *ClientWorkspace {
 	states := protoToSkillStates(ws.Skills)
 	mgr := skills.NewManager(nil, nil, states, skills.WithGlobalMirror())
 	subCtx, subCancel := context.WithCancel(context.Background())
+	// Seed the render-path cache from the snapshot so the status bar can show
+	// the mode without an HTTP round trip on its first frame.
+	mode := ws.SandboxMode
+	if mode == "" && ws.Config != nil && ws.Config.Permissions != nil {
+		mode = ws.Config.Permissions.SandboxConfig().Mode
+	}
 	return &ClientWorkspace{
 		client:      c,
 		ws:          ws,
@@ -99,6 +112,7 @@ func NewClientWorkspace(c *client.Client, ws proto.Workspace) *ClientWorkspace {
 		subCancel:   subCancel,
 		subDone:     make(chan struct{}),
 		herdrClient: herdr.Init(),
+		sandboxMode: mode,
 	}
 }
 
@@ -117,6 +131,9 @@ func (w *ClientWorkspace) refreshWorkspace() {
 	w.mu.Lock()
 	w.ws = *updated
 	w.mu.Unlock()
+	if updated.SandboxMode != "" {
+		w.setSandboxMode(updated.SandboxMode)
+	}
 }
 
 // cached returns a snapshot of the cached workspace.
@@ -437,18 +454,44 @@ func (w *ClientWorkspace) PermissionSetSkipRequests(skip bool) {
 
 // -- Sandbox --
 
-// SandboxMode returns the sandbox mode currently in effect on the server.
+// SandboxMode returns the sandbox mode last reported by the server.
+//
+// It is served from a cache rather than fetched: the status bar calls it on
+// every frame, and a blocking HTTP GET in the render loop stalls the UI. The
+// cache is seeded from the workspace snapshot and refreshed on every mode
+// switch.
 func (w *ClientWorkspace) SandboxMode() string {
+	w.sandboxModeMu.RLock()
+	mode := w.sandboxMode
+	w.sandboxModeMu.RUnlock()
+	if mode != "" {
+		return mode
+	}
+
+	// First use (or a snapshot without the field): ask once and cache.
 	mode, err := w.client.GetSandboxMode(context.Background(), w.workspaceID())
 	if err != nil {
 		return ""
 	}
+	w.setSandboxMode(mode)
 	return mode
+}
+
+// setSandboxMode records the mode the server reported.
+func (w *ClientWorkspace) setSandboxMode(mode string) {
+	w.sandboxModeMu.Lock()
+	w.sandboxMode = mode
+	w.sandboxModeMu.Unlock()
 }
 
 // SandboxSetMode switches the sandbox mode on the server.
 func (w *ClientWorkspace) SandboxSetMode(mode string, approved bool) (string, error) {
-	return w.client.SetSandboxMode(context.Background(), w.workspaceID(), mode, approved)
+	resolved, err := w.client.SetSandboxMode(context.Background(), w.workspaceID(), mode, approved)
+	if err != nil {
+		return "", err
+	}
+	w.setSandboxMode(resolved)
+	return resolved, nil
 }
 
 // -- Questions --
@@ -1213,6 +1256,7 @@ func (w *ClientWorkspace) translateEvent(ev any) tea.Msg {
 				SandboxMode:    e.Payload.SandboxMode,
 				Escalation:     e.Payload.Escalation,
 				EscalationMode: e.Payload.EscalationMode,
+				Reasoning:      e.Payload.Reasoning,
 			},
 		}
 	case pubsub.Event[proto.PermissionNotification]:

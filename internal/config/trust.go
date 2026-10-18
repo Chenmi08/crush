@@ -184,13 +184,22 @@ func shouldExecuteProjectConfig(cwd string) bool {
 	return IsProjectTrusted(projectTrustKey(cwd))
 }
 
-// projectTrustKey is the path trust is keyed by: the project boundary (the
+// ProjectTrustKey is the path trust is keyed by: the project boundary (the
 // git working tree root when detected), canonicalized. Keying by the boundary
 // rather than the working directory means trust follows the repository no
 // matter which subdirectory Crush was started in, while two checkouts of the
 // same repository remain separate decisions.
-func projectTrustKey(cwd string) string {
+//
+// Every writer and reader of the trust store must use this function. The CLI
+// used to record the plain working directory instead, so trusting a project
+// from a subdirectory had no effect and revoking it revoked nothing.
+func ProjectTrustKey(cwd string) string {
 	return CanonicalProjectPath(projectBoundary(cwd))
+}
+
+// projectTrustKey is the internal spelling of [ProjectTrustKey].
+func projectTrustKey(cwd string) string {
+	return ProjectTrustKey(cwd)
 }
 
 // TrustPrompt describes the one-time decision required before a project's
