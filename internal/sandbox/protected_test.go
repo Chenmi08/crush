@@ -59,14 +59,38 @@ func TestProtected_ListedPaths(t *testing.T) {
 		filepath.Join(workspace, "CLAUDE.local.md"),
 		filepath.Join(workspace, "GEMINI.md"),
 		filepath.Join(workspace, "GEMINI.local.md"),
-		// Git execution surfaces.
-		filepath.Join(workspace, ".git", "hooks"),
-		filepath.Join(workspace, ".git", "config"),
-		filepath.Join(workspace, ".git", "config.lock"),
 	}
 	for _, path := range required {
 		require.Contains(t, p.Protected, CanonicalPath(path), "missing protected path")
 	}
+
+	// No repository exists in this workspace, so the whole .git path is
+	// protected: an agent that created .git/hooks here would have its code
+	// executed by a later `git init && git commit`.
+	require.Contains(t, p.Protected, CanonicalPath(filepath.Join(workspace, ".git")),
+		"an absent .git must be protected as a whole")
+	require.Error(t, p.CheckWrite(filepath.Join(workspace, ".git", "hooks", "pre-commit")))
+}
+
+// TestProtected_ExistingRepositoryGitSurfaces verifies that with a real
+// repository the three execution surfaces are protected individually, so
+// ordinary git operations (writing objects, index, refs) still work.
+func TestProtected_ExistingRepositoryGitSurfaces(t *testing.T) {
+	t.Parallel()
+	workspace := protectedWorkspace(t)
+	require.DirExists(t, filepath.Join(workspace, ".git"), "git must be available for this test")
+
+	p := protectedPolicy(t, workspace)
+	for _, path := range []string{
+		filepath.Join(workspace, ".git", "hooks"),
+		filepath.Join(workspace, ".git", "config"),
+		filepath.Join(workspace, ".git", "config.lock"),
+	} {
+		require.Contains(t, p.Protected, CanonicalPath(path), "missing protected path")
+		require.Error(t, p.CheckWrite(path), path)
+	}
+	require.NoError(t, p.CheckWrite(filepath.Join(workspace, ".git", "objects", "ab", "cd")),
+		"git's object store must stay writable")
 }
 
 // TestProtected_ShellStartupFiles verifies shell startup files inside a
@@ -168,7 +192,10 @@ func TestProtected_CannotBeReallowed(t *testing.T) {
 // generated rules.
 func TestProtected_AgreesAcrossConsumers(t *testing.T) {
 	t.Parallel()
-	workspace := t.TempDir()
+	// A real repository, so .git is a directory and the protected set names
+	// its execution surfaces rather than the whole .git path.
+	workspace := protectedWorkspace(t)
+	require.DirExists(t, filepath.Join(workspace, ".git"), "git must be available for this test")
 	p := protectedPolicy(t, workspace)
 
 	probe := filepath.Join(workspace, "crushrc")

@@ -216,11 +216,16 @@ func newRunnerWithPolicy(cwd string, env []string, stdin io.Reader, stdout, stde
 // unconfined. The refusal is an *os.PathError so the interpreter reports it on
 // stderr with a non-zero status, exactly as a kernel denial would, and the
 // message carries the shared denial marker.
+//
+// Relative paths are resolved against the interpreter's current directory
+// (HandlerCtx.Dir), not against Crush's process working directory: the two
+// differ after `cd`, and the interpreter itself opens the path relative to the
+// former.
 func openHandler(policy *sandbox.Policy) interp.OpenHandlerFunc {
 	def := interp.DefaultOpenHandler()
 	return func(ctx context.Context, path string, flag int, perm os.FileMode) (io.ReadWriteCloser, error) {
 		if writeIntent(flag) {
-			if err := policy.CheckWrite(path); err != nil {
+			if err := policy.CheckWriteIn(interp.HandlerCtx(ctx).Dir, path); err != nil {
 				if d, ok := sandbox.AsDenial(err); ok {
 					sandbox.LogDenial(d)
 					return nil, &os.PathError{Op: "open", Path: path, Err: errors.New(d.Error())}

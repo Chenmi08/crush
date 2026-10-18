@@ -297,21 +297,27 @@ func TestFence_GoCoreutilsDisabledUnderPolicy(t *testing.T) {
 // The policy denial vocabulary is covered by the kernel-backed tests in the
 // sandbox package.
 func TestFence_ExitClassificationDistinguishesRunnerFailure(t *testing.T) {
-	policy := fencePolicy(t)
-	// Point the workspace at a path that does not exist, so bwrap fails after
-	// the process has started.
-	broken := *policy
-	broken.Workspace += "/vanished"
+	// Mask the parent of the directory the command runs in, so bwrap's
+	// chdir fails after the process has started.
+	root := t.TempDir()
+	sub := filepath.Join(root, "workspace", "sub")
+	require.NoError(t, os.MkdirAll(sub, 0o755))
+	broken, resolveErr := sandbox.Resolve(sandbox.Options{
+		Workspace: sub,
+		TempDir:   filepath.Join(root, "tmp"),
+	})
+	require.NoError(t, resolveErr)
+	broken.DenyWrites = append(broken.DenyWrites, sandbox.CanonicalPath(filepath.Join(root, "workspace")))
 
 	var stderr bytes.Buffer
 	// /bin/echo is a real binary, so the exec handler wraps it; the builtin
 	// echo would never reach the backend.
 	err := Run(t.Context(), RunOptions{
 		Command: "/bin/echo should-not-run",
-		Cwd:     t.TempDir(),
+		Cwd:     sub,
 		Env:     os.Environ(),
 		Stderr:  &stderr,
-		Policy:  &broken,
+		Policy:  broken,
 	})
 	require.Error(t, err)
 	out := stderr.String()
@@ -347,4 +353,60 @@ func TestFence_ExitClassificationDenialVocabulary(t *testing.T) {
 	require.Contains(t, out, "remedy=")
 	require.NotContains(t, out, "sandbox-runner-failed",
 		"a denial must never be reported as a runner failure")
+}
+
+// TestFence_RelativePathsUseInterpreterDir pins the base directory used by the
+// fence. The interpreter's cwd (`cd`) is independent of Crush's process cwd,
+// so a relative redirect must be checked against the former. Checking against
+// the latter refused writes inside the workspace and allowed writes outside it,
+// including protected paths like .git/config.
+func TestFence_RelativePathsUseInterpreterDir(t *testing.T) {
+	// Not parallel: the test moves the process working directory, which is
+	// global state shared by every parallel test in this package.
+	policy := fencePolicy(t)
+	outside := t.TempDir()
+
+	// The process cwd is somewhere unrelated to the interpreter's cwd.
+	original, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(t.TempDir()))
+	t.Cleanup(func() { require.NoError(t, os.Chdir(original)) })
+
+	// A relative write inside the workspace succeeds, even though it is
+	// relative to a directory that is not the process cwd.
+	_, stderr, err := runFenced(t, policy, policy.Workspace, "echo ok > inside.txt")
+	require.NoError(t, err, "stderr=%q", stderr)
+	_, statErr := os.Stat(filepath.Join(policy.Workspace, "inside.txt"))
+	require.NoError(t, statErr, "a workspace-relative write must not be refused")
+
+	// A relative write after `cd` outside the roots is refused, and the
+	// file is never created.
+	_, stderr, err = runFenced(t, policy, policy.Workspace,
+		"cd "+outside+" && echo escaped > relative.txt")
+	require.Error(t, err, "stderr=%q", stderr)
+	require.Contains(t, stderr, sandbox.Marker)
+	_, statErr = os.Stat(filepath.Join(outside, "relative.txt"))
+	require.True(t, os.IsNotExist(statErr), "the redirect must not reach the directory it names")
+}
+
+// TestFence_ProtectedPathRelativeToInterpreterDir verifies a protected path is
+// refused even when named relative to a working directory whose parent is not
+// the process cwd. This is the case the old base-directory bug allowed through.
+func TestFence_ProtectedPathRelativeToInterpreterDir(t *testing.T) {
+	// Not parallel: see the note above about the process working directory.
+	policy := fencePolicy(t)
+	gitDir := filepath.Join(policy.Workspace, ".git")
+	require.NoError(t, os.MkdirAll(gitDir, 0o755))
+
+	original, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(t.TempDir()))
+	t.Cleanup(func() { require.NoError(t, os.Chdir(original)) })
+
+	// `working_dir` points at .git; "config" is the protected .git/config.
+	_, stderr, err := runFenced(t, policy, gitDir, "echo pwned > config")
+	require.Error(t, err, "stderr=%q", stderr)
+	require.Contains(t, stderr, "reason=protected")
+	_, statErr := os.Stat(filepath.Join(gitDir, "config"))
+	require.True(t, os.IsNotExist(statErr))
 }

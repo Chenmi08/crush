@@ -448,9 +448,26 @@ func (p *Policy) CheckRead(path string) bool {
 
 // CheckWrite reports whether path may be written under the policy. It resolves
 // symlinks first, so a link inside a root pointing outside it is refused.
+//
+// A relative path is resolved against the process working directory. Callers
+// that know their own base directory (the shell interpreter, whose cwd is not
+// necessarily Crush's) must use [Policy.CheckWriteIn].
 func (p *Policy) CheckWrite(path string) error {
+	return p.CheckWriteIn("", path)
+}
+
+// CheckWriteIn is [Policy.CheckWrite] with an explicit base directory for
+// relative paths. base == "" means the process working directory.
+//
+// The interpreter's cwd is independent of Crush's: `cd sub && echo x > f`
+// resolves f against sub, so checking against the process cwd would both
+// refuse legitimate writes and allow writes outside the boundary.
+func (p *Policy) CheckWriteIn(base, path string) error {
 	if p == nil || p.Mode == ModeDangerFullAccess {
 		return nil
+	}
+	if base != "" && !filepath.IsAbs(path) {
+		path = filepath.Join(base, path)
 	}
 	canonical := CanonicalPath(path)
 

@@ -257,12 +257,23 @@ func TestBubblewrap_ProtectedVariantsRefused(t *testing.T) {
 // ordinary operation is not broken by protecting its execution surfaces.
 func TestBubblewrap_GitObjectsStayWritable(t *testing.T) {
 	requireBubblewrap(t)
-	policy := bubblewrapTestPolicy(t)
+	// A workspace that already is a repository: with no .git, the whole
+	// path is protected (nothing in it could execute yet), which is a
+	// different guarantee.
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".git", "objects"), 0o755))
+	policy, err := Resolve(Options{
+		Workspace: workspace,
+		TempDir:   filepath.Join(root, "tmp"),
+		CacheDir:  filepath.Join(root, "cache"),
+	})
+	require.NoError(t, err)
 
 	target := filepath.Join(policy.Workspace, ".git", "objects", "ab", "cdef")
-	_, stderr, err := runWrapped(t, policy, policy.Workspace,
+	_, stderr, runErr := runWrapped(t, policy, policy.Workspace,
 		"mkdir -p "+filepath.Dir(target)+" && echo x > "+target)
-	require.NoError(t, err, "stderr=%q", stderr)
+	require.NoError(t, runErr, "stderr=%q", stderr)
 	_, statErr := os.Stat(target)
 	require.NoError(t, statErr)
 }
@@ -280,4 +291,64 @@ func TestBubblewrap_NoArtifactsLeftBehind(t *testing.T) {
 	entries, err := os.ReadDir(policy.Workspace)
 	require.NoError(t, err)
 	require.Empty(t, entries, "a refused write must leave no filesystem trace")
+}
+
+// TestBubblewrap_ProtectedGitInNonRepository verifies a workspace without a
+// repository cannot have .git/hooks created: the whole .git path is masked,
+// so a later `git init && git commit` has nothing of the agent's to execute.
+func TestBubblewrap_ProtectedGitInNonRepository(t *testing.T) {
+	requireBubblewrap(t)
+	policy := bubblewrapTestPolicy(t)
+	require.NoDirExists(t, filepath.Join(policy.Workspace, ".git"))
+
+	_, stderr, err := runWrapped(t, policy, policy.Workspace,
+		"mkdir -p .git/hooks && echo 'echo pwned' > .git/hooks/pre-commit")
+	require.Error(t, err, "stderr=%q", stderr)
+	_, statErr := os.Stat(filepath.Join(policy.Workspace, ".git"))
+	require.True(t, os.IsNotExist(statErr), ".git must not be creatable inside the sandbox")
+}
+
+// TestBubblewrap_WorktreeGitFile verifies a worktree (.git is a file) is not
+// broken by the protected-path mounts: the mount points must never include a
+// path below the regular .git file.
+func TestBubblewrap_WorktreeGitFile(t *testing.T) {
+	requireBubblewrap(t)
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	gitdir := filepath.Join(root, "gitdirs", "feature")
+	require.NoError(t, os.MkdirAll(workspace, 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(gitdir, "hooks"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, ".git"), []byte("gitdir: "+gitdir+"\n"), 0o644))
+
+	policy, err := Resolve(Options{
+		Workspace: workspace,
+		TempDir:   filepath.Join(root, "tmp"),
+		CacheDir:  filepath.Join(root, "cache"),
+	})
+	require.NoError(t, err)
+
+	// The runner must start at all: a mount over .git/config (below a
+	// regular file) made every command fail with "Not a directory".
+	stdout, stderr, runErr := runWrapped(t, policy, policy.Workspace, "echo ok")
+	require.NoError(t, runErr, "stderr=%q", stderr)
+	require.Equal(t, "ok\n", stdout)
+
+	// The resolved gitdir's hooks stay protected.
+	_, stderr, runErr = runWrapped(t, policy, policy.Workspace,
+		"echo x > "+filepath.Join(gitdir, "hooks", "pre-commit"))
+	require.Error(t, runErr, "stderr=%q", stderr)
+}
+
+// TestBubblewrap_HonoursWorkingDir verifies the runner starts in the command's
+// directory, so `working_dir` and an in-interpreter `cd` reach child
+// processes.
+func TestBubblewrap_HonoursWorkingDir(t *testing.T) {
+	requireBubblewrap(t)
+	policy := bubblewrapTestPolicy(t)
+	sub := filepath.Join(policy.Workspace, "sub")
+	require.NoError(t, os.MkdirAll(sub, 0o755))
+
+	stdout, stderr, err := runWrapped(t, policy, sub, "pwd")
+	require.NoError(t, err, "stderr=%q", stderr)
+	require.Equal(t, sub, strings.TrimSpace(stdout))
 }

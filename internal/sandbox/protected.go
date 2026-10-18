@@ -97,25 +97,45 @@ func DefaultProtectedPaths(workspace string, globalDirs ...string) []string {
 	return CanonicalProtectedPaths(paths)
 }
 
-// gitProtectedPaths returns the protected .git paths for workspace: the hooks
-// directory, config, config.lock, and the resolved gitdir when .git is a file
-// (worktrees and submodules).
+// gitProtectedPaths returns the protected .git paths for workspace. The three
+// shapes .git can take are handled separately, because a path below a regular
+// file cannot be mounted:
+//
+//   - Directory (an ordinary checkout): hooks, config, config.lock.
+//   - File (a worktree or submodule): the file itself, so the agent cannot
+//     repoint the repository, plus the resolved gitdir's execution surfaces.
+//   - Absent: .git itself, so the agent cannot create a hooks directory that a
+//     later `git init && git commit` would execute. This is stricter than
+//     denying the individual files, and it is why `git init` needs a wider
+//     mode when the sandbox is confined.
 func gitProtectedPaths(workspace string) []string {
-	var paths []string
 	git := filepath.Join(workspace, ".git")
 
-	// .git may be a file containing "gitdir: <path>". Relative targets are
-	// resolved against the directory holding the file, per git's semantics.
-	if data, err := os.ReadFile(git); err == nil {
-		if target, ok := parseGitdir(string(data)); ok {
-			if !filepath.IsAbs(target) {
-				target = filepath.Join(workspace, target)
+	info, err := os.Lstat(git)
+	switch {
+	case err == nil && info.IsDir():
+		return gitProtectedFor(git)
+
+	case err == nil:
+		// .git is a file containing "gitdir: <path>". Relative targets are
+		// resolved against the directory holding the file, per git's
+		// semantics. Protect the link itself so it cannot be repointed.
+		paths := []string{git}
+		if data, err := os.ReadFile(git); err == nil {
+			if target, ok := parseGitdir(string(data)); ok {
+				if !filepath.IsAbs(target) {
+					target = filepath.Join(workspace, target)
+				}
+				paths = append(paths, gitProtectedFor(target)...)
 			}
-			paths = append(paths, gitProtectedFor(target)...)
 		}
+		return paths
+
+	default:
+		// No repository yet. Deny the whole .git path: any hooks directory
+		// created here would execute on a later `git commit`.
+		return []string{git}
 	}
-	paths = append(paths, gitProtectedFor(git)...)
-	return paths
 }
 
 func gitProtectedFor(gitPath string) []string {

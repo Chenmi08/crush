@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -85,7 +84,7 @@ func (b *bubblewrapBackend) Wrap(ctx context.Context, p *Policy, cmd *exec.Cmd) 
 	if err != nil {
 		return nil, &RunnerError{Backend: b.Name(), Platform: runtime.GOOS, Detail: err.Error()}
 	}
-	args, artifacts, err := bubblewrapArgs(p, cmd.Path, cmd.Args[1:])
+	args, artifacts, err := bubblewrapArgs(p, cmd.Path, cmd.Dir, cmd.Args[1:])
 	if err != nil {
 		return nil, err
 	}
@@ -99,13 +98,13 @@ func (b *bubblewrapBackend) Wrap(ctx context.Context, p *Policy, cmd *exec.Cmd) 
 // golden tests, which is what keeps one backend from silently granting a root
 // another does not.
 func BubblewrapArgs(p *Policy, target string, targetArgs []string) ([]string, error) {
-	args, _, err := bubblewrapArgs(p, target, targetArgs)
+	args, _, err := bubblewrapArgs(p, target, "", targetArgs)
 	return args, err
 }
 
 // bubblewrapArgs is BubblewrapArgs plus the list of paths bubblewrap will
 // create as mount points, which the caller removes after the command exits.
-func bubblewrapArgs(p *Policy, target string, targetArgs []string) ([]string, []string, error) {
+func bubblewrapArgs(p *Policy, target, workingDir string, targetArgs []string) ([]string, []string, error) {
 	if p == nil {
 		return nil, nil, errors.New("bubblewrap: nil policy")
 	}
@@ -145,23 +144,18 @@ func bubblewrapArgs(p *Policy, target string, targetArgs []string) ([]string, []
 		if hasProtectedAncestor(p, prot) {
 			continue
 		}
-		if _, err := os.Stat(prot); err == nil {
+		// Lstat, not Stat: a symlink is remounted itself, so a link cannot
+		// be swapped for a writable target after the policy was resolved.
+		if _, err := os.Lstat(prot); err == nil {
 			args = append(args, "--ro-bind", prot, prot)
 			continue
 		}
-		if !parentExists(prot) {
-			// The parent does not exist either, so the path cannot be
-			// created without first creating the parent, which the
-			// writable-root mount alone would allow. The parent-protected
-			// case is handled by hasProtectedAncestor above; for an
-			// unrelated missing parent the ancestor's own protection (or
-			// the fact that it is outside the workspace) covers it.
-			continue
-		}
 		// The path does not exist yet. Bind a placeholder file over it so
-		// the confined process cannot create it. Binding /dev/null itself
-		// would not work: /dev/null is a symlink, and bwrap would mount
-		// the symlink's target rather than deny the path.
+		// the confined process cannot create it, even when the parent
+		// does not exist either: bwrap creates the mount-point parents.
+		// Binding /dev/null itself would not work: /dev/null is a symlink,
+		// and bwrap would mount the symlink's target rather than deny the
+		// path.
 		placeholder, err := p.protectedPlaceholder()
 		if err != nil {
 			return nil, nil, err
@@ -170,23 +164,45 @@ func bubblewrapArgs(p *Policy, target string, targetArgs []string) ([]string, []
 		artifacts = append(artifacts, prot)
 	}
 
-	// Mount denials from a tmpfs so they are writable-nothing, cheap, and
-	// also work when the path does not exist yet.
+	// Denials are expressed on the path itself. A directory becomes an empty
+	// tmpfs; anything else (a file, or a path that does not exist yet) is
+	// masked with a read-only placeholder. Masking the parent directory
+	// instead would hide every sibling, which is not what deny-write means.
 	for _, deny := range p.DenyWrites {
 		if info, err := os.Stat(deny); err == nil && info.IsDir() {
 			args = append(args, "--tmpfs", deny)
 			continue
 		}
-		if parentExists(deny) {
-			args = append(args, "--tmpfs", filepath.Dir(deny))
+		if !protectedInsideAnyRoot(p, deny) {
+			// Outside every writable root the read-only root mount already
+			// denies the write.
+			continue
 		}
+		if _, err := os.Lstat(deny); err == nil {
+			args = append(args, "--ro-bind", deny, deny)
+			continue
+		}
+		placeholder, err := p.protectedPlaceholder()
+		if err != nil {
+			return nil, nil, err
+		}
+		args = append(args, "--ro-bind", placeholder, deny)
+		artifacts = append(artifacts, deny)
 	}
 
+	// Start in the command's own directory, not the workspace root: the
+	// shell sets cmd.Dir to the interpreter's current directory, so
+	// `cd sub && go test` must run in sub. Landlock and Seatbelt already
+	// honour cmd.Dir; a hardcoded --chdir made the backends disagree.
+	chdir := workingDir
+	if chdir == "" {
+		chdir = p.Workspace
+	}
 	args = append(args,
 		"--unshare-pid",
 		"--die-with-parent",
 		"--new-session",
-		"--chdir", p.Workspace,
+		"--chdir", chdir,
 	)
 
 	// The private temp directory replaces /tmp semantics for tools that
@@ -211,11 +227,6 @@ func hasProtectedAncestor(p *Policy, prot string) bool {
 		}
 	}
 	return false
-}
-
-func parentExists(path string) bool {
-	_, err := os.Stat(filepath.Dir(path))
-	return err == nil
 }
 
 // protectedInsideAnyRoot reports whether prot needs a read-only remount: it

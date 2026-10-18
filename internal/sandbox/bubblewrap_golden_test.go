@@ -5,6 +5,7 @@ package sandbox
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -148,4 +149,49 @@ func TestBubblewrapArgs_ParityWithSharedPolicy(t *testing.T) {
 		}
 	}
 	require.Equal(t, want, bound)
+}
+
+// TestBubblewrapArgs_WorkingDir verifies the runner starts in the command's
+// own directory. The shell sets cmd.Dir to the interpreter's cwd, so a
+// hardcoded workspace --chdir would silently ignore `cd sub && ...` and
+// working_dir, which Landlock and Seatbelt honour.
+func TestBubblewrapArgs_WorkingDir(t *testing.T) {
+	policy, _ := goldenPolicy(t)
+	sub := filepath.Join(policy.Workspace, "sub")
+	require.NoError(t, os.MkdirAll(sub, 0o755))
+
+	args, _, err := bubblewrapArgs(policy, "/bin/sh", sub, []string{"-c", "pwd"})
+	require.NoError(t, err)
+
+	idx := slices.Index(args, "--chdir")
+	require.NotEqual(t, -1, idx, "the runner must set a working directory")
+	require.Equal(t, sub, args[idx+1], "the command's own directory wins over the workspace")
+
+	// With no explicit directory the workspace is still the default.
+	args, _, err = bubblewrapArgs(policy, "/bin/sh", "", []string{"-c", "pwd"})
+	require.NoError(t, err)
+	idx = slices.Index(args, "--chdir")
+	require.NotEqual(t, -1, idx)
+	require.Equal(t, policy.Workspace, args[idx+1])
+}
+
+// TestBubblewrapArgs_ProtectedMissingParent pins that a protected path whose
+// parent does not exist is masked rather than skipped. Skipping it let the
+// agent create the path inside the sandbox, which for .git/hooks means a
+// later `git init && git commit` executes agent-written code.
+func TestBubblewrapArgs_ProtectedMissingParent(t *testing.T) {
+	policy, _ := goldenPolicy(t)
+	missingParent := filepath.Join(policy.Workspace, "no-such-dir", "config")
+	policy.Protected = CanonicalProtectedPaths(append(policy.Protected, missingParent))
+
+	args, _, err := bubblewrapArgs(policy, "/bin/sh", "", nil)
+	require.NoError(t, err)
+
+	found := false
+	for i := 0; i+2 < len(args); i++ {
+		if args[i] == "--ro-bind" && args[i+2] == missingParent {
+			found = true
+		}
+	}
+	require.True(t, found, "a protected path with a missing parent must still be masked: %v", args)
 }
