@@ -838,11 +838,11 @@ func TestConfig_setupAgentsWithNoDisabledTools(t *testing.T) {
 
 	taskAgent, ok := cfg.Agents[AgentTask]
 	require.True(t, ok)
-	assert.Equal(t, []string{"bash", "lsp_symbols", "lsp_definition", "lsp_call_hierarchy", "glob", "grep", "ls", "sourcegraph", "view"}, taskAgent.AllowedTools)
+	assert.Equal(t, []string{"bash", "lsp_symbols", "lsp_definition", "lsp_call_hierarchy", "sourcegraph", "view"}, taskAgent.AllowedTools)
 
 	planAgent, ok := cfg.Agents[AgentPlan]
 	require.True(t, ok)
-	assert.Equal(t, []string{"agent", "lsp_symbols", "lsp_definition", "lsp_call_hierarchy", "glob", "grep", "ls", "question", "sourcegraph", "view"}, planAgent.AllowedTools)
+	assert.Equal(t, []string{"agent", "lsp_symbols", "lsp_definition", "lsp_call_hierarchy", "question", "sourcegraph", "view"}, planAgent.AllowedTools)
 }
 
 func TestConfig_setupAgentsWithDisabledTools(t *testing.T) {
@@ -864,11 +864,11 @@ func TestConfig_setupAgentsWithDisabledTools(t *testing.T) {
 
 	taskAgent, ok := cfg.Agents[AgentTask]
 	require.True(t, ok)
-	assert.Equal(t, []string{"bash", "lsp_symbols", "lsp_definition", "lsp_call_hierarchy", "glob", "ls", "sourcegraph", "view"}, taskAgent.AllowedTools)
+	assert.Equal(t, []string{"bash", "lsp_symbols", "lsp_definition", "lsp_call_hierarchy", "sourcegraph", "view"}, taskAgent.AllowedTools)
 
 	planAgent, ok := cfg.Agents[AgentPlan]
 	require.True(t, ok)
-	assert.Equal(t, []string{"agent", "lsp_symbols", "lsp_definition", "lsp_call_hierarchy", "glob", "ls", "question", "sourcegraph", "view"}, planAgent.AllowedTools)
+	assert.Equal(t, []string{"agent", "lsp_symbols", "lsp_definition", "lsp_call_hierarchy", "question", "sourcegraph", "view"}, planAgent.AllowedTools)
 }
 
 func TestConfig_setupAgentsWithEveryReadOnlyToolDisabled(t *testing.T) {

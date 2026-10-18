@@ -1,9 +1,12 @@
 package tools
 
 import (
+	"bytes"
 	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -19,6 +22,65 @@ type resolvedSymbol struct {
 	path   string
 	line   int
 	char   int
+}
+
+// symbolMatch is one ripgrep hit for a symbol search: the file and the
+// 1-based line and column of the match.
+type symbolMatch struct {
+	path    string
+	lineNum int
+	charNum int
+}
+
+// searchSymbolMatches runs ripgrep over workingDir for the given regex
+// pattern and returns up to limit matches. The LSP tools use it to find
+// candidate files before asking an LSP client to confirm a position.
+func searchSymbolMatches(ctx context.Context, pattern, workingDir string, limit int) ([]symbolMatch, error) {
+	name := getRg()
+	if name == "" {
+		return nil, fmt.Errorf("ripgrep not found in $PATH")
+	}
+
+	args := []string{"--json", "-H", "-n", "-e", pattern, workingDir}
+	cmd := exec.CommandContext(ctx, name, args...)
+	output, err := cmd.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return nil, nil // No matches.
+		}
+		return nil, fmt.Errorf("failed to search for symbol: %w", err)
+	}
+
+	var matches []symbolMatch
+	for line := range bytes.SplitSeq(bytes.TrimSpace(output), []byte{'\n'}) {
+		var event struct {
+			Type string `json:"type"`
+			Data struct {
+				Path struct {
+					Text string `json:"text"`
+				} `json:"path"`
+				LineNumber int `json:"line_number"`
+				Submatches []struct {
+					Start int `json:"start"`
+				} `json:"submatches"`
+			} `json:"data"`
+		}
+		if json.Unmarshal(line, &event) != nil || event.Type != "match" {
+			continue
+		}
+		match := symbolMatch{
+			path:    event.Data.Path.Text,
+			lineNum: event.Data.LineNumber,
+		}
+		if len(event.Data.Submatches) > 0 {
+			match.charNum = event.Data.Submatches[0].Start + 1 // 1-based column.
+		}
+		matches = append(matches, match)
+		if limit > 0 && len(matches) >= limit {
+			break
+		}
+	}
+	return matches, nil
 }
 
 // resolveSymbol greps for a symbol name, triggers lazy LSP startup, and
@@ -56,9 +118,9 @@ func resolveSymbolResults(ctx context.Context, lspManager *lsp.Manager, symbol, 
 	// (e.g. "Bar" inside "myBar"). The symbol is already QuoteMeta'd
 	// so dots and other regex metacharacters are escaped.
 	pattern := `\b` + regexp.QuoteMeta(symbol) + `\b`
-	matches, _, err := searchFiles(ctx, grepOptions{pattern: pattern, path: workingDir}, 100)
+	matches, err := searchSymbolMatches(ctx, pattern, workingDir, 100)
 	if err != nil {
-		return nil, fmt.Errorf("failed to search for symbol: %w", err)
+		return nil, err
 	}
 	if len(matches) == 0 {
 		return nil, fmt.Errorf("symbol '%s' not found in grep results", symbol)

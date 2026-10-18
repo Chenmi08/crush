@@ -86,10 +86,6 @@
           "$ref": "#/$defs/Permissions",
           "description": "Permission settings for tool usage"
         },
-        "tools": {
-          "$ref": "#/$defs/Tools",
-          "description": "Tool configurations"
-        },
         "hooks": {
           "additionalProperties": {
             "items": {
@@ -709,7 +705,7 @@
             ]
           },
           "type": "array",
-          "description": "Extra shell commands that leave the sandbox boundary and require a prompt, besides the built-in network list"
+          "description": "Extra shell commands that leave the sandbox boundary and require a prompt"
         },
         "sandbox": {
           "$ref": "#/$defs/Sandbox",
@@ -1033,63 +1029,6 @@
         "expires_in",
         "expires_at"
       ]
-    },
-    "ToolGlob": {
-      "properties": {
-        "timeout": {
-          "type": "integer",
-          "description": "Timeout for the glob tool call"
-        }
-      },
-      "additionalProperties": false,
-      "type": "object"
-    },
-    "ToolGrep": {
-      "properties": {
-        "timeout": {
-          "type": "integer",
-          "description": "Timeout for the grep tool call"
-        }
-      },
-      "additionalProperties": false,
-      "type": "object"
-    },
-    "ToolLs": {
-      "properties": {
-        "max_depth": {
-          "type": "integer",
-          "description": "Maximum depth for the ls tool",
-          "default": 0,
-          "examples": [
-            10
-          ]
-        },
-        "max_items": {
-          "type": "integer",
-          "description": "Maximum number of items to return for the ls tool",
-          "default": 1000,
-          "examples": [
-            100
-          ]
-        }
-      },
-      "additionalProperties": false,
-      "type": "object"
-    },
-    "Tools": {
-      "properties": {
-        "ls": {
-          "$ref": "#/$defs/ToolLs"
-        },
-        "grep": {
-          "$ref": "#/$defs/ToolGrep"
-        },
-        "glob": {
-          "$ref": "#/$defs/ToolGlob"
-        }
-      },
-      "additionalProperties": false,
-      "type": "object"
     }
   }
 }

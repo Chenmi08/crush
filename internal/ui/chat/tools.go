@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/crush/internal/fsext"
 	"github.com/charmbracelet/crush/internal/hooks"
 	"github.com/charmbracelet/crush/internal/message"
+	"github.com/charmbracelet/crush/internal/proto"
 	"github.com/charmbracelet/crush/internal/stringext"
 	"github.com/charmbracelet/crush/internal/ui/anim"
 	"github.com/charmbracelet/crush/internal/ui/common"
@@ -244,11 +245,11 @@ func NewToolMessageItem(
 		item = NewEditToolMessageItem(sty, toolCall, result, canceled)
 	case tools.MultiEditToolName:
 		item = NewMultiEditToolMessageItem(sty, toolCall, result, canceled)
-	case tools.GlobToolName:
+	case proto.GlobToolName:
 		item = NewGlobToolMessageItem(sty, toolCall, result, canceled)
-	case tools.GrepToolName:
+	case proto.GrepToolName:
 		item = NewGrepToolMessageItem(sty, toolCall, result, canceled)
-	case tools.LSToolName:
+	case proto.LSToolName:
 		item = NewLSToolMessageItem(sty, toolCall, result, canceled)
 	case tools.DownloadToolName:
 		item = NewDownloadToolMessageItem(sty, toolCall, result, canceled)
@@ -1353,8 +1354,8 @@ func (t *baseToolMessageItem) formatParametersForCopy() string {
 		if json.Unmarshal([]byte(t.toolCall.Input), &params) == nil {
 			return fmt.Sprintf("**URL:** %s", strings.Join(params.URLs, ", "))
 		}
-	case tools.GrepToolName:
-		var params tools.GrepParams
+	case proto.GrepToolName:
+		var params proto.GrepParams
 		if json.Unmarshal([]byte(t.toolCall.Input), &params) == nil {
 			var parts []string
 			parts = append(parts, fmt.Sprintf("**Pattern:** %s", params.Pattern))
@@ -1369,8 +1370,8 @@ func (t *baseToolMessageItem) formatParametersForCopy() string {
 			}
 			return strings.Join(parts, "\n")
 		}
-	case tools.GlobToolName:
-		var params tools.GlobParams
+	case proto.GlobToolName:
+		var params proto.GlobParams
 		if json.Unmarshal([]byte(t.toolCall.Input), &params) == nil {
 			var parts []string
 			parts = append(parts, fmt.Sprintf("**Pattern:** %s", params.Pattern))
@@ -1379,8 +1380,8 @@ func (t *baseToolMessageItem) formatParametersForCopy() string {
 			}
 			return strings.Join(parts, "\n")
 		}
-	case tools.LSToolName:
-		var params tools.LSParams
+	case proto.LSToolName:
+		var params proto.LSParams
 		if json.Unmarshal([]byte(t.toolCall.Input), &params) == nil {
 			path := params.Path
 			if path == "" {
@@ -1467,7 +1468,7 @@ func (t *baseToolMessageItem) formatResultForCopy() string {
 		return t.formatWebFetchResultForCopy()
 	case agent.AgentToolName:
 		return t.formatAgentResultForCopy()
-	case tools.DownloadToolName, tools.GrepToolName, tools.GlobToolName, tools.LSToolName, tools.SourcegraphToolName, tools.DiagnosticsToolName, tools.TodosToolName:
+	case tools.DownloadToolName, proto.GrepToolName, proto.GlobToolName, proto.LSToolName, tools.SourcegraphToolName, tools.DiagnosticsToolName, tools.TodosToolName:
 		return fmt.Sprintf("```\n%s\n```", t.result.Content)
 	default:
 		return t.result.Content
@@ -1777,11 +1778,11 @@ func prettifyToolName(name string) string {
 		return "Fetch"
 	case tools.WebSearchToolName:
 		return "Search"
-	case tools.GlobToolName:
+	case proto.GlobToolName:
 		return "Glob"
-	case tools.GrepToolName:
+	case proto.GrepToolName:
 		return "Grep"
-	case tools.LSToolName:
+	case proto.LSToolName:
 		return "List"
 	case tools.SourcegraphToolName:
 		return "Sourcegraph"

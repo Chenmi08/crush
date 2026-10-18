@@ -86,22 +86,6 @@ func TestPermissionRequestParamsTypeAssertable(t *testing.T) {
 			},
 		},
 		{
-			name:     "ls",
-			toolName: tools.LSToolName,
-			params: tools.LSPermissionsParams{
-				Path:   "/tmp",
-				Ignore: []string{".git"},
-				Depth:  2,
-			},
-			assert: func(t *testing.T, got any) {
-				v, ok := got.(tools.LSPermissionsParams)
-				require.True(t, ok, "params must decode as tools.LSPermissionsParams, got %T", got)
-				require.Equal(t, "/tmp", v.Path)
-				require.Equal(t, []string{".git"}, v.Ignore)
-				require.Equal(t, 2, v.Depth)
-			},
-		},
-		{
 			name:     "view",
 			toolName: tools.ViewToolName,
 			params: tools.ViewPermissionsParams{

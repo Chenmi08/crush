@@ -107,12 +107,6 @@ type GlobParams struct {
 	Path    string `json:"path"`
 }
 
-// GlobResponseMetadata represents the metadata for a glob tool response.
-type GlobResponseMetadata struct {
-	NumberOfFiles int  `json:"number_of_files"`
-	Truncated     bool `json:"truncated"`
-}
-
 const GrepToolName = "grep"
 
 // GrepParams represents the parameters for the grep tool.
@@ -123,12 +117,6 @@ type GrepParams struct {
 	LiteralText bool   `json:"literal_text"`
 }
 
-// GrepResponseMetadata represents the metadata for a grep tool response.
-type GrepResponseMetadata struct {
-	NumberOfMatches int  `json:"number_of_matches"`
-	Truncated       bool `json:"truncated"`
-}
-
 const LSToolName = "ls"
 
 // LSParams represents the parameters for the ls tool.
@@ -137,21 +125,12 @@ type LSParams struct {
 	Ignore []string `json:"ignore"`
 }
 
-// LSPermissionsParams represents the permission parameters for the ls tool.
-type LSPermissionsParams = tools.LSPermissionsParams
-
 // TreeNode represents a node in a directory tree.
 type TreeNode struct {
 	Name     string      `json:"name"`
 	Path     string      `json:"path"`
 	Type     string      `json:"type"`
 	Children []*TreeNode `json:"children,omitempty"`
-}
-
-// LSResponseMetadata represents the metadata for an ls tool response.
-type LSResponseMetadata struct {
-	NumberOfFiles int  `json:"number_of_files"`
-	Truncated     bool `json:"truncated"`
 }
 
 const MultiEditToolName = "multiedit"

@@ -29,7 +29,6 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/crush/internal/agent/hyper"
 	"github.com/charmbracelet/crush/internal/agent/notify"
-	agenttools "github.com/charmbracelet/crush/internal/agent/tools"
 	"github.com/charmbracelet/crush/internal/agent/tools/mcp"
 	"github.com/charmbracelet/crush/internal/app"
 	"github.com/charmbracelet/crush/internal/clipboard"
@@ -6741,7 +6740,6 @@ func (m *UI) newSession() tea.Cmd {
 	m.invalidatePromptQueue()
 	m.pillsView = ""
 	m.historyReset()
-	agenttools.ResetCache()
 	return tea.Batch(
 		planCmd,
 		func() tea.Msg {

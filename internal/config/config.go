@@ -819,40 +819,6 @@ type Agent struct {
 	ContextPaths []string `json:"context_paths,omitempty"`
 }
 
-type Tools struct {
-	Ls   ToolLs   `json:"ls,omitzero"`
-	Grep ToolGrep `json:"grep,omitzero"`
-	Glob ToolGlob `json:"glob,omitzero"`
-}
-
-type ToolLs struct {
-	MaxDepth *int `json:"max_depth,omitempty" jsonschema:"description=Maximum depth for the ls tool,default=0,example=10"`
-	MaxItems *int `json:"max_items,omitempty" jsonschema:"description=Maximum number of items to return for the ls tool,default=1000,example=100"`
-}
-
-// Limits returns the user-defined max-depth and max-items, or their defaults.
-func (t ToolLs) Limits() (depth, items int) {
-	return ptrValOr(t.MaxDepth, 0), ptrValOr(t.MaxItems, 0)
-}
-
-type ToolGrep struct {
-	Timeout *time.Duration `json:"timeout,omitempty" jsonschema:"description=Timeout for the grep tool call,default=5s,example=10s"`
-}
-
-// GetTimeout returns the user-defined timeout or the default.
-func (t ToolGrep) GetTimeout() time.Duration {
-	return ptrValOr(t.Timeout, 5*time.Second)
-}
-
-type ToolGlob struct {
-	Timeout *time.Duration `json:"timeout,omitempty" jsonschema:"description=Timeout for the glob tool call,default=30s,example=10s"`
-}
-
-// GetTimeout returns the user-defined timeout or the default.
-func (t ToolGlob) GetTimeout() time.Duration {
-	return ptrValOr(t.Timeout, 30*time.Second)
-}
-
 // HookConfig defines a user-configured shell command that fires on a hook
 // event (e.g. PreToolUse). This is a pure-data struct: matcher compilation
 // is owned by hooks.Runner so a JSON round-trip, merge, or reload can't
@@ -906,8 +872,6 @@ type Config struct {
 	Options *Options `json:"options,omitempty" jsonschema:"description=General application options"`
 
 	Permissions *Permissions `json:"permissions,omitempty" jsonschema:"description=Permission settings for tool usage"`
-
-	Tools Tools `json:"tools,omitzero" jsonschema:"description=Tool configurations"`
 
 	Hooks map[string][]HookConfig `json:"hooks,omitempty" jsonschema:"description=User-defined shell commands that fire on hook events (e.g. PreToolUse)"`
 
@@ -1108,9 +1072,6 @@ func allToolNames() []string {
 		"lsp_rename",
 		"lsp_replace_symbol",
 		"fetch",
-		"glob",
-		"grep",
-		"ls",
 		"question",
 		"sourcegraph",
 		"todos",
@@ -1135,7 +1096,7 @@ func resolveReadOnlyTools(tools []string) []string {
 	// can search with rg, fd, and friends while every write attempt is
 	// refused by the policy. Without bash the sub-agent would be limited to
 	// the dedicated file tools alone.
-	readOnlyTools := []string{"bash", "glob", "grep", "ls", "lsp_call_hierarchy", "lsp_definition", "lsp_symbols", "sourcegraph", "view"}
+	readOnlyTools := []string{"bash", "lsp_call_hierarchy", "lsp_definition", "lsp_symbols", "sourcegraph", "view"}
 	// filter to only include tools that are in allowedtools (include mode)
 	return filterSlice(tools, readOnlyTools, true)
 }
@@ -1150,9 +1111,6 @@ func resolvePlanTools(tools []string) []string {
 	// needs symbol navigation just as much as research does.
 	planTools := []string{
 		"agent",
-		"glob",
-		"grep",
-		"ls",
 		"lsp_call_hierarchy",
 		"lsp_definition",
 		"lsp_symbols",
@@ -1175,12 +1133,6 @@ func filterSlice(data []string, mask []string, include bool) []string {
 	return filtered
 }
 
-// coderExcludedTools are hidden from the coder agent so that it searches
-// with shell tools (`rg`/`fd`) instead of the dedicated file tools. The task
-// agent keeps them: it is a read-only searcher and benefits from bounded,
-// .gitignore-aware output.
-var coderExcludedTools = []string{"glob", "grep", "ls"}
-
 func (c *Config) SetupAgents() {
 	// Global tool set, after any user-configured disabled_tools.
 	allowedTools := resolveAllowedTools(allToolNames(), c.Options.DisabledTools)
@@ -1192,7 +1144,7 @@ func (c *Config) SetupAgents() {
 			Description:  "An agent that helps with executing coding tasks.",
 			Model:        SelectedModelTypeLarge,
 			ContextPaths: c.Options.ContextPaths,
-			AllowedTools: filterSlice(allowedTools, coderExcludedTools, false),
+			AllowedTools: allowedTools,
 			// The coder is the top-level agent, so it sees every MCP the
 			// user configured.
 			AllowAllMCP: true,

@@ -26,7 +26,7 @@ These rules override everything else. Follow them strictly:
 
 <workflow>
 1. decompose the request into independent exploration threads (e.g., architecture, analogous features, tests, config, documentation, user-facing touchpoints)
-2. explore using direct search tools (`glob`, `grep`, `ls`, `view`); delegate independent searches to sub-agents when that is useful
+2. explore using the shell (`rg`, `fd`) and the `view` tool; delegate independent searches to sub-agents when that is useful
 3. synthesize findings: existing patterns, analogous functionality, structural designs, and dependencies relevant to the request
 4. critically review the synthesis — identify gaps, contradictions, unverified assumptions, and areas not yet explored; use additional targeted reads or searches to close gaps; repeat until confident nothing material is missing
 5. assess potential risks, edge cases, failure modes, and pre-existing issues in touched areas; do not expand scope beyond what informs the plan

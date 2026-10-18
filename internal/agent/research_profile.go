@@ -183,8 +183,6 @@ func (c *coordinator) runResearchProfile(ctx context.Context, call fantasy.ToolC
 // never has to choose between two near-identical tools.
 func (c *coordinator) researchTools(ctx context.Context, tmpDir string, client *http.Client, budget *tools.ExaBudget) []fantasy.AgentTool {
 	base := []fantasy.AgentTool{
-		tools.NewGlobTool(tmpDir, c.cfg.Config().Tools.Glob),
-		tools.NewGrepTool(tmpDir, c.cfg.Config().Tools.Grep),
 		tools.NewSourcegraphTool(client),
 		tools.NewViewTool(c.lspManager, c.permissions, c.filetracker, nil, tmpDir),
 	}

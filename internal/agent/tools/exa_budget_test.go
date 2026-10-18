@@ -65,7 +65,7 @@ func TestWithExaBudgetChargesOnlyNamedTools(t *testing.T) {
 
 	budget := NewExaBudget(2)
 	search := &stubTool{name: "web_search_exa"}
-	other := &stubTool{name: "glob"}
+	other := &stubTool{name: "view"}
 
 	wrapped := WithExaBudget(budget, []string{"web_search_exa"}, []fantasy.AgentTool{search, other})
 	require.Len(t, wrapped, 2)

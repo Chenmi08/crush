@@ -48,7 +48,10 @@ func NewRenameTool(
 			workingDir := cmp.Or(params.Path, ".")
 			resolved, err := resolveSymbol(ctx, lspManager, params.Symbol, workingDir)
 			if err != nil {
-				return fantasy.NewTextErrorResponse(fmt.Sprintf("Symbol '%s' not found", params.Symbol)), nil
+				// A search failure (ripgrep missing, for example) must not
+				// masquerade as "not found": the model would retry the same
+				// call instead of fixing the environment.
+				return fantasy.NewTextErrorResponse(err.Error()), nil
 			}
 
 			edit, err := resolved.client.Rename(ctx, resolved.path, resolved.line, resolved.char, params.NewName)

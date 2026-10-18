@@ -195,5 +195,5 @@ func writeLocalFetch(ctx context.Context, out *strings.Builder, workingDir strin
 	}
 
 	fmt.Fprintf(out, "## %s\n\nFetched directly (large page). Content saved to: %s\n\n", rawURL, tempFilePath)
-	fmt.Fprintf(out, "Use the view and grep tools to read it.\n\n")
+	fmt.Fprintf(out, "Use the view tool and shell `rg` to read it.\n\n")
 }

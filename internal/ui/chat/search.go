@@ -3,9 +3,9 @@ package chat
 import (
 	"encoding/json"
 
-	"github.com/charmbracelet/crush/internal/agent/tools"
 	"github.com/charmbracelet/crush/internal/fsext"
 	"github.com/charmbracelet/crush/internal/message"
+	"github.com/charmbracelet/crush/internal/proto"
 	"github.com/charmbracelet/crush/internal/ui/styles"
 )
 
@@ -40,7 +40,7 @@ func (g *GlobToolRenderContext) RenderTool(sty *styles.Styles, width int, opts *
 		return pendingTool(sty, "Glob", opts.Anim, opts.Compact)
 	}
 
-	var params tools.GlobParams
+	var params proto.GlobParams
 	if err := json.Unmarshal([]byte(opts.ToolCall.Input), &params); err != nil {
 		return toolErrorContent(sty, &message.ToolResult{Content: "Invalid parameters"}, cappedWidth)
 	}
@@ -94,9 +94,9 @@ type GrepToolRenderContext struct{}
 
 // partialGrepParams recovers the grep parameters that already finished
 // streaming from a partial tool call input.
-func partialGrepParams(input string) tools.GrepParams {
+func partialGrepParams(input string) proto.GrepParams {
 	fields := partialJSONFields(input)
-	var params tools.GrepParams
+	var params proto.GrepParams
 	params.Pattern, _ = fields["pattern"].(string)
 	params.Path, _ = fields["path"].(string)
 	params.Include, _ = fields["include"].(string)
@@ -107,7 +107,7 @@ func partialGrepParams(input string) tools.GrepParams {
 // RenderTool implements the [ToolRenderer] interface.
 func (g *GrepToolRenderContext) RenderTool(sty *styles.Styles, width int, opts *ToolRenderOpts) string {
 	cappedWidth := cappedMessageWidth(width)
-	var params tools.GrepParams
+	var params proto.GrepParams
 	if err := json.Unmarshal([]byte(opts.ToolCall.Input), &params); err != nil {
 		if !opts.IsPending() {
 			return toolErrorContent(sty, &message.ToolResult{Content: "Invalid parameters"}, cappedWidth)
@@ -190,7 +190,7 @@ func (l *LSToolRenderContext) RenderTool(sty *styles.Styles, width int, opts *To
 		return pendingTool(sty, "List", opts.Anim, opts.Compact)
 	}
 
-	var params tools.LSParams
+	var params proto.LSParams
 	if err := json.Unmarshal([]byte(opts.ToolCall.Input), &params); err != nil {
 		return toolErrorContent(sty, &message.ToolResult{Content: "Invalid parameters"}, cappedWidth)
 	}
@@ -250,7 +250,7 @@ func (s *SourcegraphToolRenderContext) RenderTool(sty *styles.Styles, width int,
 		return pendingTool(sty, "Sourcegraph", opts.Anim, opts.Compact)
 	}
 
-	var params tools.SourcegraphParams
+	var params proto.SourcegraphParams
 	if err := json.Unmarshal([]byte(opts.ToolCall.Input), &params); err != nil {
 		return toolErrorContent(sty, &message.ToolResult{Content: "Invalid parameters"}, cappedWidth)
 	}

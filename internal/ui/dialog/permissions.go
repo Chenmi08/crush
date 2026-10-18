@@ -478,7 +478,7 @@ func (p *Permissions) renderHeader(contentWidth int) string {
 	switch p.permission.ToolName {
 	case tools.EditToolName, tools.WriteToolName, tools.MultiEditToolName,
 		tools.ViewToolName, tools.ReplaceSymbolToolName,
-		tools.DownloadToolName, tools.LSToolName:
+		tools.DownloadToolName:
 		// These tools show their own File/Directory line below.
 	default:
 		lines = append(lines, p.renderKeyValue("Path", fsext.PrettyPath(p.permission.Path), contentWidth))
@@ -511,10 +511,6 @@ func (p *Permissions) renderHeader(contentWidth int) string {
 		}
 		if filePath != "" {
 			lines = append(lines, p.renderKeyValue("File", fsext.PrettyPath(filePath), contentWidth))
-		}
-	case tools.LSToolName:
-		if params, ok := p.permission.Params.(tools.LSPermissionsParams); ok {
-			lines = append(lines, p.renderKeyValue("Directory", fsext.PrettyPath(params.Path), contentWidth))
 		}
 	}
 
@@ -577,8 +573,6 @@ func (p *Permissions) renderContent(width int) string {
 		return p.renderWebResearchContent(width)
 	case tools.ViewToolName:
 		return p.renderViewContent(width)
-	case tools.LSToolName:
-		return p.renderLSContent(width)
 	default:
 		return p.renderDefaultContent(width)
 	}
@@ -712,20 +706,6 @@ func (p *Permissions) renderViewContent(width int) string {
 	}
 	if params.Limit > 0 && params.Limit != 2000 {
 		content += fmt.Sprintf("\nLines to read: %d", params.Limit)
-	}
-
-	return p.renderContentPanel(content, width)
-}
-
-func (p *Permissions) renderLSContent(width int) string {
-	params, ok := p.permission.Params.(tools.LSPermissionsParams)
-	if !ok {
-		return ""
-	}
-
-	content := fmt.Sprintf("Directory: %s", fsext.PrettyPath(params.Path))
-	if len(params.Ignore) > 0 {
-		content += fmt.Sprintf("\nIgnore patterns: %s", strings.Join(params.Ignore, ", "))
 	}
 
 	return p.renderContentPanel(content, width)
