@@ -128,6 +128,12 @@ unconfined.`,
 		}
 		rt := store.ResolveSandboxRuntime()
 		status := store.SandboxStatus(rt)
+		if rt.Err != nil {
+			// The session fails closed, and so does this diagnostic: running
+			// the command unconfined here would be the opposite of what
+			// "validate the configuration on this host" means.
+			return fmt.Errorf("sandbox configuration: %w", rt.Err)
+		}
 
 		cmd.Printf("sandbox: mode=%s backend=%s enforcement=%s\n", rt.RequestedMode, status.Backend, status.Enforcement)
 		if status.Missing != "" {

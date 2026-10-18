@@ -44,7 +44,7 @@ func (s *ConfigStore) ResolveSandboxRuntime() SandboxRuntime {
 	permissions := cfg.Permissions
 	requested := permissions.SandboxConfig()
 
-	overrides := s.Overrides()
+	overrides := s.OverridesSnapshot()
 	if overrides.SandboxMode != "" {
 		requested.Mode = overrides.SandboxMode
 	}
@@ -63,6 +63,7 @@ func (s *ConfigStore) ResolveSandboxRuntime() SandboxRuntime {
 	if err := ValidateSandbox(requested); err != nil {
 		rt.Err = err
 		rt.Configuration = requested
+		rt.Policy = sandbox.FailClosedPolicy(s.WorkingDir(), err)
 		return rt
 	}
 
@@ -81,6 +82,10 @@ func (s *ConfigStore) ResolveSandboxRuntime() SandboxRuntime {
 	rt.Configuration = requested
 	if err != nil {
 		rt.Err = err
+		// Fail closed: an unresolved policy denies every write instead of
+		// leaving the session unconfined. Nil means "no fence", so returning
+		// nil here would turn a configuration typo into an open boundary.
+		rt.Policy = sandbox.FailClosedPolicy(s.WorkingDir(), err)
 		return rt
 	}
 	rt.Policy = policy

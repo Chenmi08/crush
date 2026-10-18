@@ -406,6 +406,7 @@ func writeSandbox(b *strings.Builder, cfg *config.ConfigStore) {
 	}
 	if rt.Err != nil {
 		fmt.Fprintf(b, "configuration_error = %v\n", rt.Err)
+		b.WriteString("writes = refused (the sandbox fails closed until the configuration is fixed)\n")
 	}
 	fmt.Fprintf(b, "backend = %s\n", status.Backend)
 	fmt.Fprintf(b, "enforcement = %s\n", status.Enforcement)

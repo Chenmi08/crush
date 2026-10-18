@@ -98,6 +98,11 @@ type Policy struct {
 	// CacheDir is the user cache directory, included by default so build
 	// tools work out of the box.
 	CacheDir string
+	// ConfigError names the configuration problem that made this policy
+	// unusable. A policy carrying one denies every write: a configuration
+	// error must never widen the boundary, so the session fails closed
+	// instead of running with no fence at all.
+	ConfigError string
 }
 
 // Denial is a policy refusal. It is the single vocabulary shared by the
@@ -113,6 +118,9 @@ type Denial struct {
 	// Protected reports whether the path was refused because it is protected
 	// rather than merely outside the writable set.
 	Protected bool
+	// ConfigError reports that the policy itself could not be resolved, so
+	// nothing is writable until the configuration is fixed.
+	ConfigError bool
 	// Remedy names the setting a user can change to allow the write.
 	Remedy string
 	// EscalationHint is set when the caller may request a wider mode.
@@ -130,9 +138,12 @@ const Marker = "sandbox-denied"
 func (d Denial) Error() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s mode=%s path=%s", Marker, d.Mode, d.Path)
-	if d.Protected {
+	switch {
+	case d.ConfigError:
+		b.WriteString(" reason=invalid-config")
+	case d.Protected:
 		b.WriteString(" reason=protected")
-	} else {
+	default:
 		b.WriteString(" reason=outside-writable-roots")
 	}
 	if d.Remedy != "" {
@@ -329,6 +340,12 @@ func dedupe(paths []string) []string {
 	return out
 }
 
+// canonicalExisting canonicalizes a required directory, resolving symlinks and
+// falling back to the cleaned absolute path when it does not exist yet. A
+// workspace can be created before its first command runs (the server creates
+// one for a client that is about to check out a repository), so a missing
+// directory is not a configuration error; the boundary is still well defined
+// and every confined command fails to start until the directory exists.
 func canonicalExisting(path string) (string, error) {
 	if path == "" {
 		return "", errors.New("path is required")
@@ -340,10 +357,7 @@ func canonicalExisting(path string) (string, error) {
 	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
 		return resolved, nil
 	}
-	if _, err := os.Stat(abs); err != nil {
-		return "", err
-	}
-	return filepath.Clean(abs), nil
+	return CanonicalPath(abs), nil
 }
 
 func canonicalOptional(path string) string {
@@ -470,6 +484,15 @@ func (p *Policy) CheckWriteIn(base, path string) error {
 		path = filepath.Join(base, path)
 	}
 	canonical := CanonicalPath(path)
+
+	if p.ConfigError != "" {
+		return p.refuse(Denial{
+			Path:        canonical,
+			Mode:        p.Mode,
+			ConfigError: true,
+			Remedy:      "the sandbox configuration is invalid and writes are refused until it is fixed: " + p.ConfigError,
+		})
+	}
 
 	if isSink(canonical) {
 		return nil
@@ -600,4 +623,19 @@ func (p *Policy) String() string {
 // configuration does not widen the sandbox.
 func IsWiderMode(candidate, base Mode) bool {
 	return candidate.wider(base)
+}
+
+// FailClosedPolicy is the policy used when the requested configuration could
+// not be resolved. It denies every write, so a typo in a write root cannot
+// silently disable the fence: callers see the configuration error in the
+// denial, and the status surfaces report it.
+func FailClosedPolicy(workspace string, cause error) *Policy {
+	p := &Policy{
+		Mode:      ModeReadOnly,
+		Workspace: CanonicalPath(workspace),
+	}
+	if cause != nil {
+		p.ConfigError = cause.Error()
+	}
+	return p
 }

@@ -97,14 +97,18 @@ type RuntimeOverrides struct {
 // as immutable: a mutator clones, mutates the clone, and swaps it in under
 // writeMu rather than mutating the live Config in place.
 type ConfigStore struct {
-	config             *Config
-	workingDir         string
-	resolver           VariableResolver
-	globalDataPath     string   // ~/.local/share/crush/crush.json
-	workspacePath      string   // .crush/crush.json
-	loadedPaths        []string // config files that were successfully loaded
-	knownProviders     []catwalk.Provider
-	overrides          RuntimeOverrides
+	config         *Config
+	workingDir     string
+	resolver       VariableResolver
+	globalDataPath string   // ~/.local/share/crush/crush.json
+	workspacePath  string   // .crush/crush.json
+	loadedPaths    []string // config files that were successfully loaded
+	knownProviders []catwalk.Provider
+	overrides      RuntimeOverrides
+	// overridesMu guards the fields of overrides. writeMu protects the
+	// store's config pointer and is taken by long operations (a reload), so
+	// it cannot also serialise a hot runtime-override read/write.
+	overridesMu        sync.Mutex
 	trackedConfigPaths []string                // unique, normalized config file paths
 	snapshots          map[string]fileSnapshot // path -> snapshot at last capture
 
@@ -266,10 +270,33 @@ func (s *ConfigStore) SetupAgents() {
 }
 
 // Overrides returns the runtime overrides for this store.
+//
+// The pointer is stable for the store's lifetime, so callers may hold it, but
+// the fields are not safe for concurrent use: every write goes through
+// [ConfigStore.UpdateOverrides], and every read that runs concurrently with a
+// write goes through [ConfigStore.OverridesSnapshot].
 func (s *ConfigStore) Overrides() *RuntimeOverrides {
 	s.writeMu.RLock()
 	defer s.writeMu.RUnlock()
 	return &s.overrides
+}
+
+// OverridesSnapshot returns a copy of the runtime overrides. Use it from
+// readers that can run concurrently with a write (the sandbox resolution path
+// reads the mode while the TUI may switch it).
+func (s *ConfigStore) OverridesSnapshot() RuntimeOverrides {
+	s.overridesMu.Lock()
+	defer s.overridesMu.Unlock()
+	return s.overrides
+}
+
+// UpdateOverrides mutates the runtime overrides under the store's override
+// lock, so a concurrent [ConfigStore.OverridesSnapshot] cannot observe a
+// half-applied pair (for example a mode set but its disable flag not yet).
+func (s *ConfigStore) UpdateOverrides(apply func(*RuntimeOverrides)) {
+	s.overridesMu.Lock()
+	defer s.overridesMu.Unlock()
+	apply(&s.overrides)
 }
 
 // LoadedPaths returns the config file paths that were successfully loaded.

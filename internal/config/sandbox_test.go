@@ -360,3 +360,36 @@ func TestSandboxRuntime_ExplicitDisable(t *testing.T) {
 	require.Nil(t, rt.Policy)
 	require.Equal(t, sandbox.ModeDangerFullAccess, rt.RequestedMode)
 }
+
+// TestSandboxRuntime_ResolutionErrorFailsClosed verifies a configuration that
+// cannot be resolved yields a policy that refuses every write, rather than no
+// policy at all. Nil means "no fence" everywhere in the runtime, so returning
+// nil here turned a typo into an open boundary.
+func TestSandboxRuntime_ResolutionErrorFailsClosed(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
+	t.Setenv("CRUSH_GLOBAL_CONFIG", filepath.Join(home, ".config", "crush"))
+	t.Setenv("CRUSH_GLOBAL_DATA", filepath.Join(home, ".local", "share", "crush"))
+
+	workDir := t.TempDir()
+	store, err := config.Load(workDir, t.TempDir(), false)
+	require.NoError(t, err)
+
+	// A typo'd allow-write path passes validation and fails resolution.
+	missing := filepath.Join(t.TempDir(), "does-not-exist")
+	store.Config().Permissions = &config.Permissions{Sandbox: &config.Sandbox{
+		Mode:       "workspace-write",
+		AllowWrite: []string{missing},
+	}}
+
+	rt := store.ResolveSandboxRuntime()
+	require.Error(t, rt.Err)
+	require.NotNil(t, rt.Policy, "an unresolved policy must still fence, not disable the sandbox")
+	require.NotEmpty(t, rt.Policy.ConfigError)
+
+	err = rt.Policy.CheckWrite(filepath.Join(workDir, "file.txt"))
+	require.Error(t, err, "every write must be refused while the configuration is invalid")
+	require.Contains(t, err.Error(), "reason=invalid-config")
+}

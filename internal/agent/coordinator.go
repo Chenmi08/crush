@@ -242,7 +242,9 @@ func NewCoordinator(ctx context.Context, opts CoordinatorOptions) (Coordinator, 
 
 	c.sandboxRuntime = opts.Config.ResolveSandboxRuntime()
 	if c.sandboxRuntime.Err != nil {
-		slog.Warn("Sandbox configuration rejected; writes are not confined", "error", c.sandboxRuntime.Err)
+		// A rejected configuration fails closed: the resolved policy denies
+		// every write, so a typo cannot silently turn the sandbox off.
+		slog.Error("Sandbox configuration rejected; tool writes are refused until it is fixed", "error", c.sandboxRuntime.Err)
 	}
 
 	agentCfg, ok := opts.Config.Config().Agents[config.AgentCoder]

@@ -256,9 +256,10 @@ func handleFenceDenial(
 	d.Tool = toolName
 	sandbox.LogDenial(d)
 
-	// A protected path cannot be re-allowed by any setting, so asking would
-	// be theater: refuse outright with the escalation hint.
-	if d.Protected {
+	// A protected path cannot be re-allowed by any setting, and an invalid
+	// configuration is not fixed by widening the mode, so asking would be
+	// theater: refuse outright with the escalation hint.
+	if d.Protected || d.ConfigError {
 		d.EscalationHint = false
 		resp := fantasy.NewTextErrorResponse(d.Error())
 		resp.StopTurn = true
