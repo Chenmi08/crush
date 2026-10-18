@@ -2,6 +2,7 @@ package model
 
 import (
 	"context"
+	"errors"
 	"image"
 	"slices"
 	"sync"
@@ -148,6 +149,16 @@ type testWorkspace struct {
 
 func (w *testWorkspace) Config() *config.Config {
 	return w.cfg
+}
+
+// SandboxMode reports no runtime override so the status badge falls back to
+// the config snapshot in tests.
+func (w *testWorkspace) SandboxMode() string {
+	return ""
+}
+
+func (w *testWorkspace) SandboxSetMode(string, bool) (string, error) {
+	return "", errors.New("not implemented")
 }
 
 func (w *testWorkspace) WorkingDir() string {

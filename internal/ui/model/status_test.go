@@ -90,25 +90,29 @@ func newSandboxTestStatus(t *testing.T) *Status {
 }
 
 // TestSandboxBadge_DistinguishesEnforcement pins the requirement that the
-// sandbox indicator distinguishes enforced, degraded, and off, so a partial
-// backend is never mistaken for a full one.
+// sandbox indicator distinguishes enforced and off states by style, while
+// the label itself stays the bare mode name.
 func TestSandboxBadge_DistinguishesEnforcement(t *testing.T) {
 	t.Parallel()
 	st := newSandboxTestStatus(t)
 
 	st.SetSandbox("workspace-write", "full")
 	full := st.SandboxBadge()
-	require.Contains(t, full, "SANDBOX WORKSPACE-WRITE")
+	require.Contains(t, full, "WORKSPACE-WRITE")
 	require.NotContains(t, full, "PARTIAL")
+	require.NotContains(t, full, "UNENFORCED")
 
 	st.SetSandbox("workspace-write", "partial")
 	partial := st.SandboxBadge()
-	require.Contains(t, partial, "PARTIAL")
+	require.Contains(t, partial, "WORKSPACE-WRITE")
+	require.NotContains(t, partial, "PARTIAL")
+	// Full and partial render differently but carry the same label.
 	require.NotEqual(t, full, partial)
 
 	st.SetSandbox("danger-full-access", "none")
 	off := st.SandboxBadge()
-	require.Contains(t, off, "UNENFORCED")
+	require.Contains(t, off, "DANGER-FULL-ACCESS")
+	require.NotContains(t, off, "UNENFORCED")
 	require.NotEqual(t, partial, off)
 
 	st.SetSandbox("", "")
@@ -125,16 +129,19 @@ func TestSandboxBadge_FromConfig(t *testing.T) {
 
 	cfg := &config.Config{Permissions: &config.Permissions{Sandbox: &config.Sandbox{Mode: "read-only"}}}
 	st.SetSandboxFromConfig(cfg)
-	require.Contains(t, st.SandboxBadge(), "SANDBOX READ-ONLY")
+	require.Contains(t, st.SandboxBadge(), "READ-ONLY")
 
 	cfg.Permissions.Sandbox.Mode = "danger-full-access"
 	st.SetSandboxFromConfig(cfg)
-	require.Contains(t, st.SandboxBadge(), "UNENFORCED")
+	require.Contains(t, st.SandboxBadge(), "DANGER-FULL-ACCESS")
+	require.NotContains(t, st.SandboxBadge(), "PARTIAL")
+	require.NotContains(t, st.SandboxBadge(), "UNENFORCED")
 
 	// An unset mode defaults to workspace-write, never to danger access.
 	cfg.Permissions.Sandbox.Mode = ""
 	st.SetSandboxFromConfig(cfg)
-	require.Contains(t, st.SandboxBadge(), "SANDBOX WORKSPACE-WRITE")
+	require.Contains(t, st.SandboxBadge(), "WORKSPACE-WRITE")
+	require.NotContains(t, st.SandboxBadge(), "PARTIAL")
 }
 
 // TestSandboxDenialMsg_Notice pins the transient notice contract: a refusal
@@ -174,10 +181,10 @@ func TestSandboxSwitch_ConfigSnapshot(t *testing.T) {
 
 	cfg := &config.Config{Permissions: &config.Permissions{Sandbox: &config.Sandbox{Mode: "read-only"}}}
 	st.SetSandboxFromConfig(cfg)
-	require.Contains(t, st.SandboxBadge(), "SANDBOX READ-ONLY")
+	require.Contains(t, st.SandboxBadge(), "READ-ONLY")
 
 	// The switch handler builds a snapshot with the resolved mode.
 	after := &config.Config{Permissions: &config.Permissions{Sandbox: &config.Sandbox{Mode: "workspace-write"}}}
 	st.SetSandboxFromConfig(after)
-	require.Contains(t, st.SandboxBadge(), "SANDBOX WORKSPACE-WRITE")
+	require.Contains(t, st.SandboxBadge(), "WORKSPACE-WRITE")
 }

@@ -69,7 +69,6 @@ func (s *Status) SetMode(mode uiInputMode, yolo bool) {
 }
 
 // SetSandbox sets the persistent sandbox indicator. An empty mode hides it.
-// level is "full", "partial", or "none".
 func (s *Status) SetSandbox(mode, level string) {
 	s.sandbox = mode
 	s.sandboxLevel = level
@@ -78,10 +77,6 @@ func (s *Status) SetSandbox(mode, level string) {
 // SetSandboxFromConfig derives the indicator from the workspace's sandbox
 // configuration. It is safe to call with a nil config, which hides the
 // indicator (no workspace, nothing to report).
-//
-// The render path cannot probe a host backend, so an active sandbox is shown
-// as "partial" until the coordinator reports the probed level: claiming "full"
-// without probing would let a partial backend be mistaken for a full one.
 func (s *Status) SetSandboxFromConfig(cfg *config.Config) {
 	if cfg == nil || cfg.Permissions == nil || cfg.Permissions.Sandbox == nil {
 		s.SetSandbox("", "")
@@ -97,23 +92,21 @@ func (s *Status) SetSandboxFromConfig(cfg *config.Config) {
 }
 
 // SandboxBadge renders the sandbox indicator, or an empty string when no
-// sandbox state is known.
+// sandbox state is known. The mode name carries the signal; no suffix is
+// appended so the badge stays short and constant.
 func (s *Status) SandboxBadge() string {
 	if s.sandbox == "" {
 		return ""
 	}
 	t := s.com.Styles
-	label := "SANDBOX " + strings.ToUpper(s.sandbox)
-	switch s.sandboxLevel {
-	case "full":
-		return t.Status.ModeBadgeSandbox.SetString(label).String()
-	case "partial":
-		return t.Status.ModeBadgeSandboxPartial.SetString(label + " PARTIAL").String()
-	case "none":
-		return t.Status.ModeBadgeSandboxOff.SetString(label + " UNENFORCED").String()
-	default:
-		return t.Status.ModeBadgeSandbox.SetString(label).String()
+	label := strings.ToUpper(s.sandbox)
+	if s.sandboxLevel == "none" {
+		return t.Status.ModeBadgeSandboxOff.SetString(label).String()
 	}
+	if s.sandboxLevel == "partial" {
+		return t.Status.ModeBadgeSandboxPartial.SetString(label).String()
+	}
+	return t.Status.ModeBadgeSandbox.SetString(label).String()
 }
 
 // modeBadge renders the badge for the current mode, or an empty string in

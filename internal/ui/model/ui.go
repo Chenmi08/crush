@@ -293,6 +293,13 @@ type UI struct {
 	// is pending.
 	sandboxSwitchPending string
 
+	// sandboxModeOverride caches the mode chosen from the commands dialog
+	// until the workspace reports it back through SandboxMode. The render
+	// path re-derives the badge from the raw config snapshot every frame,
+	// which does not carry the runtime override; without this cache the
+	// badge would snap back to the configured mode.
+	sandboxModeOverride string
+
 	// cycleYolo is true while YOLO was enabled by the Shift+Tab input-mode
 	// cycle, which is the only case where the cycle may disable it again.
 	cycleYolo bool
@@ -4155,7 +4162,17 @@ func (m *UI) Draw(scr uv.Screen, area uv.Rectangle) *tea.Cursor {
 	// Add status and help layer
 	m.status.SetHideHelp(isOnboarding)
 	m.status.SetMode(m.mode, m.yoloModeCached())
-	m.status.SetSandboxFromConfig(m.com.Config())
+	// The raw config snapshot does not carry the runtime sandbox override,
+	// so the effective mode is layered on top when one is known. It comes
+	// first from the workspace (authoritative, catches switches made outside
+	// the TUI), falling back to the dialog cache while the RPC is in flight.
+	cfg := m.com.Config()
+	if effective := m.com.Workspace.SandboxMode(); effective != "" {
+		cfg = m.configWithSandboxMode(cfg, effective)
+	} else if m.sandboxModeOverride != "" {
+		cfg = m.configWithSandboxMode(cfg, m.sandboxModeOverride)
+	}
+	m.status.SetSandboxFromConfig(cfg)
 	m.status.Draw(scr, layout.status)
 
 	// Draw completions popup if open
@@ -7160,20 +7177,21 @@ func (m *UI) handleSetSandboxMode(mode string) []tea.Cmd {
 }
 
 // applySandboxMode calls the workspace and reports the outcome in the status
-// line. The config snapshot is invalidated so the persistent badge updates.
+// line. The mode is cached so the persistent badge reflects it on every
+// frame, not just the one right after the switch.
 func (m *UI) applySandboxMode(mode string, approved bool) []tea.Cmd {
 	resolved, err := m.com.Workspace.SandboxSetMode(mode, approved)
 	if err != nil {
 		return []tea.Cmd{util.CmdHandler(util.NewErrorMsg(err))}
 	}
-	m.status.SetSandboxFromConfig(m.configWithSandboxMode(resolved))
+	m.sandboxModeOverride = resolved
+	m.status.SetSandboxFromConfig(m.configWithSandboxMode(m.com.Config(), resolved))
 	return []tea.Cmd{util.CmdHandler(util.NewInfoMsg("Sandbox mode set to " + resolved))}
 }
 
 // configWithSandboxMode returns the current config with the mode overridden,
 // for the status badge until the next config snapshot arrives.
-func (m *UI) configWithSandboxMode(mode string) *config.Config {
-	cfg := m.com.Config()
+func (m *UI) configWithSandboxMode(cfg *config.Config, mode string) *config.Config {
 	if cfg == nil {
 		return &config.Config{Permissions: &config.Permissions{Sandbox: &config.Sandbox{Mode: mode}}}
 	}
