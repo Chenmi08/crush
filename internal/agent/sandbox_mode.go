@@ -51,7 +51,14 @@ func (c *coordinator) SetSandboxMode(mode sandbox.Mode, approved bool) error {
 	c.sandboxRuntime = rt
 
 	// Every agent built by this coordinator shares the policy; update them
-	// all so sub-agents do not keep running under the old boundary.
+	// all so sub-agents do not keep running under the old boundary. The
+	// agents map holds only the main agents, which always run under the
+	// workspace policy as resolved here. The task sub-agent keeps its
+	// build-time derived policy, which stays correct across mode switches:
+	// a read-only policy pins the mode and its write roots, and the
+	// workspace, temp directory, and protected set are invariant. The
+	// research sub-agent is rebuilt per call and derives from the new
+	// runtime. See [sandbox.SubagentPolicyFor].
 	for _, agent := range c.agents {
 		agent.SetSandboxPolicy(rt.Policy)
 	}

@@ -31,6 +31,76 @@ func testPolicy(t *testing.T) *Policy {
 	return p
 }
 
+func TestSubagentPolicyFor(t *testing.T) {
+	t.Parallel()
+
+	t.Run("main agents keep the workspace policy", func(t *testing.T) {
+		t.Parallel()
+		p := testPolicy(t)
+		require.Same(t, p, SubagentPolicyFor(false, p))
+	})
+
+	t.Run("sub-agents are narrowed to read-only", func(t *testing.T) {
+		t.Parallel()
+		p := testPolicy(t)
+		sub := SubagentPolicyFor(true, p)
+
+		require.Equal(t, ModeReadOnly, sub.Mode)
+		// The workspace's own policy object is untouched.
+		require.Equal(t, ModeWorkspaceWrite, p.Mode)
+
+		// Workspace and cache are no longer writable.
+		require.Error(t, sub.CheckWrite(filepath.Join(p.Workspace, "file.go")))
+		require.Error(t, sub.CheckWrite(filepath.Join(p.CacheDir, "x")))
+
+		// The private temp directory stays writable so spill files and
+		// scratch output still work.
+		require.NoError(t, sub.CheckWrite(filepath.Join(p.TempDir, "spill.txt")))
+
+		// Protected paths stay protected.
+		require.NotEmpty(t, sub.Protected)
+		require.Equal(t, p.Protected, sub.Protected)
+	})
+
+	t.Run("a danger-full-access parent still yields a confined sub-agent", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		workspace := filepath.Join(root, "ws")
+		require.NoError(t, os.MkdirAll(workspace, 0o755))
+		p, err := Resolve(Options{
+			Workspace: workspace,
+			TempDir:   filepath.Join(root, "tmp"),
+			Config:    Config{Mode: ModeDangerFullAccess},
+		})
+		require.NoError(t, err)
+
+		sub := SubagentPolicyFor(true, p)
+		require.Equal(t, ModeReadOnly, sub.Mode)
+		require.Error(t, sub.CheckWrite(filepath.Join(workspace, "file.go")),
+			"sub-agents must not inherit the parent's full access")
+	})
+
+	t.Run("a parent without a temp directory grants no writes", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		workspace := filepath.Join(root, "ws")
+		require.NoError(t, os.MkdirAll(workspace, 0o755))
+		p, err := Resolve(Options{Workspace: workspace, Config: Config{Mode: ModeWorkspaceWrite}})
+		require.NoError(t, err)
+		require.Empty(t, p.TempDir)
+
+		sub := SubagentPolicy(p)
+		require.Empty(t, sub.WriteRoots)
+		require.Error(t, sub.CheckWrite(filepath.Join(workspace, "file.go")))
+	})
+
+	t.Run("a nil parent yields nil", func(t *testing.T) {
+		t.Parallel()
+		require.Nil(t, SubagentPolicy(nil))
+		require.Nil(t, SubagentPolicyFor(true, nil))
+	})
+}
+
 func TestResolve_DefaultModeAndRoots(t *testing.T) {
 	t.Parallel()
 	p := testPolicy(t)

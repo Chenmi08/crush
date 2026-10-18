@@ -179,8 +179,11 @@ type coordinator struct {
 	allSkills    []*skills.Skill // Pre-filter: all discovered after dedup.
 	skillTracker *skills.Tracker
 
-	// sandboxRuntime is the resolved sandbox policy for this workspace. It is
-	// derived once and shared by every agent and by the status surfaces.
+	// sandboxRuntime is the resolved sandbox policy for this workspace. It
+	// is derived once and shared by every agent and by the status surfaces.
+	// SetSandboxMode rewrites it under agentMu; readers (buildAgent and the
+	// per-call research sub-agent build) take agentMu too, because both run
+	// concurrently with mode switches.
 	sandboxRuntime config.SandboxRuntime
 
 	readyWg errgroup.Group
@@ -817,6 +820,13 @@ func (c *coordinator) buildAgent(ctx context.Context, prompt *prompt.Prompt, age
 	}
 
 	largeProviderCfg, _ := c.cfg.Config().Providers.Get(large.ModelCfg.Provider)
+
+	// The runtime policy is read under agentMu: a mode switch can be in
+	// flight while an agent is (re)built.
+	c.agentMu.RLock()
+	runtimePolicy := c.sandboxRuntime.Policy
+	c.agentMu.RUnlock()
+
 	result := NewSessionAgent(SessionAgentOptions{
 		LargeModel:           large,
 		SmallModel:           small,
@@ -832,7 +842,10 @@ func (c *coordinator) buildAgent(ctx context.Context, prompt *prompt.Prompt, age
 		Notify:               c.notify,
 		RunComplete:          c.runComplete,
 		AllSkills:            c.allSkills,
-		SandboxPolicy:        c.sandboxRuntime.Policy,
+		// Sub-agents are delegated exploration, not authority: they always
+		// run under a read-only policy, even when the workspace's own mode
+		// is wider. See [sandbox.SubagentPolicy].
+		SandboxPolicy: sandbox.SubagentPolicyFor(isSubAgent, runtimePolicy),
 	})
 
 	// The readiness goroutines below perform one-time setup — building the

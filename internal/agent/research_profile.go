@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/crush/internal/agent/tools"
 	"github.com/charmbracelet/crush/internal/agent/tools/mcp"
 	"github.com/charmbracelet/crush/internal/permission"
+	"github.com/charmbracelet/crush/internal/sandbox"
 )
 
 const (
@@ -100,7 +101,23 @@ func (c *coordinator) runResearchProfile(ctx context.Context, call fantasy.ToolC
 
 	client := newSubAgentHTTPClient()
 
-	tmpDir, err := os.MkdirTemp(c.cfg.Config().Options.DataDirectory, "crush-research-*")
+	// The scratch directory lives under the sandbox policy's private temp
+	// directory, so the sub-agent's read-only fence still allows writing
+	// fetched pages there. When the policy has no temp directory (sandbox
+	// disabled or unresolved), the data directory is the fallback, matching
+	// the previous behavior. The policy is captured under agentMu so a
+	// concurrent SetSandboxMode cannot race this per-call build.
+	c.agentMu.RLock()
+	runtimePolicy := c.sandboxRuntime.Policy
+	c.agentMu.RUnlock()
+	scratchRoot := c.cfg.Config().Options.DataDirectory
+	if policy := sandbox.SubagentPolicy(runtimePolicy); policy.TempDir != "" {
+		scratchRoot = policy.TempDir
+	}
+	if err := os.MkdirAll(scratchRoot, 0o700); err != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("Failed to create scratch directory: %s", err)), nil
+	}
+	tmpDir, err := os.MkdirTemp(scratchRoot, "crush-research-*")
 	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("Failed to create temporary directory: %s", err)), nil
 	}
@@ -140,6 +157,10 @@ func (c *coordinator) runResearchProfile(ctx context.Context, call fantasy.ToolC
 		Sessions:             c.sessions,
 		Messages:             c.messages,
 		Tools:                c.researchTools(ctx, tmpDir, client, budget),
+		// Like every sub-agent, research runs under the read-only policy
+		// derived from the workspace's mode; runtimePolicy was captured
+		// under agentMu above.
+		SandboxPolicy: sandbox.SubagentPolicy(runtimePolicy),
 	})
 
 	return c.runSubAgent(ctx, subAgentParams{

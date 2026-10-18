@@ -229,8 +229,10 @@ type sessionAgent struct {
 	allSkills []*skills.Skill
 
 	// sandboxPolicy is the resolved policy carried into every tool call for
-	// this agent. Nil means no fence is attached.
-	sandboxPolicy *sandbox.Policy
+	// this agent. Nil means no fence is attached. It is read on every run
+	// and swapped at runtime by SetSandboxPolicy, so it lives behind an
+	// atomic pointer.
+	sandboxPolicy atomic.Pointer[sandbox.Policy]
 
 	messageQueue   *csync.Map[string, []SessionAgentCall]
 	activeRequests *csync.Map[string, *activeCancel]
@@ -298,7 +300,7 @@ type SessionAgentOptions struct {
 func NewSessionAgent(
 	opts SessionAgentOptions,
 ) SessionAgent {
-	return &sessionAgent{
+	agent := &sessionAgent{
 		largeModel:           csync.NewValue(opts.LargeModel),
 		smallModel:           csync.NewValue(opts.SmallModel),
 		systemPromptPrefix:   csync.NewValue(opts.SystemPromptPrefix),
@@ -313,20 +315,27 @@ func NewSessionAgent(
 		notify:               opts.Notify,
 		runComplete:          opts.RunComplete,
 		allSkills:            opts.AllSkills,
-		sandboxPolicy:        opts.SandboxPolicy,
 		messageQueue:         csync.NewMap[string, []SessionAgentCall](),
 		activeRequests:       csync.NewMap[string, *activeCancel](),
 		dispatchMu:           csync.NewMap[string, *sync.Mutex](),
 		acceptedRuns:         csync.NewMap[string, int](),
 		cancelMark:           csync.NewMap[string, uint64](),
 	}
+	agent.sandboxPolicy.Store(opts.SandboxPolicy)
+	return agent
 }
 
 // SetSandboxPolicy swaps the sandbox policy carried into every
-// subsequent tool call. It is safe to call concurrently with runs: the field
-// is read under the same value semantics as the rest of the agent.
+// subsequent tool call. It is safe to call concurrently with runs: reads
+// on the run path and this swap both go through the atomic pointer.
 func (a *sessionAgent) SetSandboxPolicy(policy *sandbox.Policy) {
-	a.sandboxPolicy = policy
+	a.sandboxPolicy.Store(policy)
+}
+
+// sandboxPolicySnapshot returns the policy currently in effect, or nil
+// when no fence is attached.
+func (a *sessionAgent) sandboxPolicySnapshot() *sandbox.Policy {
+	return a.sandboxPolicy.Load()
 }
 
 // AcceptedRun owns exactly one accept reservation taken by
@@ -723,7 +732,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	// the lock so a Cancel that arrives between here and assistant creation
 	// is not lost.
 	runCtx := context.WithValue(ctx, tools.SessionIDContextKey, call.SessionID)
-	runCtx = tools.WithSandboxPolicy(runCtx, a.sandboxPolicy)
+	runCtx = tools.WithSandboxPolicy(runCtx, a.sandboxPolicySnapshot())
 	genCtx, cancel = context.WithCancel(runCtx)
 	ac := &activeCancel{cancel: cancel}
 	a.activeRequests.Set(call.SessionID, ac)
@@ -873,7 +882,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	// cancel func were already created and registered under the dispatch
 	// mutex above for both the accepted and in-process paths.
 	ctx = context.WithValue(ctx, tools.SessionIDContextKey, call.SessionID)
-	ctx = tools.WithSandboxPolicy(ctx, a.sandboxPolicy)
+	ctx = tools.WithSandboxPolicy(ctx, a.sandboxPolicySnapshot())
 
 	history, files := a.preparePrompt(msgs, largeModel.CatwalkCfg.SupportsImages, call.Attachments...)
 

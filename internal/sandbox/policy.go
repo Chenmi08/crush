@@ -278,6 +278,39 @@ func Resolve(opts Options) (*Policy, error) {
 	return p, nil
 }
 
+// SubagentPolicyFor returns the policy a sub-agent runs under: always
+// read-only, regardless of how wide the workspace's policy is. Sub-agents
+// are delegated exploration, not authority, so the fence stays shut even
+// when their tool list is later widened or a tool escapes the allowlist.
+//
+// The workspace, private temp directory, and protected set carry over, so a
+// confined sub-agent can still spill oversized output into the temp
+// directory and read it back; only the mode narrows. A nil parent (sandbox
+// disabled) yields nil, which keeps the shell package usable outside a
+// session.
+func SubagentPolicyFor(isSubAgent bool, parent *Policy) *Policy {
+	if !isSubAgent {
+		return parent
+	}
+	return SubagentPolicy(parent)
+}
+
+// SubagentPolicy narrows parent to read-only for a sub-agent. See
+// [SubagentPolicyFor].
+func SubagentPolicy(parent *Policy) *Policy {
+	if parent == nil {
+		return nil
+	}
+	narrowed := *parent
+	narrowed.Mode = ModeReadOnly
+	if narrowed.TempDir != "" {
+		narrowed.WriteRoots = []string{narrowed.TempDir}
+	} else {
+		narrowed.WriteRoots = nil
+	}
+	return &narrowed
+}
+
 // UniquePaths deduplicates paths, preserving order. It is exported so a
 // caller building a policy (an escalation, for example) derives the writable
 // set the same way resolution does.

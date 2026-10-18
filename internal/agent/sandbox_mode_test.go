@@ -76,20 +76,32 @@ func TestSetSandboxMode_InvalidModeRejected(t *testing.T) {
 		"a failed resolution must not leave a broken override behind")
 }
 
-// TestSetSandboxMode_UpdatesAllAgents verifies sub-agents do not keep running
-// under the old boundary.
+// TestSetSandboxMode_UpdatesAllAgents verifies main agents observe the new
+// policy, while a built sub-agent keeps its derived read-only policy: the
+// read-only mode and its write roots are pinned, and the workspace, temp
+// directory, and protected set are invariant across mode switches.
 func TestSetSandboxMode_UpdatesAllAgents(t *testing.T) {
 	c := sandboxTestCoordinator(t)
 	main := &mockSessionAgent{}
-	sub := &mockSessionAgent{}
 	c.agents["coder"] = main
-	c.agents["task"] = sub
 
 	require.NoError(t, c.SetSandboxMode(sandbox.ModeReadOnly, false))
 	require.NotNil(t, main.sandboxPolicy)
 	require.Equal(t, sandbox.ModeReadOnly, main.sandboxPolicy.Mode)
-	require.Equal(t, main.sandboxPolicy, sub.sandboxPolicy,
-		"every agent must observe the same policy object")
+
+	// Widening the workspace leaves a built sub-agent confined.
+	require.NoError(t, c.SetSandboxMode(sandbox.ModeWorkspaceWrite, true))
+	require.Equal(t, sandbox.ModeWorkspaceWrite, main.sandboxPolicy.Mode)
+	require.Equal(t, sandbox.ModeWorkspaceWrite, c.sandboxRuntime.Policy.Mode)
+
+	sub := sandbox.SubagentPolicy(c.sandboxRuntime.Policy)
+	require.Equal(t, sandbox.ModeReadOnly, sub.Mode,
+		"a sub-agent must not inherit the widened workspace mode")
+	require.Equal(t, []string{sub.TempDir}, sub.WriteRoots,
+		"a sub-agent's only writable root is its private temp directory")
+	require.NoError(t, sub.CheckWrite(sub.TempDir+"/spill.txt"))
+	require.Error(t, sub.CheckWrite(sub.Workspace+"/file.go"),
+		"the widened workspace stays unwritable for sub-agents")
 }
 
 // TestSetSandboxMode_DangerRequiresApproval verifies danger-full-access is

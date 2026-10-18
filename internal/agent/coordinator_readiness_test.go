@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/crush/internal/agent/prompt"
 	"github.com/charmbracelet/crush/internal/agent/tools/mcp"
 	"github.com/charmbracelet/crush/internal/config"
+	"github.com/charmbracelet/crush/internal/sandbox"
 	"github.com/stretchr/testify/require"
 )
 
@@ -94,4 +95,63 @@ func TestBuildAgentReadinessSurvivesCallerCancellation(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("readyWg did not complete; the readiness goroutines must not block on MCP init")
 	}
+}
+
+// TestBuildAgent_SubagentPolicyIsReadOnly verifies a sub-agent always runs
+// under a read-only policy derived from the workspace's policy, even when the
+// workspace itself is wide, while a main agent keeps the workspace policy.
+func TestBuildAgent_SubagentPolicyIsReadOnly(t *testing.T) {
+	env := testEnv(t)
+
+	crushJSON := `{
+  "options": {"disable_default_providers": true, "disable_provider_auto_update": true},
+  "providers": {"mock": {"id": "mock", "name": "Mock", "type": "openai",
+    "base_url": "http://127.0.0.1:9/v1", "api_key": "test-key",
+    "models": [{"id": "mock-model", "name": "Mock", "context_window": 8192, "default_max_tokens": 128}]}},
+  "models": {"large": {"provider": "mock", "model": "mock-model"},
+             "small": {"provider": "mock", "model": "mock-model"}}
+}`
+	require.NoError(t, os.WriteFile(filepath.Join(env.workingDir, "crush.json"), []byte(crushJSON), 0o644))
+
+	cfg, err := config.Init(env.workingDir, "", false)
+	require.NoError(t, err)
+	cfg.SetupAgents()
+
+	coord := &coordinator{
+		cfg:            cfg,
+		sessions:       env.sessions,
+		messages:       env.messages,
+		permissions:    env.permissions,
+		history:        env.history,
+		filetracker:    *env.filetracker,
+		agents:         make(map[string]SessionAgent),
+		sandboxRuntime: cfg.ResolveSandboxRuntime(),
+	}
+	require.NoError(t, coord.sandboxRuntime.Err)
+	require.NotNil(t, coord.sandboxRuntime.Policy)
+
+	ctx := context.Background()
+	coderSystemPrompt, err := coderPrompt(prompt.WithWorkingDir(env.workingDir))
+	require.NoError(t, err)
+	taskSystemPrompt, err := taskPrompt(prompt.WithWorkingDir(env.workingDir))
+	require.NoError(t, err)
+
+	// The workspace policy is the default workspace-write; a main agent
+	// keeps it.
+	main, err := coord.buildAgent(ctx, coderSystemPrompt, cfg.Config().Agents[config.AgentCoder], false)
+	require.NoError(t, err)
+	coord.readyWg.Wait() // The readiness goroutines must settle before we read state.
+	require.Equal(t, coord.sandboxRuntime.Policy, main.(*sessionAgent).sandboxPolicySnapshot())
+
+	// A sub-agent is narrowed to read-only.
+	task, err := coord.buildAgent(ctx, taskSystemPrompt, cfg.Config().Agents[config.AgentTask], true)
+	require.NoError(t, err)
+	coord.readyWg.Wait()
+	subPolicy := task.(*sessionAgent).sandboxPolicySnapshot()
+	require.NotNil(t, subPolicy)
+	require.Equal(t, sandbox.ModeReadOnly, subPolicy.Mode)
+	require.NotEqual(t, coord.sandboxRuntime.Policy, subPolicy)
+
+	// The workspace policy object is untouched.
+	require.Equal(t, sandbox.ModeWorkspaceWrite, coord.sandboxRuntime.Policy.Mode)
 }
