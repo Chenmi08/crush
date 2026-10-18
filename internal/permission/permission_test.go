@@ -189,6 +189,41 @@ func TestPermissionService_HookApproval(t *testing.T) {
 		assert.Equal(t, "call-99", event.Payload.ToolCallID)
 		assert.True(t, event.Payload.Granted, "subscribers should see a granted notification")
 	})
+
+	t.Run("hook approval does not pre-approve a sandbox escalation", func(t *testing.T) {
+		t.Parallel()
+		service := NewPermissionService("/tmp", false, nil)
+
+		// A hook allow speaks for the tool call, not for leaving the
+		// sandbox: an escalation must still raise the dialog.
+		ctx := WithHookApproval(t.Context(), "call-7")
+		events := service.Subscribe(t.Context())
+		var (
+			wg      sync.WaitGroup
+			granted bool
+			err     error
+		)
+		wg.Go(func() {
+			granted, err = service.Request(ctx, CreatePermissionRequest{
+				SessionID:      "s1",
+				ToolCallID:     "call-7",
+				ToolName:       "bash",
+				Action:         "escalate",
+				Description:    "Leave the sandbox for one call",
+				Path:           "/tmp",
+				Escalation:     true,
+				EscalationMode: "danger-full-access",
+			})
+		})
+
+		// The request must reach subscribers instead of bypassing the prompt.
+		event := <-events
+		assert.True(t, event.Payload.Escalation, "the published request is the escalation")
+		service.Grant(event.Payload)
+		wg.Wait()
+		require.NoError(t, err)
+		assert.True(t, granted)
+	})
 }
 
 func TestPermissionService_SequentialProperties(t *testing.T) {

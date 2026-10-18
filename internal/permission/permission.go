@@ -232,7 +232,13 @@ func (s *permissionService) Request(ctx context.Context, opts CreatePermissionRe
 	// with the tool call ID. Treat that as a pre-approval and skip the
 	// prompt entirely. We still publish a granted notification so the UI
 	// and audit subscribers see the outcome.
-	if hookApproved(ctx, opts.ToolCallID) {
+	//
+	// Escalation requests are exempt: a hook's allow is a statement about
+	// the tool call itself, made before the sandbox refusal is even known,
+	// so it cannot also consent to leaving the sandbox. Those always get
+	// the leave-sandbox dialog, mirroring how session grants and
+	// persistent grants are already barred from approving escalations.
+	if hookApproved(ctx, opts.ToolCallID) && !opts.Escalation {
 		s.notificationBroker.Publish(pubsub.CreatedEvent, PermissionNotification{
 			SessionID:  opts.SessionID,
 			ToolCallID: opts.ToolCallID,
