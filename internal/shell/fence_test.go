@@ -248,7 +248,6 @@ func TestFence_ProtectedPathRefusedThroughShell(t *testing.T) {
 
 	for _, target := range []string{
 		filepath.Join(policy.Workspace, "crushrc"),
-		filepath.Join(policy.Workspace, "AGENTS.md"),
 		filepath.Join(policy.Workspace, ".git", "config"),
 	} {
 		_, stderr, err := runFenced(t, policy, policy.Workspace, "echo x > "+target)

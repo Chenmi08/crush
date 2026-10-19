@@ -45,7 +45,6 @@ func goldenPolicy(t *testing.T) (*Policy, string) {
 		DenyWrites: []string{CanonicalPath(filepath.Join(workspace, "secrets"))},
 		Protected: CanonicalProtectedPaths([]string{
 			filepath.Join(workspace, "crushrc"),
-			filepath.Join(workspace, "AGENTS.md"),
 			filepath.Join(workspace, ".git", "hooks"),
 			filepath.Join(workspace, ".git", "config"),
 		}),

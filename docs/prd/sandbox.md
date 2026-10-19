@@ -122,9 +122,9 @@ call after the user approves it.
 13. As a developer, I want a denial to tell me *which path* was refused and
     *which setting* would allow it, so that fixing a false positive is a single
     copy-paste.
-14. As a developer, I want Crush's own configuration, data directory, and
-    instruction files to remain unwritable even when they sit inside a
-    writable root, so that the agent cannot grant itself permissions.
+14. As a developer, I want Crush's own configuration and data directory to
+    remain unwritable even when they sit inside a writable root, so that the
+    agent cannot grant itself permissions.
 15. As a developer, I want Git's execution surfaces (`.git/hooks`,
     `.git/config`) protected, so that a later `git commit` cannot run code
     written by the agent.
@@ -321,8 +321,6 @@ cannot be re-allowed:
 - Crush configuration and state: `crushrc`, `.crushrc`, `crush.json`,
   `.crush.json`, the `.crush` directory, the global config directory, the data
   directory.
-- Instruction files: `AGENTS.md`, `CRUSH.md`, `CLAUDE.md`, `GEMINI.md` and
-  their `.local` variants.
 - Git execution surfaces: `.git/hooks`, `.git/config`, `.git/config.lock`, and
   the resolved `gitdir` target for worktrees and submodules.
 - Shell startup files when they fall inside a writable root (dotfiles

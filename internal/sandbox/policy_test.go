@@ -278,9 +278,6 @@ func TestCheckWrite_ProtectedCannotBeReallowed(t *testing.T) {
 	require.Contains(t, err.Error(), Marker)
 	require.Contains(t, err.Error(), filepath.Join(workspace, "crushrc"))
 
-	for _, name := range InstructionFileNames {
-		require.Error(t, p.CheckWrite(filepath.Join(workspace, name)), name)
-	}
 	for _, rel := range []string{".git/hooks/pre-commit", ".git/config", ".git/config.lock"} {
 		require.Error(t, p.CheckWrite(filepath.Join(workspace, rel)), rel)
 	}

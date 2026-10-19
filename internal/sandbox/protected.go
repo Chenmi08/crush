@@ -15,23 +15,6 @@ var CrushConfigNames = []string{
 	".crush.json",
 }
 
-// InstructionFileNames are the instruction files Crush re-reads. A write here
-// changes what the agent is told, so they are protected.
-var InstructionFileNames = []string{
-	"AGENTS.md",
-	"CRUSH.md",
-	"CLAUDE.md",
-	"GEMINI.md",
-	"AGENTS.local.md",
-	"CRUSH.local.md",
-	"CLAUDE.local.md",
-	"GEMINI.local.md",
-	"crush.md",
-	"crush.local.md",
-	"agents.md",
-	"agents.local.md",
-}
-
 // ShellStartupNames are shell startup files, protected only when they fall
 // inside a writable root (a dotfiles repository, for example).
 var ShellStartupNames = []string{
@@ -77,11 +60,6 @@ func DefaultProtectedPaths(workspace string, globalDirs ...string) []string {
 	// The whole .crush directory is protected: it holds project state and a
 	// nested crushrc would be executed on reload.
 	paths = append(paths, filepath.Join(workspace, ".crush"))
-
-	// Instruction files at the workspace root.
-	for _, name := range InstructionFileNames {
-		paths = append(paths, filepath.Join(workspace, name))
-	}
 
 	// Git's execution surfaces. .git may be a file (worktrees, submodules)
 	// pointing at the real gitdir; include both the apparent and resolved

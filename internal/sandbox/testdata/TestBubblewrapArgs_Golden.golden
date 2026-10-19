@@ -21,9 +21,6 @@
 <ROOT>/project/.git/hooks
 <ROOT>/project/.git/hooks
 --ro-bind
-<ROOT>/tmp/.placeholders/protected
-<ROOT>/project/AGENTS.md
---ro-bind
 <ROOT>/project/crushrc
 <ROOT>/project/crushrc
 --tmpfs

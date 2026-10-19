@@ -50,15 +50,6 @@ func TestProtected_ListedPaths(t *testing.T) {
 		filepath.Join(workspace, "crush.json"),
 		filepath.Join(workspace, ".crush.json"),
 		filepath.Join(workspace, ".crush"),
-		// Instruction files and their local variants.
-		filepath.Join(workspace, "AGENTS.md"),
-		filepath.Join(workspace, "AGENTS.local.md"),
-		filepath.Join(workspace, "CRUSH.md"),
-		filepath.Join(workspace, "CRUSH.local.md"),
-		filepath.Join(workspace, "CLAUDE.md"),
-		filepath.Join(workspace, "CLAUDE.local.md"),
-		filepath.Join(workspace, "GEMINI.md"),
-		filepath.Join(workspace, "GEMINI.local.md"),
 	}
 	for _, path := range required {
 		require.Contains(t, p.Protected, CanonicalPath(path), "missing protected path")
@@ -170,7 +161,6 @@ func TestProtected_CannotBeReallowed(t *testing.T) {
 
 	for _, path := range []string{
 		filepath.Join(workspace, "crushrc"),
-		filepath.Join(workspace, "AGENTS.md"),
 		filepath.Join(workspace, ".git", "config"),
 		filepath.Join(workspace, ".bashrc"),
 	} {

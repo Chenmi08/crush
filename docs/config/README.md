@@ -491,11 +491,9 @@ outside the sandbox.
 
 **Protected paths.** Paths that grant future code execution stay unwritable
 even inside a writable root, and no setting can re-allow them: Crush's
-configuration files and state directories, instruction files (`AGENTS.md`,
-`CRUSH.md`, `CLAUDE.md`, `GEMINI.md` and their `.local` variants), Git's
-execution surfaces (`.git/hooks`, `.git/config`, and the resolved gitdir of
-worktrees and submodules), and shell startup files when they fall inside a
-writable root.
+configuration files and state directories, Git's execution surfaces
+(`.git/hooks`, `.git/config`, and the resolved gitdir of worktrees and
+submodules), and shell startup files when they fall inside a writable root.
 
 **Enforcement.** The boundary is enforced by the OS where possible: `bubblewrap`
 on Linux, falling back to Landlock when bubblewrap is absent or cannot create

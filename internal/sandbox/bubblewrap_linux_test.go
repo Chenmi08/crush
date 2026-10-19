@@ -237,8 +237,6 @@ func TestBubblewrap_ProtectedVariantsRefused(t *testing.T) {
 
 	targets := []string{
 		filepath.Join(policy.Workspace, "crushrc"),
-		filepath.Join(policy.Workspace, "AGENTS.md"),
-		filepath.Join(policy.Workspace, "CLAUDE.local.md"),
 		filepath.Join(policy.Workspace, ".crush"),
 		filepath.Join(policy.Workspace, ".git", "config"),
 		filepath.Join(policy.Workspace, ".git", "hooks", "pre-commit"),
