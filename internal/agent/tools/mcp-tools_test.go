@@ -1,8 +1,12 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"image"
+	"image/color"
+	"image/png"
 	"testing"
 
 	"charm.land/fantasy"
@@ -109,4 +113,121 @@ func TestToolRunFallbackErrorIsReported(t *testing.T) {
 	require.True(t, resp.IsError)
 	require.Contains(t, resp.Content, "fallback web_search failed")
 	require.Contains(t, resp.Content, "ddg down")
+}
+
+// solidPNGBytes encodes a solid-color image as a PNG, for tests that need a
+// small, real, decodable image payload.
+func solidPNGBytes(t *testing.T, w, h int, c color.NRGBA) []byte {
+	t.Helper()
+
+	img := image.NewNRGBA(image.Rect(0, 0, w, h))
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			img.SetNRGBA(x, y, c)
+		}
+	}
+	var buf bytes.Buffer
+	require.NoError(t, png.Encode(&buf, img))
+	return buf.Bytes()
+}
+
+func TestImageResultResponseNormalizesOversizedImages(t *testing.T) {
+	t.Parallel()
+
+	// An MCP image result that exceeds the pixel ceiling is normalized
+	// through the same strategy as the view tool: an image response, not a
+	// "too large" error, with a coordinate-mapping hint.
+	data := noisyPNGBytes(t, 2600, 2600)
+
+	cfg := config.NewTestStore(&config.Config{})
+	resp := imageResultResponse(mcp.ToolResult{
+		Type:      "image",
+		Content:   "here is the screenshot",
+		Data:      data,
+		MediaType: "image/png",
+	}, cfg)
+
+	require.False(t, resp.IsError)
+	require.Equal(t, "image", resp.Type)
+	require.NotEmpty(t, resp.Data)
+	require.NotEqual(t, data, resp.Data)
+	require.Contains(t, resp.Content, "here is the screenshot")
+	require.Contains(t, resp.Content, "resized")
+}
+
+func TestImageResultResponsePassesThroughSmallImages(t *testing.T) {
+	t.Parallel()
+
+	data := solidPNGBytes(t, 40, 40, color.NRGBA{R: 10, G: 20, B: 30, A: 255})
+
+	cfg := config.NewTestStore(&config.Config{})
+	resp := imageResultResponse(mcp.ToolResult{
+		Type:      "image",
+		Data:      data,
+		MediaType: "image/png",
+	}, cfg)
+
+	require.False(t, resp.IsError)
+	require.Equal(t, "image", resp.Type)
+	require.Equal(t, data, resp.Data, "small image must pass through unchanged")
+}
+
+func TestImageResultResponseErrorsOnHardCeiling(t *testing.T) {
+	t.Parallel()
+
+	data := solidPNGBytes(t, 8, 8, color.NRGBA{R: 1, G: 2, B: 3, A: 255})
+
+	cfg := config.NewTestStore(&config.Config{Options: &config.Options{Image: &config.ImageOptions{
+		MaxBytes: ptr(1),
+	}}})
+	resp := imageResultResponse(mcp.ToolResult{
+		Type:      "image",
+		Data:      data,
+		MediaType: "image/png",
+	}, cfg)
+
+	require.True(t, resp.IsError)
+	require.Contains(t, resp.Content, "too large")
+}
+
+func TestMediaResultResponseNormalizesImagePayload(t *testing.T) {
+	t.Parallel()
+
+	// A media result carrying image bytes must go through the same
+	// normalize step, so it cannot bypass the pixel and byte ceilings.
+	data := noisyPNGBytes(t, 2600, 2600)
+
+	cfg := config.NewTestStore(&config.Config{})
+	resp := mediaResultResponse(mcp.ToolResult{
+		Type:      "media",
+		Content:   "here is the screenshot",
+		Data:      data,
+		MediaType: "image/png",
+	}, cfg)
+
+	require.False(t, resp.IsError)
+	require.Equal(t, "image", resp.Type)
+	require.NotEqual(t, data, resp.Data)
+	require.Contains(t, resp.Content, "resized")
+}
+
+func TestMediaResultResponsePassesAudioThrough(t *testing.T) {
+	t.Parallel()
+
+	// Non-image media payloads are untouched: audio keeps its media
+	// response and its content.
+	data := []byte("fake-audio-bytes")
+
+	cfg := config.NewTestStore(&config.Config{})
+	resp := mediaResultResponse(mcp.ToolResult{
+		Type:      "media",
+		Content:   "transcript follows",
+		Data:      data,
+		MediaType: "audio/wav",
+	}, cfg)
+
+	require.False(t, resp.IsError)
+	require.Equal(t, "media", resp.Type)
+	require.Equal(t, data, resp.Data)
+	require.Equal(t, "transcript follows", resp.Content)
 }

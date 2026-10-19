@@ -15,6 +15,7 @@ import (
 	"charm.land/catwalk/pkg/catwalk"
 	hyperp "github.com/charmbracelet/crush/internal/agent/hyper"
 	"github.com/charmbracelet/crush/internal/env"
+	"github.com/charmbracelet/crush/internal/imageresize"
 	"github.com/charmbracelet/crush/internal/lock"
 	"github.com/charmbracelet/crush/internal/oauth"
 	"github.com/charmbracelet/crush/internal/oauth/copilot"
@@ -163,6 +164,20 @@ func (s *ConfigStore) DisabledSkills() []string {
 		return nil
 	}
 	return s.Config().DisabledSkills()
+}
+
+// ImageResize returns the image normalization settings from the store's
+// current config, or the defaults when the store has no config. Nil-safe so
+// callers do not each have to repeat the store/config/options checks.
+func (s *ConfigStore) ImageResize() imageresize.Config {
+	if s == nil {
+		return imageresize.DefaultConfig()
+	}
+	cfg := s.Config()
+	if cfg == nil {
+		return imageresize.DefaultConfig()
+	}
+	return cfg.Options.ImageResize()
 }
 
 // setConfig atomically swaps the active config pointer under configMu.

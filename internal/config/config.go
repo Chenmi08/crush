@@ -15,6 +15,7 @@ import (
 
 	"charm.land/catwalk/pkg/catwalk"
 	"github.com/charmbracelet/crush/internal/csync"
+	"github.com/charmbracelet/crush/internal/imageresize"
 	"github.com/charmbracelet/crush/internal/oauth"
 	"github.com/charmbracelet/crush/internal/oauth/copilot"
 	"github.com/invopop/jsonschema"
@@ -531,6 +532,53 @@ type Options struct {
 	// DisableExa turns off the built-in Exa search backend. Research then
 	// falls back to DuckDuckGo search and local fetching.
 	DisableExa bool `json:"disable_exa,omitempty" jsonschema:"description=Disable the built-in Exa web search backend so research uses DuckDuckGo and local fetching instead,default=false"`
+
+	// Image configures automatic image normalization and resizing before
+	// images are sent to a model. When enabled (the default), oversized
+	// images are downscaled and re-encoded instead of rejected.
+	Image *ImageOptions `json:"image,omitempty" jsonschema:"description=Automatic image resize settings for images sent to the model"`
+}
+
+// ImageOptions configures automatic image normalization and resizing before
+// images are handed to a model.
+type ImageOptions struct {
+	// Enable turns automatic image resize on or off. When disabled, images
+	// are sent at original resolution as long as they stay under the hard
+	// byte ceiling.
+	Enable *bool `json:"enable,omitempty" jsonschema:"description=Automatically resize and re-encode images before sending them to the model,default=true"`
+	// MaxWidth and MaxHeight bound the encoded image's pixel dimensions.
+	MaxWidth  *int `json:"max_width,omitempty" jsonschema:"description=Maximum image width in pixels after resizing,default=2000"`
+	MaxHeight *int `json:"max_height,omitempty" jsonschema:"description=Maximum image height in pixels after resizing,default=2000"`
+	// MaxBytes bounds the base64-encoded image payload sent to the model.
+	MaxBytes *int `json:"max_bytes,omitempty" jsonschema:"description=Maximum encoded image payload size in bytes,default=4718592"`
+	// JpegQuality is the JPEG quality ladder stepped down through when an
+	// image is still too large. When empty, the default ladder is used.
+	JpegQuality []int `json:"jpeg_quality,omitempty" jsonschema:"description=JPEG quality ladder used when an image is still too large,example=80,example=85,example=70,example=55,example=40"`
+}
+
+// ImageResize returns the resolved image normalization settings, applying
+// defaults for any unset field. The nil receiver means the defaults.
+func (o *Options) ImageResize() imageresize.Config {
+	cfg := imageresize.DefaultConfig()
+	if o == nil || o.Image == nil {
+		return cfg
+	}
+	if o.Image.Enable != nil {
+		cfg.Enabled = *o.Image.Enable
+	}
+	if o.Image.MaxWidth != nil {
+		cfg.Limits.MaxWidth = *o.Image.MaxWidth
+	}
+	if o.Image.MaxHeight != nil {
+		cfg.Limits.MaxHeight = *o.Image.MaxHeight
+	}
+	if o.Image.MaxBytes != nil {
+		cfg.Limits.MaxBytes = *o.Image.MaxBytes
+	}
+	if len(o.Image.JpegQuality) > 0 {
+		cfg.Limits.JpegQuality = append([]int(nil), o.Image.JpegQuality...)
+	}
+	return cfg
 }
 
 // DefaultRequestTimeout bounds each LLM API request when the user has not

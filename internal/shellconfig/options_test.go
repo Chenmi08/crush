@@ -257,3 +257,45 @@ func TestOption_RequestTimeoutInvalid(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "expects a number of seconds")
 }
+
+func TestOption_ImageSettings(t *testing.T) {
+	t.Parallel()
+
+	script := `option image enable false
+option image max-width 1600
+option image max-height 1200
+option image max-bytes 1048576
+option image jpeg-quality 90
+option image jpeg-quality 60`
+	path := filepath.Join(t.TempDir(), "crushrc")
+	jsonBytes, err := LoadShellConfig(t.Context(), path, []byte(script))
+	require.NoError(t, err)
+
+	var result map[string]any
+	require.NoError(t, json.Unmarshal(jsonBytes, &result))
+
+	img := result["options"].(map[string]any)["image"].(map[string]any)
+	require.Equal(t, false, img["enable"])
+	require.Equal(t, float64(1600), img["max_width"])
+	require.Equal(t, float64(1200), img["max_height"])
+	require.Equal(t, float64(1048576), img["max_bytes"])
+	require.Equal(t, []any{float64(90), float64(60)}, img["jpeg_quality"])
+}
+
+func TestOption_ImageUnknownKey(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "crushrc")
+	_, err := LoadShellConfig(t.Context(), path, []byte(`option image bogus 1`))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unknown key")
+}
+
+func TestOption_ImageInvalidValue(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "crushrc")
+	_, err := LoadShellConfig(t.Context(), path, []byte(`option image max-width nope`))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "expects a positive integer")
+}

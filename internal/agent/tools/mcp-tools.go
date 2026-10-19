@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 
 	"charm.land/fantasy"
 
 	"github.com/charmbracelet/crush/internal/agent/tools/mcp"
 	"github.com/charmbracelet/crush/internal/config"
+	"github.com/charmbracelet/crush/internal/imageresize"
 	"github.com/charmbracelet/crush/internal/permission"
 )
 
@@ -177,21 +179,57 @@ func (m *Tool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.ToolRe
 	switch result.Type {
 	case "image", "media":
 		if !GetSupportsImagesFromContext(ctx) {
-			modelName := GetModelNameFromContext(ctx)
-			return fantasy.NewTextErrorResponse(fmt.Sprintf("This model (%s) does not support image data.", modelName)), nil
+			return imageUnsupportedResponse(ctx), nil
 		}
-
-		var response fantasy.ToolResponse
-		if result.Type == "image" {
-			response = fantasy.NewImageResponse(result.Data, result.MediaType)
-		} else {
-			response = fantasy.NewMediaResponse(result.Data, result.MediaType)
+		if result.Type == "media" {
+			return mediaResultResponse(result, m.cfg), nil
 		}
-		response.Content = result.Content
-		return response, nil
+		return imageResultResponse(result, m.cfg), nil
 	default:
 		return fantasy.NewTextResponse(result.Content), nil
 	}
+}
+
+// imageUnsupportedResponse returns the error for image data on a model that
+// cannot receive images. Both image and media MCP results share it.
+func imageUnsupportedResponse(ctx context.Context) fantasy.ToolResponse {
+	modelName := GetModelNameFromContext(ctx)
+	return fantasy.NewTextErrorResponse(fmt.Sprintf("This model (%s) does not support image data.", modelName))
+}
+
+// mediaResultResponse builds the model-facing response for an MCP media
+// result. The media channel carries audio, but nothing prevents a server
+// from delivering image bytes through it, so an image-typed payload goes
+// through the same normalize step as image results; anything else passes
+// through untouched.
+func mediaResultResponse(result mcp.ToolResult, cfg *config.ConfigStore) fantasy.ToolResponse {
+	if isImageMediaType(result.MediaType) {
+		return imageResultResponse(result, cfg)
+	}
+	response := fantasy.NewMediaResponse(result.Data, result.MediaType)
+	response.Content = result.Content
+	return response
+}
+
+// isImageMediaType reports whether a media type identifies image data the
+// normalize step can handle.
+func isImageMediaType(mediaType string) bool {
+	return strings.HasPrefix(strings.ToLower(mediaType), "image/")
+}
+
+// imageResultResponse builds the model-facing response for an MCP image
+// result, normalizing it through the same resize strategy used by the view
+// tool. It is a separate function so the wiring can be tested without a live
+// MCP server.
+func imageResultResponse(result mcp.ToolResult, cfg *config.ConfigStore) fantasy.ToolResponse {
+	norm, normErr := imageresize.Normalize(result.Data, result.MediaType, cfg.ImageResize())
+	if normErr != nil {
+		return fantasy.NewTextErrorResponse(fmt.Sprintf("Unable to send image: %s", normErr))
+	}
+
+	resp := fantasy.NewImageResponse(norm.Data, norm.MimeType)
+	resp.Content = norm.AppendHint(result.Content)
+	return resp
 }
 
 // runFallback runs the fallback tool after an MCP call failed, for example

@@ -51,6 +51,10 @@ func handleOption(ctx context.Context, args []string, stdin io.Reader, stdout, s
 		return optionUI(o, args, stderr)
 	}
 
+	if key == "image" {
+		return optionImage(o, args, stderr)
+	}
+
 	// "option reset <key>" wipes a list back to empty. Because the builder
 	// applies operations in execution order, this is just an assignment:
 	// values added after the reset are kept, earlier ones are dropped.
@@ -221,6 +225,53 @@ var optionSpecs = map[string]optionSpec{
 	"global-context-path": {jsonKey: "global_context_paths", kind: optList},
 	"skill-path":          {jsonKey: "skills_paths", kind: optList},
 	"disable-skill":       {jsonKey: "disabled_skills", kind: optList},
+}
+
+// optionImage implements "option image <key> <value>" for image
+// normalization settings that live under options.image.
+func optionImage(options map[string]any, args []string, stderr io.Writer) error {
+	if len(args) < 3 {
+		return usage(stderr, "usage: option image <enable|max-width|max-height|max-bytes|jpeg-quality> <value>")
+	}
+
+	key := args[2]
+	img := childMap(options, "image")
+
+	switch key {
+	case "enable":
+		if len(args) != 4 {
+			return usage(stderr, "usage: option image enable <true|false>")
+		}
+		parsed, err := parseBool(args[3])
+		if err != nil {
+			return usage(stderr, fmt.Sprintf("option image enable expects true/false, got %q", args[3]))
+		}
+		img["enable"] = parsed
+	case "max-width", "max-height", "max-bytes":
+		if len(args) != 4 {
+			return usage(stderr, fmt.Sprintf("usage: option image %s <n>", key))
+		}
+		n, err := strconv.Atoi(args[3])
+		if err != nil || n <= 0 {
+			return usage(stderr, fmt.Sprintf("option image %s expects a positive integer, got %q", key, args[3]))
+		}
+		img[strings.ReplaceAll(key, "-", "_")] = n
+	case "jpeg-quality":
+		if len(args) != 4 {
+			return usage(stderr, "usage: option image jpeg-quality <1-100>")
+		}
+		q, err := strconv.Atoi(args[3])
+		if err != nil || q <= 0 || q > 100 {
+			return usage(stderr, fmt.Sprintf("option image jpeg-quality expects a number 1-100, got %q", args[3]))
+		}
+		arr, _ := img["jpeg_quality"].([]any)
+		img["jpeg_quality"] = append(arr, q)
+	default:
+		return usage(stderr, fmt.Sprintf("option image: unknown key %q", key))
+	}
+
+	slog.Info("Image option set in shell config", "key", key, "value", args[3])
+	return nil
 }
 
 // optionUI implements "option ui <key> <value>" for TUI-specific settings

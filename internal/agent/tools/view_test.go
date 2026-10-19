@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"charm.land/fantasy"
+	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/filetracker"
 	"github.com/charmbracelet/crush/internal/permission"
 	"github.com/charmbracelet/crush/internal/pubsub"
@@ -115,7 +116,7 @@ func TestViewToolAllowsSmallSectionsOfLargeFiles(t *testing.T) {
 
 	workingDir := t.TempDir()
 	filePath := filepath.Join(workingDir, "large.txt")
-	lines := []string{strings.Repeat("a", MaxViewSize+1), "target line", "after target"}
+	lines := []string{strings.Repeat("a", MaxTextViewSize+1), "target line", "after target"}
 	require.NoError(t, os.WriteFile(filePath, []byte(strings.Join(lines, "\n")), 0o644))
 
 	tool := newViewToolForTest(workingDir)
@@ -156,12 +157,16 @@ func TestViewToolBlocksOversizedReturnedSections(t *testing.T) {
 	require.Contains(t, resp.Content, "Content section is too large")
 }
 
-func TestViewToolBlocksOversizedImages(t *testing.T) {
+func TestViewToolSendsOversizedImagesInsteadOfRejecting(t *testing.T) {
 	t.Parallel()
 
+	// A >200KB image that also exceeds the pixel ceiling must be resized and
+	// returned as an image response, not rejected with a "too large" error.
+	// The response carries a coordinate-mapping hint so the model can still
+	// reason about the original pixels.
 	workingDir := t.TempDir()
 	filePath := filepath.Join(workingDir, "large.png")
-	require.NoError(t, os.WriteFile(filePath, []byte(strings.Repeat("a", MaxViewSize+1)), 0o644))
+	writeNoisyPNG(t, filePath, 2600, 2600)
 
 	tool := newViewToolForTest(workingDir)
 	ctx := context.WithValue(context.Background(), SessionIDContextKey, "test-session")
@@ -170,8 +175,28 @@ func TestViewToolBlocksOversizedImages(t *testing.T) {
 		FilePath: filePath,
 	})
 
+	require.False(t, resp.IsError)
+	require.Equal(t, "image", resp.Type)
+	require.NotEmpty(t, resp.Data)
+	require.Contains(t, resp.Content, "resized")
+	require.Contains(t, resp.Content, "2600x2600")
+}
+
+func TestViewToolKeepsExistingNonVisionModelPath(t *testing.T) {
+	t.Parallel()
+
+	workingDir := t.TempDir()
+	filePath := filepath.Join(workingDir, "large.png")
+	writeNoisyPNG(t, filePath, 300, 300)
+
+	tool := newViewToolForTest(workingDir)
+	ctx := context.WithValue(context.Background(), SessionIDContextKey, "test-session")
+	resp := runViewTool(t, tool, ctx, ViewParams{
+		FilePath: filePath,
+	})
+
 	require.True(t, resp.IsError)
-	require.Contains(t, resp.Content, "Image file is too large")
+	require.Contains(t, resp.Content, "does not support image data")
 }
 
 func TestReadTextFileEnforcesMaxContentSize(t *testing.T) {
@@ -308,7 +333,7 @@ func TestViewToolSkipsPermissionForSandboxSpillFiles(t *testing.T) {
 	perm := &countingViewPermissionService{
 		Broker: pubsub.NewBroker[permission.PermissionRequest](),
 	}
-	tool := NewViewTool(nil, perm, mockFileTracker{}, nil, workingDir)
+	tool := NewViewTool(nil, perm, mockFileTracker{}, nil, config.NewTestStore(&config.Config{}), workingDir)
 
 	ctx := WithSandboxPolicy(
 		context.WithValue(context.Background(), SessionIDContextKey, "test-session"),
@@ -351,7 +376,7 @@ func TestViewToolStillPromptsForSymlinkedSpillPath(t *testing.T) {
 	perm := &countingViewPermissionService{
 		Broker: pubsub.NewBroker[permission.PermissionRequest](),
 	}
-	tool := NewViewTool(nil, perm, mockFileTracker{}, nil, workingDir)
+	tool := NewViewTool(nil, perm, mockFileTracker{}, nil, config.NewTestStore(&config.Config{}), workingDir)
 	ctx := WithSandboxPolicy(
 		context.WithValue(context.Background(), SessionIDContextKey, "test-session"),
 		policy,
@@ -364,7 +389,7 @@ func TestViewToolStillPromptsForSymlinkedSpillPath(t *testing.T) {
 
 func newViewToolForTest(workingDir string) fantasy.AgentTool {
 	permissions := &mockViewPermissionService{Broker: pubsub.NewBroker[permission.PermissionRequest]()}
-	return NewViewTool(nil, permissions, mockFileTracker{}, nil, workingDir)
+	return NewViewTool(nil, permissions, mockFileTracker{}, nil, config.NewTestStore(&config.Config{}), workingDir)
 }
 
 func runViewTool(t *testing.T, tool fantasy.AgentTool, ctx context.Context, params ViewParams) fantasy.ToolResponse {
@@ -435,36 +460,4 @@ func TestReadBuiltinFile(t *testing.T) {
 		require.NoError(t, err)
 		require.NotContains(t, resp.Content, "     1|")
 	})
-}
-
-func TestSniffImageMimeType(t *testing.T) {
-	t.Parallel()
-
-	jpegMagic := []byte{0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 'J', 'F', 'I', 'F'}
-	pngMagic := []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}
-	gifMagic := []byte("GIF89a")
-	// Minimal RIFF/WEBP header.
-	webpMagic := append([]byte("RIFF\x00\x00\x00\x00WEBPVP8 "), make([]byte, 16)...)
-	random := []byte("not an image at all, just text")
-
-	cases := []struct {
-		name     string
-		data     []byte
-		fallback string
-		want     string
-	}{
-		{"jpeg bytes in .png file uses sniffed", jpegMagic, "image/png", "image/jpeg"},
-		{"png bytes in .jpg file uses sniffed", pngMagic, "image/jpeg", "image/png"},
-		{"gif bytes uses sniffed", gifMagic, "image/png", "image/gif"},
-		{"webp bytes uses sniffed", webpMagic, "image/png", "image/webp"},
-		{"matching extension and content keeps sniffed", pngMagic, "image/png", "image/png"},
-		{"unsniffable content falls back", random, "image/png", "image/png"},
-		{"empty content falls back", nil, "image/jpeg", "image/jpeg"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			require.Equal(t, tc.want, sniffImageMimeType(tc.data, tc.fallback))
-		})
-	}
 }

@@ -184,7 +184,7 @@ func (c *coordinator) runResearchProfile(ctx context.Context, call fantasy.ToolC
 func (c *coordinator) researchTools(ctx context.Context, tmpDir string, client *http.Client, budget *tools.ExaBudget) []fantasy.AgentTool {
 	base := []fantasy.AgentTool{
 		tools.NewSourcegraphTool(client),
-		tools.NewViewTool(c.lspManager, c.permissions, c.filetracker, nil, tmpDir),
+		tools.NewViewTool(c.lspManager, c.permissions, c.filetracker, nil, c.cfg, tmpDir),
 	}
 
 	exaTools := c.builtinSearchTools(ctx)

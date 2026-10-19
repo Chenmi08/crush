@@ -133,6 +133,46 @@
         "command"
       ]
     },
+    "ImageOptions": {
+      "properties": {
+        "enable": {
+          "type": "boolean",
+          "description": "Automatically resize and re-encode images before sending them to the model",
+          "default": true
+        },
+        "max_width": {
+          "type": "integer",
+          "description": "Maximum image width in pixels after resizing",
+          "default": 2000
+        },
+        "max_height": {
+          "type": "integer",
+          "description": "Maximum image height in pixels after resizing",
+          "default": 2000
+        },
+        "max_bytes": {
+          "type": "integer",
+          "description": "Maximum encoded image payload size in bytes",
+          "default": 4718592
+        },
+        "jpeg_quality": {
+          "items": {
+            "type": "integer",
+            "examples": [
+              80,
+              85,
+              70,
+              55,
+              40
+            ]
+          },
+          "type": "array",
+          "description": "JPEG quality ladder used when an image is still too large"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
     "LSPConfig": {
       "properties": {
         "disabled": {
@@ -679,6 +719,10 @@
           "type": "boolean",
           "description": "Disable the built-in Exa web search backend so research uses DuckDuckGo and local fetching instead",
           "default": false
+        },
+        "image": {
+          "$ref": "#/$defs/ImageOptions",
+          "description": "Automatic image resize settings for images sent to the model"
         }
       },
       "additionalProperties": false,

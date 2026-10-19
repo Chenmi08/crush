@@ -9,7 +9,6 @@ import (
 	"html/template"
 	"io"
 	"io/fs"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,8 +16,10 @@ import (
 	"unicode/utf8"
 
 	"charm.land/fantasy"
+	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/filepathext"
 	"github.com/charmbracelet/crush/internal/filetracker"
+	"github.com/charmbracelet/crush/internal/imageresize"
 	"github.com/charmbracelet/crush/internal/lsp"
 	"github.com/charmbracelet/crush/internal/permission"
 	"github.com/charmbracelet/crush/internal/skills"
@@ -33,14 +34,14 @@ var viewDescriptionTpl = template.Must(
 )
 
 type viewDescriptionData struct {
-	DefaultReadLimit int
-	MaxViewSizeKB    int
+	DefaultReadLimit  int
+	MaxTextViewSizeKB int
 }
 
 func viewDescription() string {
 	return renderTemplate(viewDescriptionTpl, viewDescriptionData{
-		DefaultReadLimit: DefaultReadLimit,
-		MaxViewSizeKB:    MaxViewSize / 1024,
+		DefaultReadLimit:  DefaultReadLimit,
+		MaxTextViewSizeKB: MaxTextViewSize / 1024,
 	})
 }
 
@@ -73,7 +74,7 @@ type ViewResponseMetadata struct {
 
 const (
 	ViewToolName     = "view"
-	MaxViewSize      = 200 * 1024 // 200KB
+	MaxTextViewSize  = 200 * 1024 // 200KB text content section
 	DefaultReadLimit = 200
 	MaxLineLength    = 2000
 )
@@ -92,6 +93,7 @@ func NewViewTool(
 	permissions permission.Service,
 	filetracker filetracker.Service,
 	skillTracker *skills.Tracker,
+	cfg *config.ConfigStore,
 	workingDir string,
 	skillsPaths ...string,
 ) fantasy.AgentTool {
@@ -206,10 +208,6 @@ func NewViewTool(
 
 			isSupportedImage, mimeType := getImageMimeType(filePath)
 			if isSupportedImage {
-				if fileInfo.Size() > MaxViewSize {
-					return fantasy.NewTextErrorResponse(fmt.Sprintf("Image file is too large (%d bytes). Maximum size is %d bytes",
-						fileInfo.Size(), MaxViewSize)), nil
-				}
 				if !GetSupportsImagesFromContext(ctx) {
 					modelName := GetModelNameFromContext(ctx)
 					return fantasy.NewTextErrorResponse(fmt.Sprintf("This model (%s) does not support image data.", modelName)), nil
@@ -220,19 +218,26 @@ func NewViewTool(
 					return fantasy.ToolResponse{}, fmt.Errorf("error reading image file: %w", readErr)
 				}
 
-				// Some tools save files with a mismatched extension
-				// (e.g. pinchtab writes JPEG bytes to a .png file).
-				// Providers like Anthropic strictly validate the
-				// media type against the base64 magic bytes and 400
-				// on mismatch, so prefer the sniffed type whenever
-				// it identifies a supported image format.
-				mimeType = sniffImageMimeType(imageData, mimeType)
+				// Normalize-and-resize oversized images instead of rejecting
+				// them. The pure strategy also re-sniffs the media type from
+				// the encoded bytes, so a mismatched filename/extension
+				// cannot cause a provider 400. An image that exceeds even the
+				// hard ceiling produces a clear error rather than a silent
+				// failure.
+				norm, normErr := imageresize.Normalize(imageData, mimeType, cfg.ImageResize())
+				if normErr != nil {
+					return fantasy.NewTextErrorResponse(fmt.Sprintf("Unable to send image: %s", normErr)), nil
+				}
 
-				return fantasy.NewImageResponse(imageData, mimeType), nil
+				resp := fantasy.NewImageResponse(norm.Data, norm.MimeType)
+				// Tell the model the original and displayed dimensions so
+				// pixel-coordinate instructions stay accurate.
+				resp.Content = norm.AppendHint("")
+				return resp, nil
 			}
 
 			// Read the file content
-			maxContentSize := MaxViewSize
+			maxContentSize := MaxTextViewSize
 			if isSkillFile {
 				maxContentSize = 0
 			}
@@ -378,29 +383,13 @@ func getImageMimeType(filePath string) (bool, string) {
 		return true, "image/gif"
 	case ".webp":
 		return true, "image/webp"
+	case ".bmp":
+		return true, "image/bmp"
+	case ".tif", ".tiff":
+		return true, "image/tiff"
 	default:
 		return false, ""
 	}
-}
-
-// sniffImageMimeType returns the content-sniffed MIME type when it identifies
-// a supported image format. Otherwise it returns the provided fallback, which
-// is usually the extension-derived type. Providers that validate the image
-// media type against the base64 magic bytes (e.g. Anthropic) reject mismatched
-// requests with a 400, so trusting the filename alone is unsafe.
-func sniffImageMimeType(data []byte, fallback string) string {
-	sniffed := http.DetectContentType(data)
-	// http.DetectContentType may return the MIME with a ";" parameter
-	// (e.g. "image/svg+xml; charset=utf-8") although current image sniffers
-	// return bare types; strip defensively.
-	if i := strings.IndexByte(sniffed, ';'); i >= 0 {
-		sniffed = strings.TrimSpace(sniffed[:i])
-	}
-	switch sniffed {
-	case "image/jpeg", "image/png", "image/gif", "image/webp":
-		return sniffed
-	}
-	return fallback
 }
 
 // isInSkillsPath checks if filePath is within any of the configured skills
