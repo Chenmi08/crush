@@ -113,31 +113,9 @@ func NewDownloadTool(permissions permission.Service, workingDir string, client *
 			relPath, _ := filepath.Rel(workingDir, filePath)
 			relPath = filepath.ToSlash(cmp.Or(relPath, filePath))
 
-			sessionID := GetSessionFromContext(ctx)
-			if sessionID == "" {
-				return fantasy.ToolResponse{}, fmt.Errorf("session ID is required for downloading files")
-			}
-
-			p, err := requestPermission(
-				ctx,
-				permissions,
-				sandboxedRequest(ctx, permission.CreatePermissionRequest{
-					SessionID:   sessionID,
-					Path:        filePath,
-					ToolCallID:  call.ID,
-					ToolName:    DownloadToolName,
-					Action:      "download",
-					Description: fmt.Sprintf("Download file from URL: %s to %s", params.URL, filePath),
-					Params:      DownloadPermissionsParams(params),
-				}),
-			)
-			if err != nil {
-				return fantasy.ToolResponse{}, err
-			}
-			if !p {
-				return NewPermissionDeniedResponse(), nil
-			}
-
+			// The destination is inside the writable roots (the fence above
+			// approved it otherwise), so the download runs without an
+			// approval prompt. Network egress is not a sandbox boundary.
 			// Handle timeout with context
 			requestCtx := ctx
 			if params.Timeout > 0 {

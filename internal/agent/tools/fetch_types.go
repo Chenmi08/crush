@@ -9,15 +9,6 @@ const WebSearchToolName = "web_search"
 // LargeContentThreshold is the size threshold for saving content to a file.
 const LargeContentThreshold = 50000 // 50KB
 
-// AgentPermissionsParams defines the permission parameters for a delegated
-// sub-agent. A sub-agent only asks for permission when it will reach the
-// network, so these are always the research shape: an optional URL plus the
-// prompt describing what to find.
-type AgentPermissionsParams struct {
-	URL    string `json:"url,omitempty"`
-	Prompt string `json:"prompt"`
-}
-
 // WebFetchParams defines the parameters for the web_fetch tool.
 type WebFetchParams struct {
 	URLs []string `json:"urls" description:"URLs to read. Batch every URL you need into a single call: one call costs one Exa request no matter how many URLs it carries, while separate calls are rate limited."`
@@ -37,11 +28,4 @@ type FetchParams struct {
 	URL     string `json:"url" description:"The URL to fetch content from"`
 	Format  string `json:"format" description:"The format to return the content in (text, markdown, or html)"`
 	Timeout int    `json:"timeout,omitempty" description:"Optional timeout in seconds (max 120)"`
-}
-
-// FetchPermissionsParams defines the permission parameters for the simple fetch tool.
-type FetchPermissionsParams struct {
-	URL     string `json:"url"`
-	Format  string `json:"format"`
-	Timeout int    `json:"timeout,omitempty"`
 }

@@ -420,6 +420,7 @@ func writeSandbox(b *strings.Builder, cfg *config.ConfigStore) {
 		fmt.Fprintf(b, "protected_paths = %d\n", len(rt.Policy.Protected))
 	}
 	b.WriteString("reads = unrestricted (the sandbox confines writes only)\n")
+	b.WriteString("approval = only boundary exits and off-machine commands prompt; confined writes and all reads do not\n")
 	b.WriteString("sub_agents = read-only (delegated agents always run under a read-only policy regardless of this mode; only their private temp directory is writable)\n")
 	b.WriteString("\n")
 }

@@ -15,13 +15,17 @@ import (
 //	permissions deny <tool> [<tool> ...]
 //	permissions network <command> [<command> ...]
 //
-// "allow" adds tools to the allow-list (tools that skip permission prompts).
+// "allow" adds tools to the allow-list (tools whose approval prompts are
+// skipped). File tools are governed by the sandbox instead: a confined write
+// and every read already run without a prompt, so allowing write/edit/view
+// has no effect in a sandboxed session.
 // "deny" hides tools from the agent entirely (options.disabled_tools) — the
 // inverse of allow. Adding the same tool twice is a no-op.
 //
-// "network" adds shell command patterns to the list of commands that leave
-// the sandbox's boundary (network, privilege escalation) and therefore
-// require a prompt. Entries are command-name prefixes, e.g. "docker push".
+// "network" adds shell command patterns to the list of commands that change
+// state outside the machine (remote mutations, privilege escalation) and
+// therefore require a prompt. Entries are command-name prefixes, e.g.
+// "docker push".
 // Adding the same command twice is a no-op.
 //
 // Precedence: deny wins. If a tool appears in both allow and deny, it is
@@ -86,8 +90,8 @@ func permissionsDeny(b *ConfigBuilder, args []string, stderr io.Writer) error {
 }
 
 // permissionsNetwork adds shell command patterns to the network-command list:
-// commands that leave the sandbox's boundary (network, privilege escalation)
-// and therefore require a prompt.
+// commands that change state outside the machine (remote mutations,
+// privilege escalation) and therefore require a prompt.
 func permissionsNetwork(b *ConfigBuilder, args []string, stderr io.Writer) error {
 	if len(args) < 3 {
 		return usage(stderr, "usage: permissions network <command> [<command> ...]")

@@ -141,11 +141,12 @@ call after the user approves it.
 20. As a developer, I want commands that run inside the sandbox to be
     auto-approved, so that the sandbox reduces interruptions instead of adding
     them.
-21. As a developer, I want commands that leave the sandbox's boundary —
-    network egress, privilege escalation — to prompt even inside the sandbox,
-    so that operations like `git push` are never granted implicitly.
-    *(Fork: replaces the configured `dangerous` list; egress is the only
-    remaining prompt.)*
+21. As a developer, I want commands that change state outside the machine —
+    remote mutations and privilege escalation — to prompt even inside the
+    sandbox, so that operations like `git push` are never granted implicitly.
+    *(Fork: replaces the configured `dangerous` list. Read-only egress such as
+    `curl` does not prompt: it mutates nothing remotely, and its local writes
+    are already fenced.)*
 22. *(Fork: removed. Command exclusions are gone — the boundary is the
     sandbox, and removing isolation is a mode change, not a per-command
     carve-out.)*
@@ -347,13 +348,23 @@ repository can be trusted and still must not be modifiable by the agent.
 ### Approval interaction
 
 - A command that is actually confined runs without a prompt.
-- A command that leaves the boundary — matching the built-in network list
-  (`curl`, `wget`, `ssh`, `scp`, `rsync`, `nc`, `git push`, `gh`, `sudo`,
-  `su`, `doas`, and others) or the configured `network_commands` additions —
-  prompts, even when confined. Every invocation in a command line is checked,
-  including piped and chained ones.
+- A file write inside the writable roots runs without a prompt, whichever
+  tool performs it (`write`, `edit`, `multiedit`, `download`,
+  `lsp_rename`, `lsp_replace_symbol`). A write outside the roots raises one
+  `Leave Sandbox?` dialog; an operation that rewrites several files
+  (`lsp_rename`) raises it at most once.
+- A read never prompts, wherever it points: the sandbox confines writes only,
+  so `view` and MCP resource listing/reading are unconfined and unapproved.
+- A command that changes state outside the machine — matching the built-in
+  list (`ssh`, `scp`, `sftp`, `rsync`, `ftp`, `git push`, `gh`, `sudo`, `su`,
+  `doas`) or the configured `network_commands` additions — prompts, even when
+  confined. Every invocation in a command line is checked, including piped and
+  chained ones. Read-only egress (`curl`, `wget`, `nc`, `telnet`) does not
+  prompt.
+- MCP tool execution prompts: MCP servers run outside the sandbox with the
+  user's authority. Listing and reading MCP resources do not.
 - `danger-full-access` is full delegation: nothing prompts, network commands
-  included.
+  and MCP execution included.
 - Hooks, MCP servers, and LSP servers remain outside the sandbox and are
   documented as such. Project-level hooks additionally require the project to
   be trusted.

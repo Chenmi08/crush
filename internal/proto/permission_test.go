@@ -86,33 +86,6 @@ func TestPermissionRequestParamsTypeAssertable(t *testing.T) {
 			},
 		},
 		{
-			name:     "view",
-			toolName: tools.ViewToolName,
-			params: tools.ViewPermissionsParams{
-				FilePath: "/tmp/x.go",
-				Offset:   10,
-				Limit:    100,
-			},
-			assert: func(t *testing.T, got any) {
-				v, ok := got.(tools.ViewPermissionsParams)
-				require.True(t, ok, "params must decode as tools.ViewPermissionsParams, got %T", got)
-				require.Equal(t, "/tmp/x.go", v.FilePath)
-			},
-		},
-		{
-			name:     "fetch",
-			toolName: tools.FetchToolName,
-			params: tools.FetchPermissionsParams{
-				URL:    "https://example.com",
-				Format: "text",
-			},
-			assert: func(t *testing.T, got any) {
-				v, ok := got.(tools.FetchPermissionsParams)
-				require.True(t, ok, "params must decode as tools.FetchPermissionsParams, got %T", got)
-				require.Equal(t, "https://example.com", v.URL)
-			},
-		},
-		{
 			name:     "download",
 			toolName: tools.DownloadToolName,
 			params: tools.DownloadPermissionsParams{
@@ -125,20 +98,6 @@ func TestPermissionRequestParamsTypeAssertable(t *testing.T) {
 				require.True(t, ok, "params must decode as tools.DownloadPermissionsParams, got %T", got)
 				require.Equal(t, "https://example.com/x.zip", v.URL)
 				require.Equal(t, "/tmp/x.zip", v.FilePath)
-			},
-		},
-		{
-			name:     "agent",
-			toolName: tools.AgentToolName,
-			params: tools.AgentPermissionsParams{
-				URL:    "https://example.com",
-				Prompt: "summarize this page",
-			},
-			assert: func(t *testing.T, got any) {
-				v, ok := got.(tools.AgentPermissionsParams)
-				require.True(t, ok, "params must decode as tools.AgentPermissionsParams, got %T", got)
-				require.Equal(t, "https://example.com", v.URL)
-				require.Equal(t, "summarize this page", v.Prompt)
 			},
 		},
 	}

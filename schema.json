@@ -734,12 +734,11 @@
           "items": {
             "type": "string",
             "examples": [
-              "bash",
-              "view"
+              "bash"
             ]
           },
           "type": "array",
-          "description": "List of tools that don't require permission prompts"
+          "description": "List of tools whose approval prompts are skipped. File writes and reads are governed by the sandbox, not this list"
         },
         "network_commands": {
           "items": {
@@ -749,7 +748,7 @@
             ]
           },
           "type": "array",
-          "description": "Extra shell commands that leave the sandbox boundary and require a prompt"
+          "description": "Extra shell commands that change state off-machine and require a prompt, besides the built-in list"
         },
         "sandbox": {
           "$ref": "#/$defs/Sandbox",

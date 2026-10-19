@@ -145,8 +145,12 @@ func (m *Tool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.ToolRe
 		return fantasy.NewTextErrorResponse("This channel tool is only available for messages from its originating channel."), nil
 	}
 
-	// Skip permission for whitelisted Docker MCP tools.
-	if !slices.Contains(whitelistDockerTools, params.Name) {
+	// MCP servers run outside the sandbox with the user's authority, so
+	// executing one always asks — except for the Docker helpers that only
+	// manage MCP itself, and under danger-full-access, which delegates
+	// fully. Listing and reading resources never asks: they are reads.
+	if !slices.Contains(whitelistDockerTools, params.Name) &&
+		requiresApproval(SandboxPolicyFromContext(ctx), true) {
 		permissionDescription := fmt.Sprintf("execute %s with the following parameters:", m.Info().Name)
 		p, err := m.permissions.Request(
 			ctx,

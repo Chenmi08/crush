@@ -217,3 +217,39 @@ func TestPermissions_EscalationShowsToolContent(t *testing.T) {
 			"the escalated write's content must be visible before approval")
 	})
 }
+
+// TestPermissions_EscalationHasNoSessionOption verifies an escalation
+// (Leave Sandbox?) cannot offer "Allow for Session": the permission service
+// deliberately does not record escalations as session grants, so the button
+// would promise something it never honors.
+func TestPermissions_EscalationHasNoSessionOption(t *testing.T) {
+	t.Parallel()
+
+	s := styles.CharmtonePantera()
+	com := &common.Common{Styles: &s}
+	perm := permission.PermissionRequest{
+		ID:         "perm-escalation",
+		ToolCallID: "tool-call-escalation",
+		ToolName:   tools.WriteToolName,
+		Escalation: true,
+	}
+	p := NewPermissions(com, perm)
+	require.Equal(t, 2, p.optionCount())
+	require.False(t, p.canGrantForSession())
+
+	// Tab cycles Allow -> Deny -> Allow, never landing on a session grant.
+	p.HandleMsg(tea.KeyPressMsg{Code: tea.KeyTab})
+	require.Equal(t, 1, p.selectedOption)
+	p.HandleMsg(tea.KeyPressMsg{Code: tea.KeyTab})
+	require.Equal(t, 0, p.selectedOption)
+
+	// The session key is a no-op: the dialog stays open.
+	require.Nil(t, p.HandleMsg(keyMsg('s')))
+
+	// Confirming the second option denies, which is what it renders as.
+	p.selectedOption = 1
+	action := p.HandleMsg(tea.KeyPressMsg{Code: tea.KeyEnter})
+	resp, ok := action.(ActionPermissionResponse)
+	require.True(t, ok)
+	require.Equal(t, PermissionDeny, resp.Action)
+}

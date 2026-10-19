@@ -6,34 +6,30 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
-// defaultNetworkCommands lists the shell commands that reach outside the
-// sandbox's boundary. The sandbox confines writes but not network access, so
-// these commands are the only ones that still prompt: everything else runs
-// confined and auto-approved, and danger-full-access delegates fully.
+// defaultNetworkCommands lists the shell commands that change state outside
+// the machine: remote mutations and privilege escalation. The sandbox
+// confines writes but not network access, so these are the operations it
+// cannot fence and therefore the ones that still prompt. Everything else
+// runs confined and auto-approved, and danger-full-access delegates fully.
 //
 // The list is deliberately a token-prefix match, not a boundary: any
 // interpreter (python -c, go run) can reach the network. A miss costs one
 // unprompted but still confined call, which is an acceptable trade for not
-// maintaining a language of execution semantics.
+// maintaining a language of execution semantics. Read-only egress (curl,
+// wget, nc, telnet) is not listed: it changes nothing remotely, and its
+// local writes are already fenced, so prompting for it would only add noise
+// without adding a boundary.
 var defaultNetworkCommands = []string{
-	// Downloads and transfer.
-	"curl",
-	"wget",
+	// Remote services that act with the user's credentials.
+	"ssh",
 	"scp",
 	"sftp",
 	"rsync",
 	"ftp",
-	"nc",
-	"netcat",
-	"telnet",
-
-	// Remote services.
-	"ssh",
 	"gh",
 
-	// Git's egress surfaces.
+	// Git's remote-mutating surfaces.
 	"git push",
-	"git remote",
 
 	// Privilege escalation is a capability escape, not a write.
 	"sudo",

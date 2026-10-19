@@ -61,7 +61,7 @@ func (c *coordinator) agentTool(ctx context.Context) (fantasy.AgentTool, error) 
 
 			switch params.Profile {
 			case agentProfileResearch:
-				return c.runResearchProfile(ctx, call, AgentToolName, researchRequest{
+				return c.runResearchProfile(ctx, call, researchRequest{
 					Prompt: params.Prompt,
 					URL:    params.URL,
 				})

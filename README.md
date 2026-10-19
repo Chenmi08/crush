@@ -267,8 +267,9 @@ provider add ollama --type ollama --base-url "http://localhost:11434/v1"
 # Register a model on Ollama.
 model add ollama/llama3.3 --name "Llama 3.3" --context-window 128000
 
-# Auto-approve some tools.
-permissions allow view edit
+# Auto-approve a tool's approval prompts (file tools are confined by the
+# sandbox and never prompt for a confined write or any read).
+permissions allow bash
 
 # Include some other file on a specific machine.
 if [[ $HOSTNAME == "babysquid" ]]; then
@@ -566,12 +567,13 @@ in the root of your project or in subdirectories.
 
 ### Allowing Tools
 
-By default, Crush will ask you for permission before running tool calls. If
-you'd like, you can allow tools to be executed without prompting you for
-permissions. Use this with care.
+Crush only asks before an operation leaves the sandbox or changes state
+outside the machine. A write inside the sandbox's writable roots and every
+read run without a prompt. You can allow additional tools' approval prompts
+with `permissions allow`; use this with care.
 
 ```bash
-permissions allow view ls grep edit mcp_context7_get-library-doc
+permissions allow bash
 ```
 
 ### Disabling Built-In Tools

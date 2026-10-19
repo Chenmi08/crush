@@ -934,10 +934,10 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 		tools.NewDownloadTool(c.permissions, c.cfg.WorkingDir(), nil),
 		tools.NewEditTool(c.lspManager, c.permissions, c.history, c.filetracker, c.cfg.WorkingDir(), writeOpts),
 		tools.NewMultiEditTool(c.lspManager, c.permissions, c.history, c.filetracker, c.cfg.WorkingDir(), writeOpts),
-		tools.NewFetchTool(c.permissions, c.cfg.WorkingDir(), nil),
+		tools.NewFetchTool(c.cfg.WorkingDir(), nil),
 		tools.NewSourcegraphTool(nil),
 		tools.NewTodosTool(c.sessions),
-		tools.NewViewTool(c.lspManager, c.permissions, c.filetracker, c.skillTracker, c.cfg, c.cfg.WorkingDir(), c.cfg.Config().Options.SkillsPaths...),
+		tools.NewViewTool(c.lspManager, c.filetracker, c.skillTracker, c.cfg, c.cfg.WorkingDir(), c.cfg.Config().Options.SkillsPaths...),
 		tools.NewWriteTool(c.lspManager, c.permissions, c.history, c.filetracker, c.cfg.WorkingDir(), writeOpts),
 	)
 
@@ -964,8 +964,8 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 	if len(c.cfg.Config().MCP) > 0 {
 		allTools = append(
 			allTools,
-			tools.NewListMCPResourcesTool(c.cfg, c.permissions),
-			tools.NewReadMCPResourceTool(c.cfg, c.permissions),
+			tools.NewListMCPResourcesTool(c.cfg),
+			tools.NewReadMCPResourceTool(c.cfg),
 		)
 	}
 

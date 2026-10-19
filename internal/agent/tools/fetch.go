@@ -15,7 +15,6 @@ import (
 	"charm.land/fantasy"
 	md "github.com/JohannesKaufmann/html-to-markdown"
 	"github.com/PuerkitoBio/goquery"
-	"github.com/charmbracelet/crush/internal/permission"
 )
 
 const (
@@ -43,7 +42,7 @@ func fetchDescription() string {
 	})
 }
 
-func NewFetchTool(permissions permission.Service, workingDir string, client *http.Client) fantasy.AgentTool {
+func NewFetchTool(workingDir string, client *http.Client) fantasy.AgentTool {
 	if client == nil {
 		transport := http.DefaultTransport.(*http.Transport).Clone()
 		transport.MaxIdleConns = 100
@@ -59,7 +58,7 @@ func NewFetchTool(permissions permission.Service, workingDir string, client *htt
 	return fantasy.NewParallelAgentTool(
 		FetchToolName,
 		fetchDescription(),
-		func(ctx context.Context, params FetchParams, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+		func(ctx context.Context, params FetchParams, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
 			if params.URL == "" {
 				return fantasy.NewTextErrorResponse("URL parameter is required"), nil
 			}
@@ -73,30 +72,10 @@ func NewFetchTool(permissions permission.Service, workingDir string, client *htt
 				return fantasy.NewTextErrorResponse("URL must start with http:// or https://"), nil
 			}
 
-			sessionID := GetSessionFromContext(ctx)
-			if sessionID == "" {
-				return fantasy.ToolResponse{}, fmt.Errorf("session ID is required for creating a new file")
-			}
-
-			p, err := permissions.Request(
-				ctx,
-				permission.CreatePermissionRequest{
-					SessionID:   sessionID,
-					Path:        workingDir,
-					ToolCallID:  call.ID,
-					ToolName:    FetchToolName,
-					Action:      "fetch",
-					Description: fmt.Sprintf("Fetch content from URL: %s", params.URL),
-					Params:      FetchPermissionsParams(params),
-				},
-			)
-			if err != nil {
-				return fantasy.ToolResponse{}, err
-			}
-			if !p {
-				return NewPermissionDeniedResponse(), nil
-			}
-
+			// Fetching a URL is a read: it writes nothing and needs no
+			// approval. Network egress is not a sandbox boundary; commands
+			// that mutate remote state are covered by the bash network list
+			// and by MCP execution prompts.
 			// maxFetchTimeoutSeconds is the maximum allowed timeout for fetch requests (2 minutes)
 			const maxFetchTimeoutSeconds = 120
 

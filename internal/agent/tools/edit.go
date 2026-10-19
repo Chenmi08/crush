@@ -53,7 +53,6 @@ var editDescription string
 
 type editContext struct {
 	ctx         context.Context
-	permissions permission.Service
 	files       history.Service
 	filetracker filetracker.Service
 	workingDir  string
@@ -118,7 +117,6 @@ func NewEditTool(
 
 			editCtx := editContext{
 				ctx:         ctx,
-				permissions: permissions,
 				files:       files,
 				filetracker: filetracker,
 				workingDir:  workingDir,
@@ -126,11 +124,11 @@ func NewEditTool(
 			}
 
 			if params.OldString == "" {
-				response, err = createNewFile(editCtx, params.FilePath, params.NewString, call)
+				response, err = createNewFile(editCtx, params.FilePath, params.NewString)
 			} else if params.NewString == "" {
-				response, err = deleteContent(editCtx, params.FilePath, params.OldString, params.ReplaceAll, call)
+				response, err = deleteContent(editCtx, params.FilePath, params.OldString, params.ReplaceAll)
 			} else {
-				response, err = replaceContent(editCtx, params.FilePath, params.OldString, params.NewString, params.ReplaceAll, call)
+				response, err = replaceContent(editCtx, params.FilePath, params.OldString, params.NewString, params.ReplaceAll)
 			}
 
 			if err != nil {
@@ -152,7 +150,7 @@ func NewEditTool(
 	)
 }
 
-func createNewFile(edit editContext, filePath, content string, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+func createNewFile(edit editContext, filePath, content string) (fantasy.ToolResponse, error) {
 	fileInfo, err := os.Stat(filePath)
 	if err == nil {
 		if fileInfo.IsDir() {
@@ -178,36 +176,9 @@ func createNewFile(edit editContext, filePath, content string, call fantasy.Tool
 		content,
 		strings.TrimPrefix(filePath, edit.workingDir),
 	)
-	p, err := requestPermission(
-		edit.ctx,
-		edit.permissions,
-		sandboxedRequest(edit.ctx, permission.CreatePermissionRequest{
-			SessionID:   sessionID,
-			Path:        fsext.PathOrPrefix(filePath, edit.workingDir),
-			ToolCallID:  call.ID,
-			ToolName:    EditToolName,
-			Action:      "write",
-			Description: fmt.Sprintf("Create file %s", filePath),
-			Params: EditPermissionsParams{
-				FilePath:   filePath,
-				OldContent: "",
-				NewContent: content,
-			},
-		}),
-	)
-	if err != nil {
-		return fantasy.ToolResponse{}, err
-	}
-	if !p {
-		resp := NewPermissionDeniedResponse()
-		resp = fantasy.WithResponseMetadata(resp, EditResponseMetadata{
-			OldContent: "",
-			NewContent: content,
-			Additions:  additions,
-			Removals:   removals,
-		})
-		return resp, nil
-	}
+	// A write inside the writable roots is confined by the sandbox, so it
+	// runs without an approval prompt. The fence above is the only place a
+	// write can ask to leave the sandbox.
 
 	err = os.WriteFile(filePath, []byte(content), 0o644)
 	if err != nil {
@@ -359,7 +330,7 @@ func loadExistingFile(edit editContext, filePath, sessionError string) (sessionI
 	return sessionID, oldContent, isCrlf, fantasy.ToolResponse{}, nil
 }
 
-func deleteContent(edit editContext, filePath, oldString string, replaceAll bool, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+func deleteContent(edit editContext, filePath, oldString string, replaceAll bool) (fantasy.ToolResponse, error) {
 	sessionID, oldContent, isCrlf, resp, err := loadExistingFile(edit, filePath, "session ID is required for deleting content")
 	if err != nil {
 		return fantasy.ToolResponse{}, err
@@ -379,37 +350,8 @@ func deleteContent(edit editContext, filePath, oldString string, replaceAll bool
 		strings.TrimPrefix(filePath, edit.workingDir),
 	)
 
-	p, err := requestPermission(
-		edit.ctx,
-		edit.permissions,
-		sandboxedRequest(edit.ctx, permission.CreatePermissionRequest{
-			SessionID:   sessionID,
-			Path:        fsext.PathOrPrefix(filePath, edit.workingDir),
-			ToolCallID:  call.ID,
-			ToolName:    EditToolName,
-			Action:      "write",
-			Description: fmt.Sprintf("Delete content from file %s", filePath),
-			Params: EditPermissionsParams{
-				FilePath:   filePath,
-				OldContent: oldContent,
-				NewContent: newContent,
-			},
-		}),
-	)
-	if err != nil {
-		return fantasy.ToolResponse{}, err
-	}
-	if !p {
-		resp := NewPermissionDeniedResponse()
-		resp = fantasy.WithResponseMetadata(resp, EditResponseMetadata{
-			OldContent: oldContent,
-			NewContent: newContent,
-			Additions:  additions,
-			Removals:   removals,
-		})
-		return resp, nil
-	}
-
+	// Confined writes run without an approval prompt; the fence above is
+	// the only place a write can ask to leave the sandbox.
 	writeContent := newContent
 	if isCrlf {
 		writeContent, _ = fsext.ToWindowsLineEndings(writeContent)
@@ -430,7 +372,7 @@ func deleteContent(edit editContext, filePath, oldString string, replaceAll bool
 	), nil
 }
 
-func replaceContent(edit editContext, filePath, oldString, newString string, replaceAll bool, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+func replaceContent(edit editContext, filePath, oldString, newString string, replaceAll bool) (fantasy.ToolResponse, error) {
 	sessionID, oldContent, isCrlf, resp, err := loadExistingFile(edit, filePath, "session ID is required for editing a file")
 	if err != nil {
 		return fantasy.ToolResponse{}, err
@@ -453,37 +395,8 @@ func replaceContent(edit editContext, filePath, oldString, newString string, rep
 		strings.TrimPrefix(filePath, edit.workingDir),
 	)
 
-	p, err := requestPermission(
-		edit.ctx,
-		edit.permissions,
-		sandboxedRequest(edit.ctx, permission.CreatePermissionRequest{
-			SessionID:   sessionID,
-			Path:        fsext.PathOrPrefix(filePath, edit.workingDir),
-			ToolCallID:  call.ID,
-			ToolName:    EditToolName,
-			Action:      "write",
-			Description: fmt.Sprintf("Replace content in file %s", filePath),
-			Params: EditPermissionsParams{
-				FilePath:   filePath,
-				OldContent: oldContent,
-				NewContent: result,
-			},
-		}),
-	)
-	if err != nil {
-		return fantasy.ToolResponse{}, err
-	}
-	if !p {
-		resp := NewPermissionDeniedResponse()
-		resp = fantasy.WithResponseMetadata(resp, EditResponseMetadata{
-			OldContent: oldContent,
-			NewContent: result,
-			Additions:  additions,
-			Removals:   removals,
-		})
-		return resp, nil
-	}
-
+	// Confined writes run without an approval prompt; the fence above is
+	// the only place a write can ask to leave the sandbox.
 	writeContent := result
 	if isCrlf {
 		writeContent, _ = fsext.ToWindowsLineEndings(writeContent)

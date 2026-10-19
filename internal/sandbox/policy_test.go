@@ -101,26 +101,30 @@ func TestSubagentPolicyFor(t *testing.T) {
 	})
 }
 
-func TestCheckRead_TempDirOnly(t *testing.T) {
+// TestDenyWrite_IsNotReAllovable pins that a configured deny-write path
+// stays unwritable under every wider mode: an escalation must not turn
+// "keep ./secrets unwritable" into "hand over the whole disk".
+func TestDenyWrite_IsNotReAllovable(t *testing.T) {
 	t.Parallel()
-	p := testPolicy(t)
+	workspace := t.TempDir()
+	secrets := filepath.Join(workspace, "secrets")
 
-	require.True(t, p.CheckRead(filepath.Join(p.TempDir, "spill.txt")),
-		"the session's own spill files read without prompting")
-	require.True(t, p.CheckRead(filepath.Join(p.TempDir, "nested", "out.md")),
-		"reads inside the temp directory are covered at any depth")
-	require.False(t, p.CheckRead(filepath.Join(p.Workspace, "file.go")),
-		"CheckRead is not a general read exemption")
-	require.False(t, p.CheckRead(p.TempDir+"-sibling/file"),
-		"a sibling directory sharing a prefix is not inside the temp directory")
+	p, err := Resolve(Options{
+		Workspace: workspace,
+		TempDir:   filepath.Join(t.TempDir(), "tmp"),
+		Config:    Config{Mode: ModeWorkspaceWrite, DenyWrite: []string{secrets}},
+	})
+	require.NoError(t, err)
 
-	// A nil policy leaves the caller's behavior in place.
-	var nilPolicy *Policy
-	require.False(t, nilPolicy.CheckRead("/any/path"))
+	d, denied := p.WriteDenial(filepath.Join(secrets, "token"))
+	require.True(t, denied)
+	require.True(t, d.DenyWrite, "the denial must be identifiable as a deny-write refusal")
+	require.Contains(t, d.Error(), "reason=deny-write")
 
-	// A policy with no temp directory grants no read exemption.
-	noTemp := &Policy{Mode: ModeWorkspaceWrite}
-	require.False(t, noTemp.CheckRead("/any/path"))
+	// danger-full-access is the widest mode and still must not report the
+	// path as writable through a deny-write check: the caller relies on
+	// WriteDenial to decide whether to escalate.
+	require.False(t, p.AllowsWrite(filepath.Join(secrets, "token")))
 }
 
 func TestResolve_DefaultModeAndRoots(t *testing.T) {

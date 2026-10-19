@@ -7,16 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"charm.land/fantasy"
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/filetracker"
-	"github.com/charmbracelet/crush/internal/permission"
-	"github.com/charmbracelet/crush/internal/pubsub"
-	"github.com/charmbracelet/crush/internal/sandbox"
 	"github.com/stretchr/testify/require"
 )
 
@@ -235,74 +231,6 @@ func TestReadTextFileAllowsExactMaxContentSize(t *testing.T) {
 	require.False(t, hasMore)
 }
 
-type mockViewPermissionService struct {
-	*pubsub.Broker[permission.PermissionRequest]
-}
-
-func (m *mockViewPermissionService) Request(ctx context.Context, req permission.CreatePermissionRequest) (bool, error) {
-	return true, nil
-}
-
-func (m *mockViewPermissionService) Grant(req permission.PermissionRequest) bool { return true }
-
-// countingViewPermissionService records how many permission requests the
-// tool made, so tests can assert a path prompted or did not.
-type countingViewPermissionService struct {
-	*pubsub.Broker[permission.PermissionRequest]
-	requests atomic.Int64
-}
-
-func (m *countingViewPermissionService) Request(ctx context.Context, req permission.CreatePermissionRequest) (bool, error) {
-	m.requests.Add(1)
-	return true, nil
-}
-
-func (m *countingViewPermissionService) Grant(req permission.PermissionRequest) bool { return true }
-
-func (m *countingViewPermissionService) Deny(req permission.PermissionRequest) bool { return true }
-
-func (m *countingViewPermissionService) GrantPersistent(req permission.PermissionRequest) bool {
-	return true
-}
-
-func (m *countingViewPermissionService) AutoApproveSession(sessionID string) {}
-
-func (m *countingViewPermissionService) ActiveRequest() (permission.PermissionRequest, bool) {
-	return permission.PermissionRequest{}, false
-}
-
-func (m *countingViewPermissionService) SetSkipRequests(skip bool) {}
-
-func (m *countingViewPermissionService) SkipRequests() bool {
-	return false
-}
-
-func (m *countingViewPermissionService) SubscribeNotifications(ctx context.Context) <-chan pubsub.Event[permission.PermissionNotification] {
-	return make(<-chan pubsub.Event[permission.PermissionNotification])
-}
-
-func (m *mockViewPermissionService) Deny(req permission.PermissionRequest) bool { return true }
-
-func (m *mockViewPermissionService) GrantPersistent(req permission.PermissionRequest) bool {
-	return true
-}
-
-func (m *mockViewPermissionService) AutoApproveSession(sessionID string) {}
-
-func (m *mockViewPermissionService) ActiveRequest() (permission.PermissionRequest, bool) {
-	return permission.PermissionRequest{}, false
-}
-
-func (m *mockViewPermissionService) SetSkipRequests(skip bool) {}
-
-func (m *mockViewPermissionService) SkipRequests() bool {
-	return false
-}
-
-func (m *mockViewPermissionService) SubscribeNotifications(ctx context.Context) <-chan pubsub.Event[permission.PermissionNotification] {
-	return make(<-chan pubsub.Event[permission.PermissionNotification])
-}
-
 type mockFileTracker struct{}
 
 func (m mockFileTracker) RecordRead(ctx context.Context, sessionID, path string) {}
@@ -315,81 +243,45 @@ func (m mockFileTracker) ListReadFiles(ctx context.Context, sessionID string) ([
 	return nil, nil
 }
 
-func TestViewToolSkipsPermissionForSandboxSpillFiles(t *testing.T) {
+// TestViewToolReadsOutsideWorkingDirWithoutPrompting pins that reads are not
+// confined: the sandbox never restricts reads, so neither the working
+// directory nor the policy's temp directory changes the outcome.
+func TestViewToolReadsOutsideWorkingDirWithoutPrompting(t *testing.T) {
 	t.Parallel()
 
 	workingDir := t.TempDir()
+	outsideFile := filepath.Join(t.TempDir(), "outside.txt")
+	require.NoError(t, os.WriteFile(outsideFile, []byte("outside content"), 0o644))
 
-	// The spill file lives outside the working directory but inside the
-	// sandbox policy's temp directory, so reading it must not prompt.
-	policy := &sandbox.Policy{
-		Mode:    sandbox.ModeWorkspaceWrite,
-		TempDir: filepath.Join(t.TempDir(), "sandbox-tmp"),
-	}
-	require.NoError(t, os.MkdirAll(policy.TempDir, 0o700))
-	spillPath := filepath.Join(policy.TempDir, "spill.txt")
-	require.NoError(t, os.WriteFile(spillPath, []byte("truncated output"), 0o644))
+	tool := newViewToolForTest(workingDir)
+	ctx := context.WithValue(context.Background(), SessionIDContextKey, "test-session")
 
-	perm := &countingViewPermissionService{
-		Broker: pubsub.NewBroker[permission.PermissionRequest](),
-	}
-	tool := NewViewTool(nil, perm, mockFileTracker{}, nil, config.NewTestStore(&config.Config{}), workingDir)
-
-	ctx := WithSandboxPolicy(
-		context.WithValue(context.Background(), SessionIDContextKey, "test-session"),
-		policy,
-	)
-	resp := runViewTool(t, tool, ctx, ViewParams{FilePath: spillPath})
-
+	resp := runViewTool(t, tool, ctx, ViewParams{FilePath: outsideFile})
 	require.False(t, resp.IsError)
-	require.Contains(t, resp.Content, "truncated output")
-	require.Equal(t, int64(0), perm.requests.Load(),
-		"reading the session's own spill output must not prompt")
-
-	// The same path without a policy (or outside the temp directory) still
-	// prompts.
-	plainCtx := context.WithValue(context.Background(), SessionIDContextKey, "test-session")
-	resp = runViewTool(t, tool, plainCtx, ViewParams{FilePath: spillPath})
-	require.False(t, resp.IsError)
-	require.Equal(t, int64(1), perm.requests.Load(),
-		"without a policy the out-of-workdir read prompts as before")
+	require.Contains(t, resp.Content, "outside content")
 }
 
-func TestViewToolStillPromptsForSymlinkedSpillPath(t *testing.T) {
+// TestViewToolFollowsSymlinksOutsideWorkingDir verifies a link inside the
+// workspace pointing outside it still reads: reads are unconfined.
+func TestViewToolFollowsSymlinksOutsideWorkingDir(t *testing.T) {
 	t.Parallel()
 
 	workingDir := t.TempDir()
-	policy := &sandbox.Policy{
-		Mode:    sandbox.ModeWorkspaceWrite,
-		TempDir: filepath.Join(t.TempDir(), "sandbox-tmp"),
-	}
-	require.NoError(t, os.MkdirAll(policy.TempDir, 0o700))
-
-	// A link inside the temp directory pointing outside it must not be
-	// exempt: CheckRead resolves symlinks first, so the resolved target's
-	// location decides.
 	outsideFile := filepath.Join(t.TempDir(), "outside.txt")
 	require.NoError(t, os.WriteFile(outsideFile, []byte("secret"), 0o644))
-	linkPath := filepath.Join(policy.TempDir, "link.txt")
+	linkPath := filepath.Join(workingDir, "link.txt")
 	require.NoError(t, os.Symlink(outsideFile, linkPath))
 
-	perm := &countingViewPermissionService{
-		Broker: pubsub.NewBroker[permission.PermissionRequest](),
-	}
-	tool := NewViewTool(nil, perm, mockFileTracker{}, nil, config.NewTestStore(&config.Config{}), workingDir)
-	ctx := WithSandboxPolicy(
-		context.WithValue(context.Background(), SessionIDContextKey, "test-session"),
-		policy,
-	)
+	tool := newViewToolForTest(workingDir)
+	ctx := context.WithValue(context.Background(), SessionIDContextKey, "test-session")
+
 	resp := runViewTool(t, tool, ctx, ViewParams{FilePath: linkPath})
 	require.False(t, resp.IsError)
-	require.Equal(t, int64(1), perm.requests.Load(),
-		"a symlink inside the temp directory resolving outside it must prompt")
+	require.Contains(t, resp.Content, "secret")
 }
 
 func newViewToolForTest(workingDir string) fantasy.AgentTool {
-	permissions := &mockViewPermissionService{Broker: pubsub.NewBroker[permission.PermissionRequest]()}
-	return NewViewTool(nil, permissions, mockFileTracker{}, nil, config.NewTestStore(&config.Config{}), workingDir)
+	return NewViewTool(nil, mockFileTracker{}, nil, config.NewTestStore(&config.Config{}), workingDir)
 }
 
 func runViewTool(t *testing.T, tool fantasy.AgentTool, ctx context.Context, params ViewParams) fantasy.ToolResponse {

@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/crush/internal/agent/tools/mcp"
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/permission"
+	"github.com/charmbracelet/crush/internal/sandbox"
 )
 
 // stubFallbackTool stands in for a fallback (for example the DuckDuckGo
@@ -230,4 +231,39 @@ func TestMediaResultResponsePassesAudioThrough(t *testing.T) {
 	require.Equal(t, "media", resp.Type)
 	require.Equal(t, data, resp.Data)
 	require.Equal(t, "transcript follows", resp.Content)
+}
+
+// TestMCPExecutePromptsUnlessDelegated verifies MCP execution asks for
+// approval under a confined policy: MCP servers run outside the sandbox with
+// the user's authority. danger-full-access delegates fully and asks nothing.
+func TestMCPExecutePromptsUnlessDelegated(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	perms := &recordingPermissionService{Broker: pubsubBroker(), allow: true}
+	tool := &Tool{
+		mcpName:     "not-a-server",
+		tool:        &mcp.Tool{Name: "web_search_exa"},
+		cfg:         config.NewTestStore(&config.Config{}),
+		permissions: perms,
+		workingDir:  workspace,
+	}
+	call := fantasy.ToolCall{ID: "call-1", Name: tool.Info().Name, Input: `{"query":"golang"}`}
+
+	ctx := WithSandboxPolicy(
+		context.WithValue(t.Context(), SessionIDContextKey, "session-1"),
+		tableSandboxPolicy(t, workspace),
+	)
+	_, _ = tool.Run(ctx, call)
+	require.Equal(t, 1, perms.requestCount, "MCP execution must prompt under a confined policy")
+	require.NotNil(t, perms.lastRequest)
+	require.Equal(t, "execute", perms.lastRequest.Action)
+	require.False(t, perms.lastRequest.Sandboxed,
+		"MCP runs outside the sandbox; the prompt must say so")
+
+	perms.requestCount = 0
+	delegated := WithSandboxPolicy(ctx, &sandbox.Policy{Mode: sandbox.ModeDangerFullAccess})
+	_, _ = tool.Run(delegated, call)
+	require.Equal(t, 0, perms.requestCount,
+		"danger-full-access delegates fully: MCP execution does not prompt")
 }

@@ -69,36 +69,20 @@ func NewRenameTool(
 			// write/edit/multiedit: confinement must not depend on which tool
 			// the agent happened to pick. Every affected file is checked
 			// before anything is written, so a refusal never leaves a
-			// half-renamed tree. Approval widens the policy for this call.
-			for _, path := range affectedFiles {
-				var fenceErr error
-				var denied *fantasy.ToolResponse
-				ctx, denied, fenceErr = handleFenceDenial(ctx, permissions, RenameToolName, path, call, nil)
-				if fenceErr != nil {
-					return fantasy.ToolResponse{}, fenceErr
-				}
-				if denied != nil {
-					return *denied, nil
-				}
+			// half-renamed tree, and the user is asked at most once even when
+			// several files are outside the writable roots. Approval widens
+			// the policy for this call.
+			ctx, denied, fenceErr := handleFenceDenials(ctx, permissions, RenameToolName, affectedFiles, call, nil)
+			if fenceErr != nil {
+				return fantasy.ToolResponse{}, fenceErr
+			}
+			if denied != nil {
+				return *denied, nil
 			}
 
 			sessionID := GetSessionFromContext(ctx)
-			if sessionID != "" && permissions != nil {
-				granted, err := requestPermission(ctx, permissions, sandboxedRequest(ctx, permission.CreatePermissionRequest{
-					SessionID:   sessionID,
-					ToolCallID:  call.ID,
-					ToolName:    RenameToolName,
-					Action:      "write",
-					Description: fmt.Sprintf("Rename '%s' to '%s'", params.Symbol, params.NewName),
-				}))
-				if err != nil {
-					return fantasy.ToolResponse{}, fmt.Errorf("permission request failed: %w", err)
-				}
-				if !granted {
-					return NewPermissionDeniedResponse(), nil
-				}
-			}
-
+			// A rename inside the writable roots is confined by the sandbox
+			// and runs without an approval prompt.
 			if files != nil && sessionID != "" {
 				for _, path := range affectedFiles {
 					content, err := os.ReadFile(path)

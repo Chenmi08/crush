@@ -62,13 +62,6 @@ func escalationUnavailableResponse() fantasy.ToolResponse {
 	return resp
 }
 
-// escalationDenialHint returns the shared denial text for a policy refusal,
-// including the escalation hint when the caller may request a wider mode.
-func escalationDenialHint(d sandbox.Denial) string {
-	d.EscalationHint = true
-	return d.Error()
-}
-
 // resolveEscalation validates an escalation request against the call's
 // effective policy and, when valid, asks the user for a single-call approval.
 // It returns the policy the call should use.
@@ -148,20 +141,9 @@ func resolveEscalation(
 	return widened, fantasy.ToolResponse{}, nil
 }
 
-// nextWiderMode returns the narrowest mode strictly wider than m. It is what
-// an automatic fence escalation asks for: enough to allow the write, no more.
-func nextWiderMode(m sandbox.Mode) sandbox.Mode {
-	for _, candidate := range sandbox.Modes() {
-		if sandbox.IsWiderMode(candidate, m) {
-			return candidate
-		}
-	}
-	return sandbox.ModeDangerFullAccess
-}
-
-// escalatePolicy builds the wider policy for a single call. It is derived from
-// the effective policy so the workspace, protected set, and private temp
-// directory stay the same; only the mode changes.
+// escalatePolicy builds the wider policy for a single call. It is derived
+// from the effective policy so the workspace, protected set, and private
+// temp directory stay the same; only the mode changes.
 func escalatePolicy(effective *sandbox.Policy, mode sandbox.Mode) (*sandbox.Policy, error) {
 	if effective == nil {
 		return nil, errors.New("no sandbox policy to escalate from")
@@ -172,8 +154,9 @@ func escalatePolicy(effective *sandbox.Policy, mode sandbox.Mode) (*sandbox.Poli
 	widened := *effective
 	widened.Mode = mode
 	// A wider mode widens the writable set to what that mode grants. The
-	// workspace, protected set, temp directory, and cache stay the same, so
-	// protected paths remain protected after an escalation.
+	// workspace, protected set, temp directory, cache, and the user's extra
+	// roots stay the same, so protected paths remain protected after an
+	// escalation and a configured allow-write root is not silently dropped.
 	switch mode {
 	case sandbox.ModeWorkspaceWrite:
 		roots := []string{widened.Workspace}
@@ -183,6 +166,7 @@ func escalatePolicy(effective *sandbox.Policy, mode sandbox.Mode) (*sandbox.Poli
 		if widened.CacheDir != "" {
 			roots = append(roots, widened.CacheDir)
 		}
+		roots = append(roots, widened.AllowWrites...)
 		widened.WriteRoots = sandbox.UniquePaths(roots)
 	case sandbox.ModeReadOnly:
 		if widened.TempDir != "" {
@@ -194,9 +178,9 @@ func escalatePolicy(effective *sandbox.Policy, mode sandbox.Mode) (*sandbox.Poli
 	return &widened, nil
 }
 
-// applyEscalation resolves an escalation for a non-shell tool and returns the
-// context carrying the (possibly widened) policy. A non-nil response means the
-// call must return that response and not proceed.
+// applyEscalation resolves an escalation for a non-shell tool and returns
+// the context carrying the (possibly widened) policy. A non-nil response
+// means the call must return that response and not proceed.
 //
 // The permission service is optional: the file tools treat a nil service as
 // "no approval channel", in which case escalation is unavailable rather than
@@ -224,45 +208,6 @@ func applyEscalation(
 	return WithSandboxPolicy(ctx, policy), nil, nil
 }
 
-// fenceEscalationResponse is what a file tool does when the fence refuses a
-// write: ask the user once, via the same "Leave Sandbox?" dialog an explicit
-// escalation uses. Approved, the wider policy applies to exactly this call
-// and the tool proceeds; denied, the original denial is returned so the model
-// sees the standard refusal.
-//
-// Only the idempotent file tools route through here (write, edit, multiedit,
-// download): replaying the same call after approval cannot double-apply
-// anything. The bash tool keeps its model-initiated escalation, because a
-// shell command may have partially run before the refusal and replaying it is
-// not safe.
-//
-// The requested mode is one step wider, not the widest: a refusal to write
-// outside the writable roots is answered by workspace-write (which keeps the
-// protected set and the temp directory), and only a refusal from read-only
-// needs workspace-write's broader roots. Asking for danger-full-access on
-// every out-of-tree write would hand over the whole disk to answer a much
-// smaller question.
-func fenceEscalation(
-	ctx context.Context,
-	permissions permission.Service,
-	toolName string,
-	d sandbox.Denial,
-	call fantasy.ToolCall,
-	dialogParams any,
-) (context.Context, *fantasy.ToolResponse, error) {
-	effective := SandboxPolicyFromContext(ctx)
-	if effective == nil {
-		return ctx, nil, nil
-	}
-	req := &escalationRequest{
-		mode: nextWiderMode(effective.Mode),
-		justification: fmt.Sprintf(
-			"The sandbox refused a write to %s (mode %s). Approving lets this one %s call write the file under %s; denying sends the refusal back to the model, which can ask you differently or use a path inside the workspace.",
-			d.Path, d.Mode, toolName, nextWiderMode(effective.Mode)),
-	}
-	return applyEscalation(ctx, permissions, toolName, req, call, dialogParams)
-}
-
 // handleFenceDenial is the shared fence exit for the file tools. When the
 // policy refuses the write it asks the user once; the returned context
 // carries the widened policy when the user approved, so the caller proceeds
@@ -274,30 +219,123 @@ func handleFenceDenial(
 	call fantasy.ToolCall,
 	dialogParams any,
 ) (context.Context, *fantasy.ToolResponse, error) {
+	return handleFenceDenials(ctx, permissions, toolName, []string{path}, call, dialogParams)
+}
+
+// handleFenceDenials is [handleFenceDenial] for an operation that rewrites
+// several files at once. Every path is checked here, before anything is
+// written, and the user is asked at most once: a per-file dialog would turn
+// one rename into a stack of prompts and could leave the tree half-rewritten
+// if the user changed their mind partway through.
+func handleFenceDenials(
+	ctx context.Context,
+	permissions permission.Service,
+	toolName string,
+	paths []string,
+	call fantasy.ToolCall,
+	dialogParams any,
+) (context.Context, *fantasy.ToolResponse, error) {
 	policy := SandboxPolicyFromContext(ctx)
 	if policy == nil {
 		return ctx, nil, nil
 	}
-	err := policy.CheckWrite(path)
-	if err == nil {
+
+	// Inspect every path first without counting anything, so the caller
+	// learns about all refusals before any dialog appears.
+	var first sandbox.Denial
+	for _, path := range paths {
+		d, denied := policy.WriteDenial(path)
+		if !denied {
+			continue
+		}
+		d.Tool = toolName
+
+		// A protected path cannot be re-allowed by any setting, a
+		// deny-write entry outranks any wider mode, and an invalid
+		// configuration is not fixed by widening the mode, so asking would
+		// be theater: refuse outright with the escalation hint.
+		if d.Protected || d.DenyWrite || d.ConfigError {
+			// Count and publish the refusal, then answer with it.
+			if counted, ok := sandbox.AsDenial(policy.CheckWrite(path)); ok {
+				counted.Tool = toolName
+				counted.EscalationHint = false
+				d = counted
+			}
+			sandbox.LogDenial(d)
+			resp := fantasy.NewTextErrorResponse(d.Error())
+			resp.StopTurn = true
+			return ctx, &resp, nil
+		}
+		if first.Path == "" {
+			first = d
+		}
+	}
+	if first.Path == "" {
 		return ctx, nil, nil
 	}
-	d, ok := sandbox.AsDenial(err)
-	if !ok {
-		return ctx, nil, nil
-	}
-	d.Tool = toolName
-	sandbox.LogDenial(d)
 
-	// A protected path cannot be re-allowed by any setting, and an invalid
-	// configuration is not fixed by widening the mode, so asking would be
-	// theater: refuse outright with the escalation hint.
-	if d.Protected || d.ConfigError {
-		d.EscalationHint = false
-		resp := fantasy.NewTextErrorResponse(d.Error())
-		resp.StopTurn = true
-		return ctx, &resp, nil
+	// Count and publish the refusal once for the whole operation, so a
+	// multi-file rename does not inflate the session's denial count.
+	counted, ok := sandbox.AsDenial(policy.CheckWrite(first.Path))
+	if ok {
+		counted.Tool = toolName
+		first = counted
 	}
+	sandbox.LogDenial(first)
 
-	return fenceEscalation(ctx, permissions, toolName, d, call, dialogParams)
+	mode := coveringMode(policy, paths)
+	refused := refusedPathSummary(paths, policy)
+	req := &escalationRequest{
+		mode: mode,
+		justification: fmt.Sprintf(
+			"The sandbox refused %s (mode %s). Approving lets this one %s call write %s under %s; denying sends the refusal back to the model, which can ask you differently or use paths inside the workspace.",
+			refused, first.Mode, toolName, refused, mode),
+	}
+	return applyEscalation(ctx, permissions, toolName, req, call, dialogParams)
+}
+
+// coveringMode returns the narrowest mode strictly wider than the effective
+// one under which every path may be written.
+func coveringMode(effective *sandbox.Policy, paths []string) sandbox.Mode {
+	for _, candidate := range sandbox.Modes() {
+		if !sandbox.IsWiderMode(candidate, effective.Mode) {
+			continue
+		}
+		widened, err := escalatePolicy(effective, candidate)
+		if err != nil {
+			continue
+		}
+		covered := true
+		for _, path := range paths {
+			if !widened.AllowsWrite(path) {
+				covered = false
+				break
+			}
+		}
+		if covered {
+			return candidate
+		}
+	}
+	return sandbox.ModeDangerFullAccess
+}
+
+// refusedPathSummary names the refused paths for the approval dialog. It
+// keeps the message readable when a rename touches many files.
+func refusedPathSummary(paths []string, policy *sandbox.Policy) string {
+	var refused []string
+	for _, path := range paths {
+		if !policy.AllowsWrite(path) {
+			refused = append(refused, path)
+		}
+	}
+	switch len(refused) {
+	case 0:
+		return "the requested paths"
+	case 1:
+		return refused[0]
+	case 2:
+		return refused[0] + " and " + refused[1]
+	default:
+		return fmt.Sprintf("%s and %d more file(s)", refused[0], len(refused)-1)
+	}
 }

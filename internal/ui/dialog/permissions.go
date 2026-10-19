@@ -60,8 +60,10 @@ type Permissions struct {
 	windowHeight int
 	fullscreen   bool // true when dialog is fullscreen
 
-	permission     permission.PermissionRequest
-	selectedOption int // 0: Allow, 1: Allow for session, 2: Deny
+	permission permission.PermissionRequest
+	// selectedOption indexes the visible buttons: 0 is Allow, then Deny.
+	// An escalation omits "Allow for Session", so index 1 is Deny there.
+	selectedOption int
 
 	viewport      viewport.Model
 	viewportDirty bool // true when viewport content needs to be re-rendered
@@ -239,16 +241,18 @@ func (p *Permissions) HandleMsg(msg tea.Msg) Action {
 			// Escape denies the permission request.
 			return p.respond(PermissionDeny)
 		case key.Matches(msg, p.keyMap.Right), key.Matches(msg, p.keyMap.Tab):
-			p.selectedOption = (p.selectedOption + 1) % 3
+			p.selectedOption = (p.selectedOption + 1) % p.optionCount()
 		case key.Matches(msg, p.keyMap.Left):
-			// Add 2 instead of subtracting 1 to avoid negative modulo.
-			p.selectedOption = (p.selectedOption + 2) % 3
+			// Add n-1 instead of subtracting 1 to avoid negative modulo.
+			p.selectedOption = (p.selectedOption + p.optionCount() - 1) % p.optionCount()
 		case key.Matches(msg, p.keyMap.Select):
 			return p.selectCurrentOption()
 		case key.Matches(msg, p.keyMap.Allow):
 			return p.respond(PermissionAllow)
 		case key.Matches(msg, p.keyMap.AllowSession):
-			return p.respond(PermissionAllowForSession)
+			if p.canGrantForSession() {
+				return p.respond(PermissionAllowForSession)
+			}
 		case key.Matches(msg, p.keyMap.Deny):
 			return p.respond(PermissionDeny)
 		case key.Matches(msg, p.keyMap.ToggleDiffMode):
@@ -301,15 +305,31 @@ func (p *Permissions) HandleMsg(msg tea.Msg) Action {
 	return nil
 }
 
-func (p *Permissions) selectCurrentOption() tea.Msg {
-	switch p.selectedOption {
-	case 0:
-		return p.respond(PermissionAllow)
-	case 1:
-		return p.respond(PermissionAllowForSession)
-	default:
-		return p.respond(PermissionDeny)
+// canGrantForSession reports whether "Allow for Session" would mean anything.
+// An escalation widens the sandbox for exactly one call and is never recorded
+// as a session grant, so offering it would promise something the permission
+// service deliberately does not honor.
+func (p *Permissions) canGrantForSession() bool {
+	return !p.permission.Escalation
+}
+
+// optionCount is the number of selectable buttons: Allow, optionally Allow
+// for Session, Deny.
+func (p *Permissions) optionCount() int {
+	if p.canGrantForSession() {
+		return 3
 	}
+	return 2
+}
+
+func (p *Permissions) selectCurrentOption() tea.Msg {
+	if p.selectedOption == 0 {
+		return p.respond(PermissionAllow)
+	}
+	if p.selectedOption == 1 && p.canGrantForSession() {
+		return p.respond(PermissionAllowForSession)
+	}
+	return p.respond(PermissionDeny)
 }
 
 func (p *Permissions) respond(action PermissionAction) tea.Msg {
@@ -495,7 +515,7 @@ func (p *Permissions) renderHeader(contentWidth int) string {
 			lines = append(lines, p.renderKeyValue("URL", params.URL, contentWidth))
 			lines = append(lines, p.renderKeyValue("File", fsext.PrettyPath(params.FilePath), contentWidth))
 		}
-	case tools.EditToolName, tools.WriteToolName, tools.MultiEditToolName, tools.ViewToolName, tools.ReplaceSymbolToolName:
+	case tools.EditToolName, tools.WriteToolName, tools.MultiEditToolName, tools.ReplaceSymbolToolName:
 		var filePath string
 		switch params := p.permission.Params.(type) {
 		case tools.EditPermissionsParams:
@@ -503,8 +523,6 @@ func (p *Permissions) renderHeader(contentWidth int) string {
 		case tools.WritePermissionsParams:
 			filePath = params.FilePath
 		case tools.MultiEditPermissionsParams:
-			filePath = params.FilePath
-		case tools.ViewPermissionsParams:
 			filePath = params.FilePath
 		case tools.ReplaceSymbolPermissionsParams:
 			filePath = params.FilePath
@@ -565,14 +583,6 @@ func (p *Permissions) renderContent(width int) string {
 		return p.renderReplaceSymbolContent(width)
 	case tools.DownloadToolName:
 		return p.renderDownloadContent(width)
-	case tools.FetchToolName:
-		return p.renderFetchContent(width)
-	case tools.AgentToolName:
-		// Delegated sub-agents only prompt when they will reach the
-		// network, which is the research shape: URL plus prompt.
-		return p.renderWebResearchContent(width)
-	case tools.ViewToolName:
-		return p.renderViewContent(width)
 	default:
 		return p.renderDefaultContent(width)
 	}
@@ -667,50 +677,6 @@ func (p *Permissions) renderDownloadContent(width int) string {
 	return p.renderContentPanel(content, width)
 }
 
-func (p *Permissions) renderFetchContent(width int) string {
-	params, ok := p.permission.Params.(tools.FetchPermissionsParams)
-	if !ok {
-		return ""
-	}
-
-	return p.renderContentPanel(params.URL, width)
-}
-
-// renderWebResearchContent renders a web-research delegation: the `agent`
-// tool's research profile.
-func (p *Permissions) renderWebResearchContent(width int) string {
-	params, ok := p.permission.Params.(tools.AgentPermissionsParams)
-	if !ok {
-		return ""
-	}
-
-	var content string
-	if params.URL != "" {
-		content = fmt.Sprintf("URL: %s\n\nPrompt: %s", params.URL, params.Prompt)
-	} else {
-		content = fmt.Sprintf("Prompt: %s", params.Prompt)
-	}
-
-	return p.renderContentPanel(content, width)
-}
-
-func (p *Permissions) renderViewContent(width int) string {
-	params, ok := p.permission.Params.(tools.ViewPermissionsParams)
-	if !ok {
-		return ""
-	}
-
-	content := fmt.Sprintf("File: %s", fsext.PrettyPath(params.FilePath))
-	if params.Offset > 0 {
-		content += fmt.Sprintf("\nStarting from line: %d", params.Offset+1)
-	}
-	if params.Limit > 0 && params.Limit != 2000 {
-		content += fmt.Sprintf("\nLines to read: %d", params.Limit)
-	}
-
-	return p.renderContentPanel(content, width)
-}
-
 func (p *Permissions) renderDefaultContent(width int) string {
 	t := p.com.Styles
 	var content string
@@ -765,9 +731,16 @@ func (p *Permissions) renderContentPanel(content string, width int) string {
 func (p *Permissions) renderButtons(contentWidth int, fullscreen bool) string {
 	buttons := []common.ButtonOpts{
 		{Text: "Allow", UnderlineIndex: 0, Selected: p.selectedOption == 0},
-		{Text: "Allow for Session", UnderlineIndex: 10, Selected: p.selectedOption == 1},
-		{Text: "Deny", UnderlineIndex: 0, Selected: p.selectedOption == 2},
 	}
+	if p.canGrantForSession() {
+		buttons = append(buttons, common.ButtonOpts{
+			Text: "Allow for Session", UnderlineIndex: 10, Selected: p.selectedOption == 1,
+		})
+	}
+	denyIndex := p.optionCount() - 1
+	buttons = append(buttons, common.ButtonOpts{
+		Text: "Deny", UnderlineIndex: 0, Selected: p.selectedOption == denyIndex,
+	})
 
 	content := common.ButtonGroup(p.com.Styles, buttons, "  ")
 

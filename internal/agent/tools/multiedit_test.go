@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"charm.land/fantasy"
 	"github.com/charmbracelet/crush/internal/history"
 	"github.com/charmbracelet/crush/internal/permission"
 	"github.com/charmbracelet/crush/internal/pubsub"
@@ -261,7 +260,7 @@ func TestProcessMultiEditExistingFileAllowsUnreadFileByDefault(t *testing.T) {
 		},
 	}
 
-	resp, err := processMultiEditExistingFile(edit, params, fantasy.ToolCall{ID: "call"})
+	resp, err := processMultiEditExistingFile(edit, params)
 	require.NoError(t, err)
 	require.False(t, resp.IsError)
 
@@ -285,7 +284,7 @@ func TestProcessMultiEditExistingFileRequiresReadWhenStrict(t *testing.T) {
 		},
 	}
 
-	resp, err := processMultiEditExistingFile(edit, params, fantasy.ToolCall{ID: "call"})
+	resp, err := processMultiEditExistingFile(edit, params)
 	require.NoError(t, err)
 	require.True(t, resp.IsError)
 	require.Contains(t, resp.Content, "you must read the file before editing it")
@@ -313,7 +312,7 @@ func TestProcessMultiEditExistingFilePartialFailureWithoutBaseline(t *testing.T)
 		},
 	}
 
-	resp, err := processMultiEditExistingFile(edit, params, fantasy.ToolCall{ID: "call"})
+	resp, err := processMultiEditExistingFile(edit, params)
 	require.NoError(t, err)
 	require.False(t, resp.IsError)
 
@@ -337,7 +336,6 @@ func TestProcessMultiEditExistingFilePartialFailure(t *testing.T) {
 
 	edit := editContext{
 		ctx:         context.WithValue(t.Context(), SessionIDContextKey, "session"),
-		permissions: &mockPermissionService{},
 		files:       &mockHistoryService{},
 		filetracker: &mockEditFileTracker{lastRead: time.Now().Add(time.Second)},
 		workingDir:  dir,
@@ -350,7 +348,7 @@ func TestProcessMultiEditExistingFilePartialFailure(t *testing.T) {
 		},
 	}
 
-	resp, err := processMultiEditExistingFile(edit, params, fantasy.ToolCall{ID: "call"})
+	resp, err := processMultiEditExistingFile(edit, params)
 	require.NoError(t, err)
 	require.False(t, resp.IsError)
 	require.Contains(t, resp.Content, "Applied 1 of 2 edits")
@@ -376,7 +374,6 @@ func TestProcessMultiEditWithCreationPartialFailure(t *testing.T) {
 
 	edit := editContext{
 		ctx:         context.WithValue(t.Context(), SessionIDContextKey, "session"),
-		permissions: &mockPermissionService{},
 		files:       &mockHistoryService{},
 		filetracker: &mockEditFileTracker{},
 		workingDir:  dir,
@@ -390,7 +387,7 @@ func TestProcessMultiEditWithCreationPartialFailure(t *testing.T) {
 		},
 	}
 
-	resp, err := processMultiEditWithCreation(edit, params, fantasy.ToolCall{ID: "call"})
+	resp, err := processMultiEditWithCreation(edit, params)
 	require.NoError(t, err)
 	require.False(t, resp.IsError)
 	require.Contains(t, resp.Content, "File created with 2 of 3 edits")

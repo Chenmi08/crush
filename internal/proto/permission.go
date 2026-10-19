@@ -135,27 +135,6 @@ func unmarshalToolParams(toolName string, raw json.RawMessage) (any, error) {
 			return nil, err
 		}
 		return params, nil
-	case FetchToolName:
-		var params FetchPermissionsParams
-		if err := json.Unmarshal(raw, &params); err != nil {
-			return nil, err
-		}
-		return params, nil
-	case AgentToolName:
-		// A delegated sub-agent only asks for permission when it is about
-		// to reach the network, which is the research profile's shape:
-		// an optional URL plus the prompt.
-		var params AgentPermissionsParams
-		if err := json.Unmarshal(raw, &params); err != nil {
-			return nil, err
-		}
-		return params, nil
-	case ViewToolName:
-		var params ViewPermissionsParams
-		if err := json.Unmarshal(raw, &params); err != nil {
-			return nil, err
-		}
-		return params, nil
 	default:
 		// For unknown tools, keep the raw JSON as-is.
 		var generic map[string]any

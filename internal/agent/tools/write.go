@@ -14,7 +14,6 @@ import (
 	"github.com/charmbracelet/crush/internal/diff"
 	"github.com/charmbracelet/crush/internal/filepathext"
 	"github.com/charmbracelet/crush/internal/filetracker"
-	"github.com/charmbracelet/crush/internal/fsext"
 	"github.com/charmbracelet/crush/internal/history"
 
 	"github.com/charmbracelet/crush/internal/lsp"
@@ -144,36 +143,9 @@ func NewWriteTool(
 				strings.TrimPrefix(filePath, workingDir),
 			)
 
-			p, err := requestPermission(
-				ctx,
-				permissions,
-				sandboxedRequest(ctx, permission.CreatePermissionRequest{
-					SessionID:   sessionID,
-					Path:        fsext.PathOrPrefix(filePath, workingDir),
-					ToolCallID:  call.ID,
-					ToolName:    WriteToolName,
-					Action:      "write",
-					Description: fmt.Sprintf("Create file %s", filePath),
-					Params: WritePermissionsParams{
-						FilePath:   filePath,
-						OldContent: oldContent,
-						NewContent: params.Content,
-					},
-				}),
-			)
-			if err != nil {
-				return fantasy.ToolResponse{}, err
-			}
-			if !p {
-				resp := NewPermissionDeniedResponse()
-				resp = fantasy.WithResponseMetadata(resp, WriteResponseMetadata{
-					Diff:      diff,
-					Additions: additions,
-					Removals:  removals,
-				})
-				return resp, nil
-			}
-
+			// A write inside the writable roots is already confined, so it
+			// runs without an approval prompt. The only approval a write can
+			// raise is the fence's "Leave Sandbox?" dialog above.
 			err = os.WriteFile(filePath, []byte(params.Content), 0o644)
 			if err != nil {
 				return fantasy.ToolResponse{}, fmt.Errorf("error writing file: %w", err)

@@ -167,21 +167,19 @@ func TestWriteTool_SandboxRefusalDeniedKeepsDenial(t *testing.T) {
 }
 
 // TestWriteTool_SandboxAllowsInsideWorkspace verifies an in-workspace write
-// never raises the sandbox dialog. (The write tool's own permission prompt is
-// separate and pre-existing; the fence must stay silent here.)
+// never raises any dialog: it is confined, so neither the fence nor a
+// tool-level approval prompt applies.
 func TestWriteTool_SandboxAllowsInsideWorkspace(t *testing.T) {
 	t.Parallel()
 	workspace := t.TempDir()
-	perms := &denyingPermissionService{Broker: pubsubBroker()}
+	perms := &recordingPermissionService{Broker: pubsubBroker(), allow: true}
 	tool := NewWriteTool(nil, perms, &mockHistoryService{}, mockFileTrackerService{}, workspace, FileWriteOptions{})
 	ctx := sandboxTestContext(t, workspace)
-	// The write tool's own prompt is granted by the test, isolating the
-	// fence from the tool's separate approval.
-	ctx = withEscalationApproval(ctx, "test-call")
 
 	resp := runWriteTool(t, tool, ctx, WriteParams{FilePath: filepath.Join(workspace, "sub", "f.txt"), Content: "hi"})
 	require.False(t, resp.IsError)
-	require.Empty(t, perms.requests, "a confined write must not raise the sandbox dialog")
+	require.Equal(t, 0, perms.requestCount,
+		"a confined write must not prompt")
 }
 
 // TestWriteTool_SandboxProtectedPathNeverAsks verifies a protected path is
@@ -286,16 +284,12 @@ func TestSandboxedRequest_CarriesSandboxState(t *testing.T) {
 	require.Equal(t, "workspace-write", req.SandboxMode)
 
 	require.False(t, sandboxedRequest(context.Background(), CreatePermissionRequestStub()).Sandboxed)
-}
 
-// TestFenceEscalation_AsksOneStepWider pins the blast radius of an automatic
-// fence escalation. An out-of-tree write under workspace-write needs the disk,
-// but asking for danger-full-access from read-only would skip a level: one
-// extra step, no more.
-func TestFenceEscalation_AsksOneStepWider(t *testing.T) {
-	t.Parallel()
-	require.Equal(t, sandbox.ModeWorkspaceWrite, nextWiderMode(sandbox.ModeReadOnly))
-	require.Equal(t, sandbox.ModeDangerFullAccess, nextWiderMode(sandbox.ModeWorkspaceWrite))
-	// Nothing is wider than danger-full-access; the caller never asks.
-	require.Equal(t, sandbox.ModeDangerFullAccess, nextWiderMode(sandbox.ModeDangerFullAccess))
+	// danger-full-access is full delegation: the prompt must say the
+	// operation runs unconfined instead of implying a boundary.
+	dfa := &sandbox.Policy{Mode: sandbox.ModeDangerFullAccess}
+	dfaCtx := WithSandboxPolicy(context.Background(), dfa)
+	req = sandboxedRequest(dfaCtx, CreatePermissionRequestStub())
+	require.False(t, req.Sandboxed)
+	require.Equal(t, "danger-full-access", req.SandboxMode)
 }

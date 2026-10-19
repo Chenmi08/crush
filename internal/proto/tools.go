@@ -89,15 +89,8 @@ type FetchParams struct {
 	Timeout int    `json:"timeout,omitempty"`
 }
 
-// FetchPermissionsParams represents the permission parameters for the fetch tool.
-type FetchPermissionsParams = tools.FetchPermissionsParams
-
 // AgentToolName is the name of the sub-agent delegation tool.
 const AgentToolName = tools.AgentToolName
-
-// AgentPermissionsParams represents the permission parameters for a
-// delegated sub-agent.
-type AgentPermissionsParams = tools.AgentPermissionsParams
 
 const GlobToolName = "glob"
 
@@ -184,9 +177,6 @@ type ViewParams struct {
 	Offset   int    `json:"offset"`
 	Limit    int    `json:"limit"`
 }
-
-// ViewPermissionsParams represents the permission parameters for the view tool.
-type ViewPermissionsParams = tools.ViewPermissionsParams
 
 // ViewResponseMetadata represents the metadata for a view tool response.
 type ViewResponseMetadata struct {

@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"charm.land/fantasy"
 	"github.com/stretchr/testify/require"
 )
 
@@ -39,13 +38,12 @@ func TestReplaceContentPreservesCRLFAndMetadata(t *testing.T) {
 	tracker := &mockEditFileTracker{lastRead: time.Now().Add(time.Second)}
 	edit := editContext{
 		ctx:         context.WithValue(t.Context(), SessionIDContextKey, "session"),
-		permissions: &mockPermissionService{},
 		files:       &mockHistoryService{},
 		filetracker: tracker,
 		workingDir:  dir,
 	}
 
-	resp, err := replaceContent(edit, filePath, "beta", "BETA", false, fantasy.ToolCall{ID: "call"})
+	resp, err := replaceContent(edit, filePath, "beta", "BETA", false)
 	require.NoError(t, err)
 	require.False(t, resp.IsError)
 	require.Equal(t, "Content replaced in file: "+filePath, resp.Content)
@@ -70,13 +68,12 @@ func TestDeleteContentRejectsMultipleMatchesWithoutReplaceAll(t *testing.T) {
 
 	edit := editContext{
 		ctx:         context.WithValue(t.Context(), SessionIDContextKey, "session"),
-		permissions: &mockPermissionService{},
 		files:       &mockHistoryService{},
 		filetracker: &mockEditFileTracker{lastRead: time.Now().Add(time.Second)},
 		workingDir:  dir,
 	}
 
-	resp, err := deleteContent(edit, filePath, "alpha\n", false, fantasy.ToolCall{ID: "call"})
+	resp, err := deleteContent(edit, filePath, "alpha\n", false)
 	require.NoError(t, err)
 	require.True(t, resp.IsError)
 	require.Contains(t, resp.Content, "old_string appears multiple times")
@@ -89,7 +86,6 @@ func TestDeleteContentRejectsMultipleMatchesWithoutReplaceAll(t *testing.T) {
 func newReadGuardEditContext(ctx context.Context, dir string, tracker *mockEditFileTracker, opts FileWriteOptions) editContext {
 	return editContext{
 		ctx:         context.WithValue(ctx, SessionIDContextKey, "session"),
-		permissions: &mockPermissionService{},
 		files:       &mockHistoryService{},
 		filetracker: tracker,
 		workingDir:  dir,
@@ -108,7 +104,7 @@ func TestReplaceContentAllowsUnreadFileByDefault(t *testing.T) {
 	// default policy allows the edit rather than forcing a view first.
 	edit := newReadGuardEditContext(t.Context(), dir, &mockEditFileTracker{}, FileWriteOptions{})
 
-	resp, err := replaceContent(edit, filePath, "beta", "BETA", false, fantasy.ToolCall{ID: "call"})
+	resp, err := replaceContent(edit, filePath, "beta", "BETA", false)
 	require.NoError(t, err)
 	require.False(t, resp.IsError)
 	require.Equal(t, "Content replaced in file: "+filePath, resp.Content)
@@ -127,7 +123,7 @@ func TestReplaceContentRequiresReadWhenStrict(t *testing.T) {
 
 	edit := newReadGuardEditContext(t.Context(), dir, &mockEditFileTracker{}, FileWriteOptions{RequireRead: true})
 
-	resp, err := replaceContent(edit, filePath, "beta", "BETA", false, fantasy.ToolCall{ID: "call"})
+	resp, err := replaceContent(edit, filePath, "beta", "BETA", false)
 	require.NoError(t, err)
 	require.True(t, resp.IsError)
 	require.Contains(t, resp.Content, "you must read the file before editing it")
@@ -148,7 +144,7 @@ func TestReplaceContentRejectsStaleRead(t *testing.T) {
 	// stale in both policies.
 	edit := newReadGuardEditContext(t.Context(), dir, &mockEditFileTracker{lastRead: time.Now().Add(-2 * time.Hour)}, FileWriteOptions{})
 
-	resp, err := replaceContent(edit, filePath, "beta", "BETA", false, fantasy.ToolCall{ID: "call"})
+	resp, err := replaceContent(edit, filePath, "beta", "BETA", false)
 	require.NoError(t, err)
 	require.True(t, resp.IsError)
 	require.Contains(t, resp.Content, "has been modified since it was last read")

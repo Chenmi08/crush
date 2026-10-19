@@ -124,7 +124,6 @@ func NewMultiEditTool(
 
 			editCtx := editContext{
 				ctx:         ctx,
-				permissions: permissions,
 				files:       files,
 				filetracker: filetracker,
 				workingDir:  workingDir,
@@ -132,9 +131,9 @@ func NewMultiEditTool(
 			}
 			// Handle file creation case (first edit has empty old_string)
 			if len(params.Edits) > 0 && params.Edits[0].OldString == "" {
-				response, err = processMultiEditWithCreation(editCtx, params, call)
+				response, err = processMultiEditWithCreation(editCtx, params)
 			} else {
-				response, err = processMultiEditExistingFile(editCtx, params, call)
+				response, err = processMultiEditExistingFile(editCtx, params)
 			}
 
 			if err != nil {
@@ -204,7 +203,7 @@ func applyEditsToContent(currentContent string, edits []MultiEditOperation, star
 	return currentContent, failedEdits, whitespaceCorrected
 }
 
-func processMultiEditWithCreation(edit editContext, params MultiEditParams, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+func processMultiEditWithCreation(edit editContext, params MultiEditParams) (fantasy.ToolResponse, error) {
 	// First edit creates the file
 	firstEdit := params.Edits[0]
 	if firstEdit.OldString != "" {
@@ -232,47 +231,16 @@ func processMultiEditWithCreation(edit editContext, params MultiEditParams, call
 		return fantasy.ToolResponse{}, fmt.Errorf("session ID is required for creating a new file")
 	}
 
-	// Check permissions
 	_, additions, removals := diff.GenerateDiff("", currentContent, strings.TrimPrefix(params.FilePath, edit.workingDir))
 
 	editsApplied := len(params.Edits) - len(failedEdits)
-	var description string
-	if len(failedEdits) > 0 {
-		description = fmt.Sprintf("Create file %s with %d of %d edits (%d failed)", params.FilePath, editsApplied, len(params.Edits), len(failedEdits))
-	} else {
-		description = fmt.Sprintf("Create file %s with %d edits", params.FilePath, editsApplied)
-	}
-	p, err := requestPermission(edit.ctx, edit.permissions, sandboxedRequest(edit.ctx, permission.CreatePermissionRequest{
-		SessionID:   sessionID,
-		Path:        fsext.PathOrPrefix(params.FilePath, edit.workingDir),
-		ToolCallID:  call.ID,
-		ToolName:    MultiEditToolName,
-		Action:      "write",
-		Description: description,
-		Params: MultiEditPermissionsParams{
-			FilePath:   params.FilePath,
-			OldContent: "",
-			NewContent: currentContent,
-		},
-	}))
-	if err != nil {
-		return fantasy.ToolResponse{}, err
-	}
-	if !p {
-		resp := NewPermissionDeniedResponse()
-		resp = fantasy.WithResponseMetadata(resp, MultiEditResponseMetadata{
-			OldContent:   "",
-			NewContent:   currentContent,
-			Additions:    additions,
-			Removals:     removals,
-			EditsApplied: editsApplied,
-			EditsFailed:  failedEdits,
-		})
-		return resp, nil
-	}
+
+	// A write inside the writable roots is confined by the sandbox, so it
+	// runs without an approval prompt. The fence above is the only place a
+	// write can ask to leave the sandbox.
 
 	// Write the file
-	err = os.WriteFile(params.FilePath, []byte(currentContent), 0o644)
+	err := os.WriteFile(params.FilePath, []byte(currentContent), 0o644)
 	if err != nil {
 		return fantasy.ToolResponse{}, fmt.Errorf("failed to write file: %w", err)
 	}
@@ -311,7 +279,7 @@ func processMultiEditWithCreation(edit editContext, params MultiEditParams, call
 	), nil
 }
 
-func processMultiEditExistingFile(edit editContext, params MultiEditParams, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+func processMultiEditExistingFile(edit editContext, params MultiEditParams) (fantasy.ToolResponse, error) {
 	sessionID, oldContent, isCrlf, resp, err := loadExistingFile(edit, params.FilePath, "session ID is required for editing a file")
 	if err != nil {
 		return fantasy.ToolResponse{}, err
@@ -337,45 +305,14 @@ func processMultiEditExistingFile(edit editContext, params MultiEditParams, call
 		return fantasy.NewTextErrorResponse("no changes made - all edits resulted in identical content"), nil
 	}
 
-	// Generate diff and check permissions
+	// Generate the diff for the response metadata.
 	_, additions, removals := diff.GenerateDiff(oldContent, currentContent, strings.TrimPrefix(params.FilePath, edit.workingDir))
 
 	editsApplied := len(params.Edits) - len(failedEdits)
-	var description string
-	if len(failedEdits) > 0 {
-		description = fmt.Sprintf("Apply %d of %d edits to file %s (%d failed)", editsApplied, len(params.Edits), params.FilePath, len(failedEdits))
-	} else {
-		description = fmt.Sprintf("Apply %d edits to file %s", editsApplied, params.FilePath)
-	}
-	p, err := requestPermission(edit.ctx, edit.permissions, sandboxedRequest(edit.ctx, permission.CreatePermissionRequest{
-		SessionID:   sessionID,
-		Path:        fsext.PathOrPrefix(params.FilePath, edit.workingDir),
-		ToolCallID:  call.ID,
-		ToolName:    MultiEditToolName,
-		Action:      "write",
-		Description: description,
-		Params: MultiEditPermissionsParams{
-			FilePath:   params.FilePath,
-			OldContent: oldContent,
-			NewContent: currentContent,
-		},
-	}))
-	if err != nil {
-		return fantasy.ToolResponse{}, err
-	}
-	if !p {
-		resp := NewPermissionDeniedResponse()
-		resp = fantasy.WithResponseMetadata(resp, MultiEditResponseMetadata{
-			OldContent:   oldContent,
-			NewContent:   currentContent,
-			Additions:    additions,
-			Removals:     removals,
-			EditsApplied: editsApplied,
-			EditsFailed:  failedEdits,
-		})
-		return resp, nil
-	}
 
+	// A write inside the writable roots is confined by the sandbox, so it
+	// runs without an approval prompt. The fence above is the only place a
+	// write can ask to leave the sandbox.
 	writeContent := currentContent
 	if isCrlf {
 		writeContent, _ = fsext.ToWindowsLineEndings(writeContent)

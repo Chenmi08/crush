@@ -88,6 +88,10 @@ type Policy struct {
 	// WriteRoots includes Workspace. Order is stable so generated backend
 	// rules are deterministic.
 	WriteRoots []string
+	// AllowWrites are the extra writable roots the user configured. They are
+	// kept even in read-only mode so an escalation to workspace-write grants
+	// the same roots a configured workspace-write session would have.
+	AllowWrites []string
 	// DenyWrites are paths inside WriteRoots that stay unwritable.
 	DenyWrites []string
 	// Protected are paths that grant future code execution and are always
@@ -121,6 +125,10 @@ type Denial struct {
 	// ConfigError reports that the policy itself could not be resolved, so
 	// nothing is writable until the configuration is fixed.
 	ConfigError bool
+	// DenyWrite reports that the path is covered by a configured
+	// sandbox.deny_write entry. A denial takes precedence over widening, so
+	// no escalation can re-allow it.
+	DenyWrite bool
 	// Remedy names the setting a user can change to allow the write.
 	Remedy string
 	// EscalationHint is set when the caller may request a wider mode.
@@ -143,6 +151,8 @@ func (d Denial) Error() string {
 		b.WriteString(" reason=invalid-config")
 	case d.Protected:
 		b.WriteString(" reason=protected")
+	case d.DenyWrite:
+		b.WriteString(" reason=deny-write")
 	default:
 		b.WriteString(" reason=outside-writable-roots")
 	}
@@ -253,6 +263,16 @@ func Resolve(opts Options) (*Policy, error) {
 		if p.TempDir != "" {
 			p.WriteRoots = []string{p.TempDir}
 		}
+		// The configured extra roots are not writable in read-only mode, but
+		// they are remembered so a single-call escalation to workspace-write
+		// grants what a configured workspace-write session would have.
+		for _, root := range opts.Config.AllowWrite {
+			canonical, err := canonicalAllowRoot(root)
+			if err != nil {
+				return nil, err
+			}
+			p.AllowWrites = append(p.AllowWrites, canonical)
+		}
 	case ModeWorkspaceWrite:
 		roots := []string{workspace}
 		if p.TempDir != "" {
@@ -266,12 +286,14 @@ func Resolve(opts Options) (*Policy, error) {
 			if err != nil {
 				return nil, err
 			}
+			p.AllowWrites = append(p.AllowWrites, canonical)
 			roots = append(roots, canonical)
 		}
 		p.WriteRoots = dedupe(roots)
 	case ModeDangerFullAccess:
 		// Unbounded: no roots are consulted.
 	}
+	p.AllowWrites = dedupe(p.AllowWrites)
 
 	for _, deny := range opts.Config.DenyWrite {
 		canonical := canonicalOptional(deny)
@@ -444,22 +466,6 @@ func selfOrAncestor(a, b string) bool {
 	return a == b
 }
 
-// CheckRead reports whether path may be read without prompting under the
-// policy. Reads are not confined in general, but a session's own spill
-// files are: truncated tool output lands in the policy's private temp
-// directory, and the view tool is told to read it back. Prompting for that
-// read would be noise, so paths inside the temp directory read without
-// permission. Only the temp directory is covered — the cache directory and
-// the workspace keep prompting, because they are broadly readable by
-// design and exempting them would swallow every out-of-workdir read. A nil
-// policy leaves the caller's existing behavior in place.
-func (p *Policy) CheckRead(path string) bool {
-	if p == nil || p.TempDir == "" {
-		return false
-	}
-	return within(CanonicalPath(path), p.TempDir)
-}
-
 // CheckWrite reports whether path may be written under the policy. It resolves
 // symlinks first, so a link inside a root pointing outside it is refused.
 //
@@ -480,51 +486,79 @@ func (p *Policy) CheckWriteIn(base, path string) error {
 	if p == nil || p.Mode == ModeDangerFullAccess {
 		return nil
 	}
+	if d, denied := p.writeDenial(base, path); denied {
+		return p.refuse(d)
+	}
+	return nil
+}
+
+// AllowsWrite reports whether path may be written under the policy without
+// prompting, without counting or publishing a denial. It is used to pick the
+// narrowest escalation mode that covers a set of paths; callers that act on
+// the answer must still go through [Policy.CheckWrite].
+func (p *Policy) AllowsWrite(path string) bool {
+	_, denied := p.WriteDenial(path)
+	return !denied
+}
+
+// WriteDenial returns the refusal for path without counting or publishing it.
+// It lets a caller inspect several paths (a multi-file rename, for example)
+// and raise one denial for the operation instead of one per file.
+func (p *Policy) WriteDenial(path string) (Denial, bool) {
+	if p == nil || p.Mode == ModeDangerFullAccess {
+		return Denial{}, false
+	}
+	return p.writeDenial("", path)
+}
+
+// writeDenial computes the refusal for path without counting it.
+func (p *Policy) writeDenial(base, path string) (Denial, bool) {
 	if base != "" && !filepath.IsAbs(path) {
 		path = filepath.Join(base, path)
 	}
 	canonical := CanonicalPath(path)
 
 	if p.ConfigError != "" {
-		return p.refuse(Denial{
+		return Denial{
 			Path:        canonical,
 			Mode:        p.Mode,
 			ConfigError: true,
 			Remedy:      "the sandbox configuration is invalid and writes are refused until it is fixed: " + p.ConfigError,
-		})
+		}, true
 	}
 
 	if isSink(canonical) {
-		return nil
+		return Denial{}, false
 	}
 	if p.isProtected(canonical) {
-		return p.refuse(Denial{
+		return Denial{
 			Path:      canonical,
 			Mode:      p.Mode,
 			Protected: true,
 			Remedy:    "this path grants future code execution and cannot be made writable",
-		})
+		}, true
 	}
 
 	if p.isDenied(canonical) {
-		return p.refuse(Denial{
-			Path:   canonical,
-			Mode:   p.Mode,
-			Remedy: "remove the matching sandbox deny-write entry",
-		})
+		return Denial{
+			Path:      canonical,
+			Mode:      p.Mode,
+			DenyWrite: true,
+			Remedy:    "remove the matching sandbox deny-write entry",
+		}, true
 	}
 
 	for _, root := range p.WriteRoots {
 		if within(canonical, root) {
-			return nil
+			return Denial{}, false
 		}
 	}
 
-	return p.refuse(Denial{
+	return Denial{
 		Path:   canonical,
 		Mode:   p.Mode,
 		Remedy: "add the directory to sandbox allow-write (or run with sandbox mode danger-full-access)",
-	})
+	}, true
 }
 
 // refuse counts a constructed denial and publishes a notice, so every

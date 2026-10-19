@@ -158,13 +158,13 @@ func TestBashTool_ConfinedChainedCommandsRunWithoutPrompt(t *testing.T) {
 	require.Equal(t, 0, perms.requestCount,
 		"a confined chain should not prompt")
 
-	// A network command in the chain still prompts.
+	// A remote-mutating command in the chain still prompts.
 	resp = runBashTool(t, tool, ctx, BashParams{
-		Description: "chained curl",
-		Command:     "ls && curl https://example.com",
+		Description: "chained push",
+		Command:     "ls && git push origin main",
 	})
 	require.False(t, resp.IsError)
-	require.Equal(t, 1, perms.requestCount, "a chain containing a network command should prompt")
+	require.Equal(t, 1, perms.requestCount, "a chain containing a remote mutation should prompt")
 }
 
 func TestBashTool_NetworkCommandDenied(t *testing.T) {
@@ -174,8 +174,8 @@ func TestBashTool_NetworkCommandDenied(t *testing.T) {
 	ctx = WithSandboxPolicy(ctx, tableSandboxPolicy(t, workingDir))
 
 	resp := runBashTool(t, tool, ctx, BashParams{
-		Description: "curl denied",
-		Command:     "curl https://example.com",
+		Description: "push denied",
+		Command:     "git push origin main",
 	})
 
 	require.Equal(t, 1, perms.requestCount)
@@ -289,13 +289,15 @@ func TestTruncateOutputEmoji(t *testing.T) {
 func TestIsNetworkCommand(t *testing.T) {
 	t.Parallel()
 
-	require.True(t, isNetworkCommand("curl https://example.com", nil))
-	require.True(t, isNetworkCommand("curl", nil), "a bare command name matches")
+	require.True(t, isNetworkCommand("ssh host", nil))
+	require.True(t, isNetworkCommand("ssh", nil), "a bare command name matches")
 	require.True(t, isNetworkCommand("git push origin main", nil),
 		"multi-token entries match the leading tokens in order")
 	require.True(t, isNetworkCommand("sudo apt install jq", nil))
 	require.True(t, isNetworkCommand("docker push repo/img", []string{"docker push"}),
 		"configured additions join the built-in list")
+	require.False(t, isNetworkCommand("curl https://example.com", nil),
+		"read-only egress is not a remote mutation")
 	require.False(t, isNetworkCommand("git pushdry", nil), "tokens must match whole")
 	require.False(t, isNetworkCommand("ls -la", nil))
 	require.False(t, isNetworkCommand("", nil))

@@ -124,7 +124,8 @@ func NewReplaceSymbolTool(
 				return fantasy.NewTextErrorResponse("symbol range exceeds file length"), nil
 			}
 
-			// Compute new content before permission so the dialog can show a diff.
+			// Compute the new content before writing so the response
+			// metadata and the fence's dialog preview are accurate.
 			var newLines []string
 			switch action {
 			case "replace":
@@ -150,28 +151,9 @@ func NewReplaceSymbolTool(
 
 			newContent := strings.Join(newLines, "\n")
 
+			// A confined write needs no approval: the fence above is the only
+			// place this call can ask to leave the sandbox.
 			sessionID := GetSessionFromContext(ctx)
-			if sessionID != "" && permissions != nil {
-				granted, err := requestPermission(ctx, permissions, sandboxedRequest(ctx, permission.CreatePermissionRequest{
-					SessionID:   sessionID,
-					Path:        params.FilePath,
-					ToolCallID:  call.ID,
-					ToolName:    ReplaceSymbolToolName,
-					Action:      "write",
-					Description: fmt.Sprintf("%s symbol '%s' in %s", action, params.Symbol, params.FilePath),
-					Params: ReplaceSymbolPermissionsParams{
-						FilePath:   params.FilePath,
-						OldContent: string(content),
-						NewContent: newContent,
-					},
-				}))
-				if err != nil {
-					return fantasy.ToolResponse{}, fmt.Errorf("permission request failed: %w", err)
-				}
-				if !granted {
-					return NewPermissionDeniedResponse(), nil
-				}
-			}
 
 			if files != nil && sessionID != "" {
 				if _, err := files.CreateVersion(ctx, sessionID, params.FilePath, string(content)); err != nil {

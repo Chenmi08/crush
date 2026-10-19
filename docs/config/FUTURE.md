@@ -57,7 +57,7 @@ No new commands — the same builtins, now live:
 # Inside a session, via the bash tool:
 model small anthropic/claude-haiku-4-20250514   # switch models for this turn
 option progress false                            # quiet the UI
-permissions allow grep                           # stop asking about grep
+permissions allow "mcp:github"                    # stop asking before this tool runs
 ```
 
 Each applies immediately to the session and is forgotten on exit.
@@ -298,7 +298,7 @@ Crush currently has three useful tool states across both config formats:
 
 | State | `crushrc` | `crush.json` | Behavior |
 |---|---|---|---|
-| Auto-approved | `permissions allow bash` | `permissions.allowed_tools` | Visible; runs without prompting |
+| Auto-approved | `permissions allow bash` | `permissions.allowed_tools` | Visible; skips its approval prompts (file tools are governed by the sandbox) |
 | Prompted | neither list | neither list | Visible; asks the user before running |
 | Disabled | `permissions deny bash` | `options.disabled_tools` | Hidden from the agent; cannot be called |
 

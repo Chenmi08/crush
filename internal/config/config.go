@@ -445,12 +445,18 @@ const (
 )
 
 type Permissions struct {
-	AllowedTools []string `json:"allowed_tools,omitempty" jsonschema:"description=List of tools that don't require permission prompts,example=bash,example=view"`
+	// AllowedTools lists tools whose approval prompts are skipped. File
+	// tools are governed by the sandbox instead: a write inside the
+	// writable roots and every read already run without a prompt, so an
+	// entry for write/edit/view has no effect in a sandboxed session.
+	AllowedTools []string `json:"allowed_tools,omitempty" jsonschema:"description=List of tools whose approval prompts are skipped. File writes and reads are governed by the sandbox, not this list,example=bash"`
 	// NetworkCommands adds shell command patterns to the list of commands
-	// that leave the sandbox's boundary (network, privilege escalation) and
-	// therefore require a prompt. Entries are command-name prefixes, e.g.
-	// "docker push". The built-in list covers the common egress commands.
-	NetworkCommands []string `json:"network_commands,omitempty" jsonschema:"description=Extra shell commands that leave the sandbox boundary and require a prompt,besides the built-in network list,example=docker push"`
+	// that change state outside the machine (remote mutations, privilege
+	// escalation) and therefore require a prompt. Entries are command-name
+	// prefixes, e.g. "docker push". The built-in list covers the common
+	// remote-mutating commands; read-only egress such as curl does not
+	// prompt by default.
+	NetworkCommands []string `json:"network_commands,omitempty" jsonschema:"description=Extra shell commands that change state off-machine and require a prompt,besides the built-in list,example=docker push"`
 	// Sandbox configures the filesystem sandbox that confines tool writes.
 	Sandbox *Sandbox `json:"sandbox,omitempty" jsonschema:"description=Filesystem sandbox settings"`
 }

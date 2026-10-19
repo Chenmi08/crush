@@ -82,13 +82,15 @@ func spillDirForContext(ctx context.Context) string {
 }
 
 // sandboxedRequest marks a permission request as sandboxed or unconfined.
-// The prompt states the posture; the value is informational.
+// The prompt states the posture; the value is informational. A
+// danger-full-access policy is full delegation: the operation runs without
+// confinement, and the prompt must say so rather than imply a boundary.
 func sandboxedRequest(ctx context.Context, req permission.CreatePermissionRequest) permission.CreatePermissionRequest {
 	policy := SandboxPolicyFromContext(ctx)
 	if policy == nil {
 		return req
 	}
-	req.Sandboxed = true
+	req.Sandboxed = policy.Mode != sandbox.ModeDangerFullAccess
 	req.SandboxMode = string(policy.Mode)
 	return req
 }

@@ -47,7 +47,7 @@ model large anthropic/claude-sonnet-4-20250514 --max-tokens 16384
 model small anthropic/claude-haiku-4-20250514
 
 option skill-path ./skills
-permissions allow view edit bash
+permissions allow bash
 ```
 
 Values are ordinary Bash — quote and expand normally (`"$VAR"`, `$(cmd)`,
@@ -164,21 +164,27 @@ hook add PreToolUse --matcher "^bash$" --command ".crush/hooks/no-haskell.sh" --
 ### permissions
 
 ```bash
-permissions allow <tool> [<tool> ...]   # tools that skip permission prompts
+permissions allow <tool> [<tool> ...]   # tools that skip approval prompts
 permissions deny <tool> [<tool> ...]    # hide tools from the agent entirely
-permissions network <cmd> [<cmd> ...]   # prompt for commands that leave the sandbox
+permissions network <cmd> [<cmd> ...]   # prompt for commands that change state off-machine
 ```
 
 `deny` is the inverse of `allow`: it writes `options.disabled_tools`. A denied
 tool is hidden from the agent, not merely prompted for.
 
+File tools are governed by the sandbox, not by `allow`: a write inside the
+writable roots and every read run without a prompt, so `permissions allow
+view edit` has no effect. Use `sandbox allow-write` to widen where writes may
+land.
+
 `network` writes `permissions.network_commands`: extra shell commands that
-leave the sandbox's boundary (network access, privilege escalation) and
+change state outside the machine (remote mutations, privilege escalation) and
 therefore require an approval prompt. Every invocation in a command line is
 checked, including piped and chained ones. The built-in list already covers
-the common egress commands (`curl`, `wget`, `ssh`, `scp`, `rsync`, `nc`,
-`git push`, `gh`, `sudo`, `su`, `doas`, and others); add what it misses.
-Multi-word entries must be quoted:
+the common remote-mutating commands (`ssh`, `scp`, `sftp`, `rsync`, `ftp`,
+`git push`, `gh`, `sudo`, `su`, `doas`); add what it misses. Read-only egress
+(`curl`, `wget`, `nc`) does not prompt by default. Multi-word entries must be
+quoted:
 
 ```bash
 permissions network "docker push"
@@ -365,7 +371,7 @@ The `$schema` property enables IDE autocomplete but is optional.
 | `mcp add gh --type http --url U`     | `mcp.gh = {"type":"http","url":"U"}`                   |
 | `lsp add go --command gopls`         | `lsp.go = {"command":"gopls"}`                         |
 | `hook add PreToolUse --command C`    | append to `hooks.PreToolUse[]`                         |
-| `permissions allow view edit`        | `permissions.allowed_tools = ["view","edit"]`          |
+| `permissions allow bash`             | `permissions.allowed_tools = ["bash"]`                 |
 | `permissions deny bash`              | `options.disabled_tools = ["bash"]`                    |
 | `permissions network "docker push"`  | `permissions.network_commands = ["docker push"]`       |
 | `option skill-path ./skills`         | `options.skills_paths = ["./skills"]`                  |

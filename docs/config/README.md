@@ -24,8 +24,9 @@ provider add ollama --type ollama --base-url "http://localhost:11434/v1"
 # Register a model on Ollama.
 model add ollama/llama3.3 --name "Llama 3.3" --context-window 128000
 
-# Auto-approve some tools.
-permissions allow view edit
+# Auto-approve a tool's approval prompts. File tools are governed by the
+# sandbox, not this list.
+permissions allow bash
 
 # Add an MCP server
 mcp add github \
@@ -489,6 +490,18 @@ can still reach the network. `read-only` means "does not write", not "cannot
 exfiltrate". Hooks, MCP servers, and LSP servers run with your authority,
 outside the sandbox.
 
+**Approval.** Only an operation that leaves the sandbox prompts. That means:
+
+| Operation | Prompts? |
+| --- | --- |
+| File writes inside the writable roots (`write`, `edit`, `multiedit`, `lsp_rename`, `lsp_replace_symbol`, `download`) | No |
+| File reads, including files outside the workspace (`view`) | No |
+| MCP resource listing and reading | No |
+| A write outside the writable roots | Yes — one `Leave Sandbox?` dialog, at most |
+| Shell commands that mutate remote state or escalate privilege (`ssh`, `scp`, `git push`, `gh`, `sudo`, ...) | Yes |
+| MCP tool execution (servers run outside the sandbox) | Yes |
+| Anything under `danger-full-access` | No — full delegation |
+
 **Protected paths.** Paths that grant future code execution stay unwritable
 even inside a writable root, and no setting can re-allow them: Crush's
 configuration files and state directories, Git's execution surfaces
@@ -524,7 +537,8 @@ An allow-list entry for a tool (`permissions allow bash`) is not consent to
 widen the boundary and still prompts. Without an approval surface (for example
 `crush run`), an escalation is reported as unavailable instead of waiting.
 Disabling the sandbox requires `--no-sandbox` (or `sandbox mode
-danger-full-access`) and prints a warning.
+danger-full-access`) and prints a warning. Under `danger-full-access` nothing
+prompts at all: file writes, network commands, and MCP execution included.
 
 **Escalation.** The confined tools (`bash`, `write`, `edit`, `multiedit`,
 `download`) accept `sandbox_permissions` paired with a `justification`. The
@@ -573,10 +587,11 @@ The equivalent JSON lives under `permissions.sandbox`:
 ### permissions
 
 Configure tool permissions. `allow` skips approval prompts; `deny` hides tools
-from the agent entirely; `network` marks shell commands that leave the
-sandbox's boundary (network access, privilege escalation) and therefore
-require an approval prompt. Everything else the sandbox confines runs without
-prompting.
+from the agent entirely; `network` marks shell commands that change state
+outside the machine (remote mutations, privilege escalation) and therefore
+require an approval prompt. File writes and reads are governed by the sandbox,
+not by this list: a confined write or any read never prompts, so
+`permissions allow write` has no effect in a sandboxed session.
 
 ```text
 Usage:
@@ -608,23 +623,25 @@ Usage:
 
 #### `permissions network`
 
-Mark shell commands that leave the sandbox's boundary — network access,
-privilege escalation — and therefore require an approval prompt. Entries are
-command-name prefixes; multi-word commands must be quoted. Every invocation
-in a command line is checked, including piped and chained ones.
+Mark shell commands that change state outside the machine — remote mutations
+and privilege escalation — and therefore require an approval prompt. Entries
+are command-name prefixes; multi-word commands must be quoted. Every
+invocation in a command line is checked, including piped and chained ones.
+Read-only egress (`curl`, `wget`, `nc`, `telnet`) is not listed: it changes
+nothing remotely, and its local writes are already fenced. Add it here if you
+want to be asked about it.
 
 ```text
 Usage:
   permissions network <command> [<command> ...]
 ```
 
-The built-in list already covers the common egress commands (`curl`, `wget`,
-`ssh`, `scp`, `rsync`, `nc`, `git push`, `gh`, `sudo`, `su`, `doas`, and
-others). Add what it misses:
+The built-in list already covers the common remote-mutating and
+privilege-escalating commands (`ssh`, `scp`, `sftp`, `rsync`, `ftp`, `gh`,
+`git push`, `sudo`, `su`, `doas`). Add what it misses:
 
 ```bash
-permissions allow view edit bash
-permissions deny bash
+permissions network "docker push"
 ```
 
 ### option
@@ -784,7 +801,7 @@ to Bash-based config.
   "models": {
     "large": { "provider": "anthropic", "model": "claude-sonnet-4-20250514" },
   },
-  "permissions": { "allowed_tools": ["view", "ls", "grep"] },
+  "permissions": { "allowed_tools": ["bash"] },
 }
 ```
 
