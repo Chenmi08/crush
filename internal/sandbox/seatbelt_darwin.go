@@ -90,26 +90,12 @@ func (b *seatbeltBackend) Wrap(ctx context.Context, p *Policy, cmd *exec.Cmd) (f
 	if err != nil {
 		return nil, err
 	}
-	artifacts, err := seatbeltMountPoints(p)
-	if err != nil {
-		return nil, err
-	}
 	target := cmd.Path
 	cmd.Path = path
 	cmd.Args = append([]string{path, "-p", profile, target}, cmd.Args[1:]...)
-	return cleanupArtifacts(p, artifacts), nil
-}
-
-// seatbeltMountPoints returns the protected and denied paths that do not exist
-// yet. Seatbelt expresses them in the profile text alone, so nothing is
-// created; the list is returned for symmetry with the other backends and to
-// keep the cleanup contract uniform.
-func seatbeltMountPoints(p *Policy) ([]string, error) {
-	var missing []string
-	for _, path := range append(append([]string{}, p.Protected...), p.DenyWrites...) {
-		if _, err := os.Stat(path); os.IsNotExist(err) {
-			missing = append(missing, path)
-		}
-	}
-	return missing, nil
+	// Seatbelt expresses protected paths in the profile text alone and creates
+	// nothing on the host, so there is nothing to clean up. Returning no
+	// artifacts is what keeps cleanupArtifacts from treating a path it never
+	// created as one of its own.
+	return nil, nil
 }

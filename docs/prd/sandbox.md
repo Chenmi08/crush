@@ -323,7 +323,13 @@ cannot be re-allowed:
   `.crush.json`, the `.crush` directory, the global config directory, the data
   directory.
 - Git execution surfaces: `.git/hooks`, `.git/config`, `.git/config.lock`, and
-  the resolved `gitdir` target for worktrees and submodules.
+  the resolved `gitdir` target for worktrees and submodules. The governing
+  repository is found by walking up from the workspace, as git does, so a
+  workspace that is a subdirectory of a checkout protects that checkout's
+  `.git` rather than inventing one. The workspace's own `.git` stays protected
+  so a nested repository cannot be created, and is masked as an empty
+  directory: git skips an empty directory as "not a repository" and walks up,
+  whereas an empty *file* is a malformed gitfile that stops the walk.
 - Shell startup files when they fall inside a writable root (dotfiles
   repositories): `.bashrc`, `.zshrc`, `.profile`, fish config.
 

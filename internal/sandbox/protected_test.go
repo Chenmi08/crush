@@ -15,14 +15,56 @@ import (
 func protectedWorkspace(t *testing.T) string {
 	t.Helper()
 	workspace := t.TempDir()
-	gitBin, err := exec.LookPath("git")
-	if err != nil {
+	if err := initGitRepo(workspace); err != nil {
 		return workspace
 	}
-	cmd := exec.Command(gitBin, "init", "--quiet")
-	cmd.Dir = workspace
-	require.NoError(t, cmd.Run())
 	return workspace
+}
+
+// initGitRepo initializes a repository at dir, reporting a missing git binary
+// so callers can skip or fall back. Tests that exercise git behavior need the
+// repository but not a commit; use commitGitRepo for one.
+func initGitRepo(dir string) error {
+	gitBin, err := exec.LookPath("git")
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command(gitBin, "init", "--quiet")
+	cmd.Dir = dir
+	return cmd.Run()
+}
+
+// requireGitRepo initializes a repository at dir and skips the test when git
+// is unavailable, returning the binary path.
+func requireGitRepo(t *testing.T, dir string) string {
+	t.Helper()
+	gitBin, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git is required for this test")
+	}
+	runGit(t, dir, "init", "--quiet")
+	return gitBin
+}
+
+// runGit runs one git command in dir and fails the test on error.
+func runGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	gitBin := gitBinary(t)
+	cmd := exec.Command(gitBin, args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git %v: %s", args, out)
+	return string(out)
+}
+
+// gitBinary returns the git binary path, skipping the test when it is absent.
+func gitBinary(t *testing.T) string {
+	t.Helper()
+	gitBin, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git is required for this test")
+	}
+	return gitBin
 }
 
 // protectedPolicy resolves a policy for a workspace.
@@ -264,4 +306,142 @@ func TestProtected_DisplayNamesPath(t *testing.T) {
 	require.Contains(t, msg, path)
 	require.Contains(t, msg, "reason=protected")
 	require.False(t, strings.Contains(msg, "reason=outside-writable-roots"))
+}
+
+// TestProtected_SubdirectoryOfRepository verifies the workspace's own .git
+// path stays protected while the repository that actually governs it is
+// resolved from the enclosing directory.
+//
+// Regression: the workspace used to be treated as "no repository yet" when
+// `workspace/.git` was absent, which both missed the real repository's
+// execution surfaces and made the backends materialize a mount point for a
+// path git then refused to walk past.
+func TestProtected_SubdirectoryOfRepository(t *testing.T) {
+	t.Parallel()
+	repo := protectedWorkspace(t)
+	require.DirExists(t, filepath.Join(repo, ".git"), "git must be available for this test")
+	workspace := filepath.Join(repo, "pkg", "deep")
+	require.NoError(t, os.MkdirAll(workspace, 0o755))
+
+	p := protectedPolicy(t, workspace)
+
+	// The workspace's own .git is still protected: a nested repository must
+	// not be creatable inside it.
+	own := CanonicalPath(filepath.Join(workspace, ".git"))
+	require.Contains(t, p.Protected, own)
+	require.Error(t, p.CheckWrite(filepath.Join(workspace, ".git", "hooks", "pre-commit")))
+
+	// The governing repository's execution surfaces are protected too, even
+	// though they live outside the workspace.
+	for _, path := range []string{
+		filepath.Join(repo, ".git", "hooks"),
+		filepath.Join(repo, ".git", "config"),
+		filepath.Join(repo, ".git", "config.lock"),
+	} {
+		require.Contains(t, p.Protected, CanonicalPath(path), "missing enclosing repository surface")
+		require.Error(t, p.CheckWrite(path), path)
+	}
+
+	// Ordinary git work inside the workspace is not affected: the fence is
+	// name-based and the workspace's writable root still covers it.
+	require.NoError(t, p.CheckWrite(filepath.Join(workspace, "file.txt")))
+}
+
+// TestProtected_SubdirectoryOfWorktree verifies an enclosing linked
+// worktree (.git is a file) contributes the execution surfaces of the shared
+// repository it belongs to.
+//
+// A linked worktree's gitdir holds only worktree-private files (HEAD, index,
+// refs); hooks and config live in the common directory named by its
+// `commondir` file. Protecting only the gitdir would miss both.
+func TestProtected_SubdirectoryOfWorktree(t *testing.T) {
+	t.Parallel()
+	common := filepath.Join(t.TempDir(), "main", ".git")
+	worktreeGitDir := filepath.Join(common, "worktrees", "feature")
+	require.NoError(t, os.MkdirAll(filepath.Join(common, "hooks"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(common, "config"), []byte("[core]\n"), 0o644))
+	require.NoError(t, os.MkdirAll(worktreeGitDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(worktreeGitDir, "commondir"),
+		[]byte("../..\n"),
+		0o644,
+	))
+
+	repo := filepath.Join(t.TempDir(), "checkout")
+	workspace := filepath.Join(repo, "pkg")
+	require.NoError(t, os.MkdirAll(workspace, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repo, ".git"),
+		[]byte("gitdir: "+worktreeGitDir+"\n"),
+		0o644,
+	))
+
+	p := protectedPolicy(t, workspace)
+
+	// The link itself is protected, so the repository cannot be repointed.
+	require.Contains(t, p.Protected, CanonicalPath(filepath.Join(repo, ".git")))
+
+	// The execution surfaces are the common directory's, resolved through
+	// commondir.
+	for _, path := range []string{
+		filepath.Join(common, "hooks"),
+		filepath.Join(common, "config"),
+		filepath.Join(common, "config.lock"),
+	} {
+		require.Contains(t, p.Protected, CanonicalPath(path),
+			"missing shared execution surface %s", path)
+	}
+}
+
+// TestProtected_FindEnclosingGit verifies the upward walk itself, including
+// that it stops at the filesystem root.
+func TestProtected_FindEnclosingGit(t *testing.T) {
+	t.Parallel()
+	repo := protectedWorkspace(t)
+	if _, err := os.Lstat(filepath.Join(repo, ".git")); err != nil {
+		t.Skip("git must be available for this test")
+	}
+	deep := filepath.Join(repo, "a", "b", "c")
+	require.NoError(t, os.MkdirAll(deep, 0o755))
+
+	for _, dir := range []string{repo, filepath.Join(repo, "a"), deep} {
+		got, found := findEnclosingGit(dir)
+		require.True(t, found, dir)
+		require.Equal(t, filepath.Join(repo, ".git"), got, dir)
+	}
+
+	outside := t.TempDir()
+	_, found := findEnclosingGit(outside)
+	require.False(t, found, "a directory with no ancestor repository must report none")
+}
+
+// TestProtected_RealWorktreeRepo protects against a fabricated gitdir
+// layout: it asks git to create a real linked worktree and checks that the
+// shared repository's hooks and config are protected, not just the
+// worktree's private directory.
+func TestProtected_RealWorktreeRepo(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	main := filepath.Join(root, "main")
+	require.NoError(t, os.MkdirAll(main, 0o755))
+	requireGitRepo(t, main)
+	runGit(t, main, "-c", "user.email=t@example.com", "-c", "user.name=t",
+		"commit", "--allow-empty", "--quiet", "-m", "init")
+
+	worktree := filepath.Join(root, "feat")
+	runGit(t, main, "worktree", "add", "--quiet", worktree)
+	workspace := filepath.Join(worktree, "pkg")
+	require.NoError(t, os.MkdirAll(workspace, 0o755))
+
+	common := filepath.Join(main, ".git")
+	p := protectedPolicy(t, workspace)
+	for _, path := range []string{
+		filepath.Join(common, "hooks"),
+		filepath.Join(common, "config"),
+		filepath.Join(common, "config.lock"),
+	} {
+		require.Contains(t, p.Protected, CanonicalPath(path),
+			"the shared repository's %s must be protected", path)
+	}
 }

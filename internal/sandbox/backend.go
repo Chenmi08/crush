@@ -263,10 +263,19 @@ func (p *Policy) ApplyEnv(env []string) []string {
 	)
 }
 
-// protectedPlaceholder returns a path to an empty file that a backend can bind
-// over a protected path that does not exist yet, so the confined process
-// cannot create it. The file lives in the policy's private temp directory, so
-// it is removed with the rest of the run's state.
+// protectedPlaceholder returns a path to an empty directory that a backend
+// can bind over a protected path that does not exist yet, so the confined
+// process cannot create it. The directory lives in the policy's private temp
+// directory, so it is removed with the rest of the run's state.
+//
+// A directory rather than a file is deliberate: the mount point a backend
+// must create on the host inherits the source's type, and an empty *file* is
+// not inert for every tool that may look at it. Git, asked to run in a
+// directory whose .git is a zero-byte file, treats it as a malformed gitfile
+// and stops with "invalid gitfile format" instead of continuing to the
+// repository above it; an empty directory, by contrast, is skipped as "not a
+// repository" and git keeps walking up. An empty directory is also invisible
+// to `git add -A`, where a phantom empty file would be staged and committed.
 func (p *Policy) protectedPlaceholder() (string, error) {
 	if p == nil || p.TempDir == "" {
 		return "", errors.New("sandbox: no private temp directory for protected-path placeholders")
@@ -276,12 +285,8 @@ func (p *Policy) protectedPlaceholder() (string, error) {
 		return "", fmt.Errorf("sandbox: creating placeholder directory: %w", err)
 	}
 	path := filepath.Join(dir, "protected")
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
+	if err := os.MkdirAll(path, 0o700); err != nil {
 		return "", fmt.Errorf("sandbox: creating protected-path placeholder: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		return "", err
 	}
 	return path, nil
 }

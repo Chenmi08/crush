@@ -84,6 +84,13 @@ var runnerFailureSignatures = map[string][]signature{
 
 // denialSignatures are the ways each backend's kernel refuses a write. A
 // refusal means confinement worked.
+//
+// Only these signatures are trusted. A refused write to a path masked as an
+// empty directory reports EISDIR instead, which is deliberately not
+// classified: the text (`Is a directory`) is identical to an ordinary misuse
+// such as `cat somedir`, so claiming "the sandbox refused this" would be
+// wrong as often as it is right. The command's own error text still reaches
+// the model.
 var denialSignatures = map[string][]signature{
 	"bubblewrap": {
 		{match: "Read-only file system", class: ExitClassDenial},

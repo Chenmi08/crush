@@ -92,7 +92,7 @@ func TestBubblewrap_WritesOutsideRootsFail(t *testing.T) {
 	outside := filepath.Join(t.TempDir(), "escape.txt")
 	_, stderr, err := runWrapped(t, policy, policy.Workspace, "echo x > "+outside)
 	require.Error(t, err, "a confined write outside the roots must fail")
-	require.True(t, isReadOnlyFilesystemError(stderr), "stderr should report a read-only filesystem: %q", stderr)
+	require.True(t, isRefusedWrite(stderr), "stderr should report a read-only filesystem: %q", stderr)
 
 	_, statErr := os.Stat(outside)
 	require.True(t, os.IsNotExist(statErr), "the file must not be created")
@@ -108,7 +108,7 @@ func TestBubblewrap_GrandchildrenInheritBoundary(t *testing.T) {
 	_, stderr, err := runWrapped(t, policy, policy.Workspace,
 		"sh -c 'sh -c \"echo x > "+outside+"\"'")
 	require.Error(t, err)
-	require.True(t, isReadOnlyFilesystemError(stderr), "stderr=%q", stderr)
+	require.True(t, isRefusedWrite(stderr), "stderr=%q", stderr)
 	_, statErr := os.Stat(outside)
 	require.True(t, os.IsNotExist(statErr))
 
@@ -130,7 +130,7 @@ func TestBubblewrap_ProtectedPathRefused(t *testing.T) {
 	_, stderr, err := runWrapped(t, policy, policy.Workspace,
 		"echo x > "+filepath.Join(policy.Workspace, "crushrc"))
 	require.Error(t, err)
-	require.True(t, isReadOnlyFilesystemError(stderr), "stderr=%q", stderr)
+	require.True(t, isRefusedWrite(stderr), "stderr=%q", stderr)
 	_, statErr := os.Stat(filepath.Join(policy.Workspace, "crushrc"))
 	require.True(t, os.IsNotExist(statErr))
 }
@@ -210,16 +210,25 @@ func TestBubblewrap_ClassificationDistinguishesRunnerFailure(t *testing.T) {
 	require.False(t, IsDenial(wrapped), "the outer classification wins")
 }
 
-// isReadOnlyFilesystemError reports whether the command output describes the
-// kernel's read-only filesystem refusal. The exact wording varies by util
-// (coreutils, dash), so several forms are accepted; the point is that the
-// backend, not the policy layer, produced it.
-func isReadOnlyFilesystemError(stderr string) bool {
+// isRefusedWrite reports whether the command output shows the boundary
+// refusing a write. The exact wording varies by util (coreutils, dash), so
+// several forms are accepted; the point is that the backend, not the policy
+// layer, produced it.
+//
+// A masked path reports one of two things: a path that already existed is
+// bound read-only and fails with EROFS, while a path that did not exist is
+// masked as an empty directory and fails with EISDIR, which the shells render
+// in the user's locale. Both call sites here write to a masked path that did
+// not exist, so EISDIR is accepted in its generic form for this test's
+// purpose.
+func isRefusedWrite(stderr string) bool {
 	for _, needle := range []string{
 		"Read-only file system",
 		"read-only file system",
 		"Permission denied",
 		"Operation not permitted",
+		"Is a directory",
+		"是一个目录",
 	} {
 		if strings.Contains(stderr, needle) {
 			return true
@@ -349,4 +358,77 @@ func TestBubblewrap_HonoursWorkingDir(t *testing.T) {
 	stdout, stderr, err := runWrapped(t, policy, sub, "pwd")
 	require.NoError(t, err, "stderr=%q", stderr)
 	require.Equal(t, sub, strings.TrimSpace(stdout))
+}
+
+// TestBubblewrap_SubdirectoryOfRepositoryKeepsGitWorking is the regression
+// test for the reported bug: running git from a subdirectory of a checkout
+// stopped with "invalid gitfile format", because the workspace's nonexistent
+// .git was masked with an empty file that git read as a malformed gitfile.
+func TestBubblewrap_SubdirectoryOfRepositoryKeepsGitWorking(t *testing.T) {
+	requireBubblewrap(t)
+
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	workspace := filepath.Join(repo, "pkg")
+	require.NoError(t, os.MkdirAll(workspace, 0o755))
+
+	gitBin := requireGitRepo(t, repo)
+	runGit(t, repo, "-c", "user.email=t@example.com", "-c", "user.name=t",
+		"commit", "--allow-empty", "--quiet", "-m", "init")
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "file.txt"), []byte("x"), 0o644))
+
+	policy, err := Resolve(Options{
+		Workspace: workspace,
+		TempDir:   filepath.Join(root, "tmp"),
+		CacheDir:  filepath.Join(root, "cache"),
+	})
+	require.NoError(t, err)
+
+	// git must find the repository above the workspace instead of failing on
+	// the masked .git inside it.
+	top, stderr, runErr := runWrapped(t, policy, workspace, gitBin+" rev-parse --show-toplevel")
+	require.NoError(t, runErr, "stderr=%q", stderr)
+	require.Equal(t, CanonicalPath(repo), strings.TrimSpace(top))
+
+	// status must work too, and report the workspace as untracked.
+	stdout, stderr, runErr := runWrapped(t, policy, workspace, gitBin+" status --short --untracked-files=all")
+	require.NoError(t, runErr, "stderr=%q", stderr)
+	require.Contains(t, stdout, "file.txt")
+	require.NotContains(t, strings.ToLower(stdout+stderr), "gitfile")
+
+	// No mount point may survive the run: a leftover empty .git would break
+	// git on the host as well.
+	_, statErr := os.Lstat(filepath.Join(workspace, ".git"))
+	require.True(t, os.IsNotExist(statErr), "the masked .git must not be left behind")
+}
+
+// TestBubblewrap_PlaceholdersDoNotLeakIntoGit verifies git's view of the
+// workspace does not include the mount points the backend created: an empty
+// file would be staged by `git add -A` and committed as a phantom file.
+func TestBubblewrap_PlaceholdersDoNotLeakIntoGit(t *testing.T) {
+	requireBubblewrap(t)
+
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	require.NoError(t, os.MkdirAll(workspace, 0o755))
+	gitBin := requireGitRepo(t, workspace)
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "real.txt"), []byte("x"), 0o644))
+
+	policy, err := Resolve(Options{
+		Workspace: workspace,
+		TempDir:   filepath.Join(root, "tmp"),
+		CacheDir:  filepath.Join(root, "cache"),
+	})
+	require.NoError(t, err)
+
+	// The policy masks protected paths that do not exist (crushrc, the shell
+	// startup files, .crush). None of them may appear in the index.
+	_, stderr, runErr := runWrapped(t, policy, workspace, gitBin+" add -A")
+	require.NoError(t, runErr, "stderr=%q", stderr)
+
+	stdout, stderr, runErr := runWrapped(t, policy, workspace, gitBin+" ls-files")
+	require.NoError(t, runErr, "stderr=%q", stderr)
+	files := strings.Split(strings.TrimSpace(stdout), "\n")
+	require.Equal(t, []string{"real.txt"}, files,
+		"only real files may be staged, got %q", files)
 }

@@ -508,6 +508,14 @@ configuration files and state directories, Git's execution surfaces
 (`.git/hooks`, `.git/config`, and the resolved gitdir of worktrees and
 submodules), and shell startup files when they fall inside a writable root.
 
+Git's surfaces are resolved from the repository that governs the workspace,
+found by walking up the way git itself does. Running Crush from a subdirectory
+of a checkout therefore protects that checkout's `.git` and still leaves
+`git status`, `git add`, and `git commit` working from the subdirectory.
+The workspace's own `.git` path stays protected too, so a nested repository
+cannot be created inside it; it is masked as an empty directory, which git
+skips as "not a repository" and walks past.
+
 **Enforcement.** The boundary is enforced by the OS where possible: `bubblewrap`
 on Linux, falling back to Landlock when bubblewrap is absent or cannot create
 its namespaces. (Landlock cannot express protected paths inside a writable

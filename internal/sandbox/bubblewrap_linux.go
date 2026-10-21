@@ -90,7 +90,7 @@ func (b *bubblewrapBackend) Wrap(ctx context.Context, p *Policy, cmd *exec.Cmd) 
 	}
 	cmd.Path = path
 	cmd.Args = append([]string{path}, args...)
-	return cleanupArtifacts(p, artifacts), nil
+	return cleanupArtifacts(artifacts), nil
 }
 
 // BubblewrapArgs generates the runner arguments for a policy and a target
@@ -102,13 +102,13 @@ func BubblewrapArgs(p *Policy, target string, targetArgs []string) ([]string, er
 	return args, err
 }
 
-// bubblewrapArgs is BubblewrapArgs plus the list of paths bubblewrap will
-// create as mount points, which the caller removes after the command exits.
-func bubblewrapArgs(p *Policy, target, workingDir string, targetArgs []string) ([]string, []string, error) {
+// bubblewrapArgs is BubblewrapArgs plus the mount points bubblewrap will
+// create on the host, which the caller removes after the command exits.
+func bubblewrapArgs(p *Policy, target, workingDir string, targetArgs []string) ([]string, []artifact, error) {
 	if p == nil {
 		return nil, nil, errors.New("bubblewrap: nil policy")
 	}
-	var artifacts []string
+	var artifacts []artifact
 
 	args := []string{
 		// Everything is read-only unless remounted below. Reads are
@@ -150,18 +150,22 @@ func bubblewrapArgs(p *Policy, target, workingDir string, targetArgs []string) (
 			args = append(args, "--ro-bind", prot, prot)
 			continue
 		}
-		// The path does not exist yet. Bind a placeholder file over it so
+		// The path does not exist yet. Bind an empty directory over it so
 		// the confined process cannot create it, even when the parent
 		// does not exist either: bwrap creates the mount-point parents.
-		// Binding /dev/null itself would not work: /dev/null is a symlink,
-		// and bwrap would mount the symlink's target rather than deny the
+		// A directory rather than a file, because the mount point bwrap
+		// creates on the host inherits the type: an empty file is a
+		// malformed gitfile that makes git refuse to look at the
+		// repository above it, and `git add -A` would stage it. Binding
+		// /dev/null itself would not work: /dev/null is a symlink, and
+		// bwrap would mount the symlink's target rather than deny the
 		// path.
 		placeholder, err := p.protectedPlaceholder()
 		if err != nil {
 			return nil, nil, err
 		}
 		args = append(args, "--ro-bind", placeholder, prot)
-		artifacts = append(artifacts, prot)
+		artifacts = append(artifacts, recordArtifact(prot))
 	}
 
 	// Denials are expressed on the path itself. A directory becomes an empty
@@ -187,7 +191,7 @@ func bubblewrapArgs(p *Policy, target, workingDir string, targetArgs []string) (
 			return nil, nil, err
 		}
 		args = append(args, "--ro-bind", placeholder, deny)
-		artifacts = append(artifacts, deny)
+		artifacts = append(artifacts, recordArtifact(deny))
 	}
 
 	// Start in the command's own directory, not the workspace root: the
