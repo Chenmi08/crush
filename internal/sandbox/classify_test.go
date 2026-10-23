@@ -105,6 +105,24 @@ func TestClassifyExit_ModelMessages(t *testing.T) {
 	denial := ClassifyExit("bubblewrap", 2, "cannot create /etc/x: Read-only file system\n")
 	require.Contains(t, denial.ModelMessage(), "sandbox-denied")
 	require.NotContains(t, denial.ModelMessage(), "runner-failed")
+	// A diagnosis without a policy carries no mode and names every confined
+	// escalation target.
+	require.NotContains(t, denial.ModelMessage(), "mode=")
+	require.NotContains(t, denial.String(), "mode=")
+	require.Contains(t, denial.ModelMessage(), "(workspace-write, or danger-full-access)")
+
+	// The exec layer stamps the mode in effect; the model needs it to pick a
+	// strictly wider escalation mode. Only genuinely wider modes are named:
+	// from workspace-write the only target is danger-full-access.
+	denial.Mode = ModeWorkspaceWrite
+	require.Contains(t, denial.ModelMessage(), "mode=workspace-write")
+	require.Contains(t, denial.String(), "mode=workspace-write")
+	require.Contains(t, denial.ModelMessage(), "(danger-full-access)")
+	require.NotContains(t, denial.ModelMessage(), "(workspace-write,")
+
+	// From read-only both wider modes apply.
+	denial.Mode = ModeReadOnly
+	require.Contains(t, denial.ModelMessage(), "(workspace-write, or danger-full-access)")
 
 	require.Contains(t, runner.String(), "class=runner-failure")
 	require.Contains(t, runner.String(), "backend=bubblewrap")

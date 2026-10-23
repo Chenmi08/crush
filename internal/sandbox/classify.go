@@ -35,10 +35,45 @@ type ExitDiagnosis struct {
 	Detail string
 	// ExitCode is the command's exit status.
 	ExitCode int
+	// Mode is the policy mode the command ran under. It is set by the exec
+	// layer, which has the policy; a diagnosis produced without a policy (a
+	// direct ClassifyExit call) leaves it empty.
+	Mode Mode
 }
 
 func (d ExitDiagnosis) String() string {
-	return fmt.Sprintf("sandbox-exit class=%s backend=%s exit=%d detail=%s", d.Class, d.Backend, d.ExitCode, d.Detail)
+	return fmt.Sprintf("sandbox-exit class=%s%s backend=%s exit=%d detail=%s", d.Class, d.modeSuffix(), d.Backend, d.ExitCode, d.Detail)
+}
+
+// modeSuffix returns the " mode=<mode>" fragment for messages and logs, or
+// an empty string when no mode is known.
+func (d ExitDiagnosis) modeSuffix() string {
+	if d.Mode == "" {
+		return ""
+	}
+	return " mode=" + string(d.Mode)
+}
+
+// escalationTargets renders the modes strictly wider than m for the denial
+// hint. Only genuinely wider modes are named: naming a mode that is not
+// wider would send the model into an escalation-not-wider rejection.
+// read-only is never a target (no mode is narrower than it), and an unknown
+// mode keeps the confined escalation candidates.
+func escalationTargets(m Mode) string {
+	var parts []string
+	for _, candidate := range Modes() {
+		if candidate == ModeReadOnly {
+			continue
+		}
+		if m != "" && !candidate.wider(m) {
+			continue
+		}
+		parts = append(parts, string(candidate))
+	}
+	if len(parts) == 1 {
+		return "(" + parts[0] + ")"
+	}
+	return "(" + strings.Join(parts, ", or ") + ")"
 }
 
 // signature is one backend-specific fatal signature: a substring of the
@@ -212,9 +247,18 @@ func (d ExitDiagnosis) ModelMessage() string {
 			"sandbox-runner-failed backend=%s detail=%s hint=the sandbox itself failed to start the command; report this to the user rather than retrying or requesting sandbox escalation",
 			d.Backend, d.Detail)
 	case ExitClassDenial:
+		// Actionable: the model must know the refusal is the sandbox and
+		// that the remedy is to ask for a wider mode for this one call,
+		// otherwise it guesses (cd elsewhere, -C, retry) at a boundary that
+		// cannot be crossed. Wording mirrors the escalation instructions in
+		// the confined tools' descriptions so the two stay consistent.
+		// The mode in effect is included when known, and only modes strictly
+		// wider than it are named: escalation requires a strictly wider mode,
+		// and a hint that names a non-wider one would send the model into an
+		// escalation-not-wider rejection.
 		return fmt.Sprintf(
-			"sandbox-denied backend=%s detail=%s hint=the sandbox refused this operation; check which paths are writable with crush sandbox status",
-			d.Backend, d.Detail)
+			"sandbox-denied%s backend=%s detail=%s hint=the sandbox refused a write; if this operation is genuinely required, retry once with sandbox_permissions set to a mode strictly wider than the current one %s and a justification sentence; the user is asked to approve leaving the sandbox for that one call",
+			d.modeSuffix(), d.Backend, d.Detail, escalationTargets(d.Mode))
 	default:
 		return ""
 	}

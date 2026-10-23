@@ -8,9 +8,11 @@ import (
 )
 
 // ActiveRun carries what the exec layer needs to classify a confined command's
-// exit: the backend that wrapped it and a buffer for its diagnostics.
+// exit: the backend that wrapped it, the policy mode it ran under, and a
+// buffer for its diagnostics.
 type ActiveRun struct {
 	backendName string
+	mode        Mode
 	diagnostics bytes.Buffer
 }
 
@@ -31,7 +33,7 @@ func BeginRun(ctx context.Context, policy *Policy, cmd *exec.Cmd) (*ActiveRun, f
 	if sel.Backend == nil {
 		return nil, cleanup, nil
 	}
-	return &ActiveRun{backendName: sel.Backend.Name()}, cleanup, nil
+	return &ActiveRun{backendName: sel.Backend.Name(), mode: policy.Mode}, cleanup, nil
 }
 
 // StderrTee returns a writer that tees the command's diagnostics into the
@@ -69,6 +71,7 @@ func (r *ActiveRun) DiagnoseClassified(exitCode int) ExitDiagnosis {
 	if d.Class == ExitClassOrdinary {
 		return ExitDiagnosis{}
 	}
+	d.Mode = r.mode
 	logExit(d)
 	return d
 }
