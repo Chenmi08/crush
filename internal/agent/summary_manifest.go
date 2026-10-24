@@ -73,6 +73,14 @@ type manifestInput struct {
 	// are therefore absent from Messages. It lets the manifest say "not
 	// indexed" instead of silently implying "did not happen".
 	Undecodable int
+	// Worktree lists paths git reports as changed, which covers edits made
+	// through a shell command rather than a file tool. Nil means git was
+	// not consulted or failed; the renderer then says so instead of
+	// implying the tree is clean.
+	Worktree []manifestWorktreeFile
+	// WorktreeKnown is true when Worktree is an authoritative answer,
+	// including the legitimately empty one for a clean tree.
+	WorktreeKnown bool
 }
 
 type manifestFailure struct {
@@ -91,6 +99,11 @@ type manifestFile struct {
 	Reads int
 	Edits int
 	Last  int64
+	// Worktree marks a path that git reports as changed. Such a path may
+	// carry no reads or edits if the change came from a shell command.
+	Worktree bool
+	// Status is git's word for the change, empty for tool-only paths.
+	Status string
 }
 
 type manifestAnchor struct {
@@ -118,8 +131,9 @@ func buildContextManifest(in manifestInput) string {
 
 	var (
 		failures, failuresCapped = manifestFailures(in.Messages)
-		files, filesCapped       = manifestFiles(in.Messages)
+		files, filesCapped       = manifestFiles(in.Messages, in.Worktree)
 		anchors                  = manifestAnchors(in.Messages, failures)
+		bashCalls                = countBashCalls(in.Messages)
 	)
 	anchorsCapped := 0
 
@@ -147,6 +161,8 @@ func buildContextManifest(in manifestInput) string {
 			filesDropped:    filesDropped,
 			failuresDropped: failuresDropped,
 			anchorsCapped:   anchorsCapped,
+			worktreeKnown:   in.WorktreeKnown,
+			bashCalls:       bashCalls,
 		})
 		if approxTokenCount(block) <= manifestTokenBudget {
 			return block
@@ -179,6 +195,8 @@ type manifestRenderInput struct {
 	filesDropped    int
 	failuresDropped int
 	anchorsCapped   int
+	worktreeKnown   bool
+	bashCalls       int
 }
 
 func renderManifest(in manifestRenderInput) string {
@@ -194,11 +212,12 @@ func renderManifest(in manifestRenderInput) string {
 	first, last := archiveRange(in.messages, in.anchorAt)
 	fmt.Fprintf(
 		&sb,
-		"archived: messages=%d range=%s..%s tool_calls=%d failures=%d\n",
+		"archived: messages=%d range=%s..%s tool_calls=%d tool_result_bytes=%d failures=%d\n",
 		len(in.messages),
 		formatManifestTime(first),
 		formatManifestTime(last),
 		toolCalls,
+		archivedToolResultBytes(in.messages),
 		len(in.failures)+in.failuresDropped,
 	)
 
@@ -222,7 +241,7 @@ func renderManifest(in manifestRenderInput) string {
 		}
 	}
 
-	if len(in.files) > 0 || in.filesDropped > 0 {
+	if len(in.files) > 0 || in.filesDropped > 0 || !in.worktreeKnown || in.bashCalls > 0 {
 		sb.WriteString("files:\n")
 		for _, f := range in.files {
 			fmt.Fprintf(&sb, "- path=%s ops=%s", manifestEscape(f.Path), manifestFileOps(f))
@@ -235,10 +254,32 @@ func renderManifest(in manifestRenderInput) string {
 			if f.Last > 0 {
 				fmt.Fprintf(&sb, " last=%s", formatManifestTime(f.Last))
 			}
+			if f.Worktree {
+				fmt.Fprintf(&sb, " src=git state=%s", f.Status)
+			} else {
+				sb.WriteString(" src=tool")
+			}
 			sb.WriteString("\n")
 		}
 		if in.filesDropped > 0 {
 			fmt.Fprintf(&sb, "- (truncated: %d more)\n", in.filesDropped)
+		}
+		// The list is only authoritative when git answered. Saying so
+		// keeps "no file changed" distinguishable from "no file tool ran
+		// and nothing verified the tree", which is the common case for an
+		// agent that edits through shell commands.
+		if !in.worktreeKnown {
+			fmt.Fprintf(
+				&sb,
+				"- (working tree not checked; %d bash call(s) may have modified files)\n",
+				in.bashCalls,
+			)
+		} else if len(in.files) == 0 && in.bashCalls > 0 {
+			fmt.Fprintf(
+				&sb,
+				"- (working tree clean; %d bash call(s) reported no changes)\n",
+				in.bashCalls,
+			)
 		}
 	}
 
@@ -259,6 +300,23 @@ func renderManifest(in manifestRenderInput) string {
 	}
 	sb.WriteString("\n</context_manifest>")
 	return sb.String()
+}
+
+// archivedToolResultBytes totals the archived tool output. The model has no
+// other way to tell a session whose tool calls carried four kilobytes from one
+// that carried four hundred, which is the cost signal §4.3 wants the
+// tombstone's byte count for.
+func archivedToolResultBytes(msgs []message.Message) int {
+	total := 0
+	for _, m := range msgs {
+		if m.Role != message.Tool {
+			continue
+		}
+		for _, r := range m.ToolResults() {
+			total += len(r.Content) + len(r.Data)
+		}
+	}
+	return total
 }
 
 func manifestFileOps(f manifestFile) string {
@@ -441,7 +499,7 @@ func clipManifestLine(s string) string {
 // recently touched first, and how many were cut by the structural cap. Paths
 // come from the tool call input, not the result: a failed edit still
 // identifies the file the agent cared about.
-func manifestFiles(msgs []message.Message) ([]manifestFile, int) {
+func manifestFiles(msgs []message.Message, worktree []manifestWorktreeFile) ([]manifestFile, int) {
 	byPath := make(map[string]*manifestFile)
 	var order []string
 	for _, m := range msgs {
@@ -466,6 +524,24 @@ func manifestFiles(msgs []message.Message) ([]manifestFile, int) {
 				f.Last = m.CreatedAt
 			}
 		}
+	}
+
+	// A path git reports as changed is authoritative that it changed, even
+	// when no file tool touched it: the edit may have gone through a shell
+	// command, whose arguments name no path we can trust. Merge by path so
+	// a file that was both edited by a tool and is dirty appears once.
+	for _, wf := range worktree {
+		if wf.Path == "" {
+			continue
+		}
+		f, seen := byPath[wf.Path]
+		if !seen {
+			f = &manifestFile{Path: wf.Path}
+			byPath[wf.Path] = f
+			order = append(order, wf.Path)
+		}
+		f.Worktree = true
+		f.Status = wf.Status
 	}
 
 	files := make([]manifestFile, 0, len(order))
@@ -601,4 +677,19 @@ func manifestEscape(s string) string {
 		"\n", " ",
 	)
 	return r.Replace(s)
+}
+
+// countBashCalls counts archived bash tool calls. Their file effects are
+// invisible to the tool-call file index, so the files section reports the
+// count when it has nothing else to say about them.
+func countBashCalls(msgs []message.Message) int {
+	calls := 0
+	for _, m := range msgs {
+		for _, tc := range m.ToolCalls() {
+			if isBashTool(tc.Name) {
+				calls++
+			}
+		}
+	}
+	return calls
 }

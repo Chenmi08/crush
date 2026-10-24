@@ -250,13 +250,14 @@ by code from `messages`, never by the model.
 
 ```xml
 <context_manifest generated="2026-10-24T10:12:03Z">
-archived: messages=142 range=2026-10-23T14:02:11Z..2026-10-23T15:31:40Z tool_calls=38 failures=3
+archived: messages=142 range=2026-10-23T14:02:11Z..2026-10-23T15:31:40Z tool_calls=38 tool_result_bytes=412988 failures=3
 failures:
 - id=msg_7f3a tool=bash exit=1 cmd="go test ./internal/agent/..." key="--- FAIL: TestSummarize"
 - id=msg_9c11 tool=bash exit=1 cmd="go build ./..." key="undefined: foo"
 files:
-- path=internal/agent/agent.go ops=read,edit reads=4 edits=2 last=2026-10-23T15:28:02Z
-- path=internal/message/message.go ops=read reads=1 last=2026-10-23T14:40:09Z
+- path=internal/agent/agent.go ops=read,edit reads=4 edits=2 last=2026-10-23T15:28:02Z src=tool
+- path=internal/message/message.go ops=read reads=1 last=2026-10-23T14:40:09Z src=tool
+- path=internal/agent/summary_manifest.go ops=none src=git state=modified
 anchors:
 - id=msg_2b01 kind=user
 - id=msg_7f3a kind=failure
@@ -271,7 +272,11 @@ Generation rules:
   exit code is non-zero; **most recent 10**, newest first.
 - `files`: derived from `view`/`edit`/`write`/`multiedit`/`lsp_replace_symbol`
   tool calls found in the archived range, keyed by file path, with op counts
-  and last-seen timestamp. **Most recent 20** by `last`, newest first.
+  and last-seen timestamp, **merged with** the paths `git status` reports as
+  changed in the working tree, each entry marked `src=tool` or `src=git`.
+  **Most recent 20** by `last`, newest first. The git half is required, not
+  optional: see D-1 in §7.3 — tool calls alone miss every edit made through a
+  shell command, which is how most edits actually happen.
 - `anchors`: up to 10 `message_id`s the agent can pass to `recall`
   (all user messages, all failures).
 - `coverage`: `scanned/total`. If any archived message failed to decode, emit
@@ -463,10 +468,14 @@ G2's threshold and the reason it exists: a documented case collapsed an
 no-adaptation baseline of 63.7. The guard's job is to notice "the summary
 lost 99% of its volume" before it becomes the only context.
 
-No new column is needed for any guard: the previous summary's size is
-already `CompletionTokens`, and the replaced context size is
+No new column is needed for any guard, but **`CompletionTokens` is not the
+previous summary's size**: it is overwritten by every step, so after one
+conversational turn it holds that turn's output. G2 must re-read the previous
+summary message and measure its narrative (everything before the manifest
+lead-in) with `approxTokenCount`. The replaced context size is
 `PromptTokens + CompletionTokens`. PR-3 adds `summary_fail_count` for G4
-only.
+only. See D-2 in §7.3 for the failure this causes if implemented as written
+above.
 
 ---
 
@@ -581,7 +590,7 @@ actually done" without reading the tree.
 | 2 | not started | — |
 | 3 | not started | — |
 | 4 | **done**, reviewed | `templates/summary.md`, `summary_prompt.go`, `agent.go` |
-| 5 | **done**, reviewed | `summary_manifest.go`, `agent.go` |
+| 5 | **done**, reviewed, amended (§7.3) | `summary_manifest.go`, `summary_worktree.go`, `agent.go` |
 | 6-12 | not started | — |
 
 This is the §7.1 minimum viable subset (1, 4, 5). Zero schema changes, zero
@@ -669,6 +678,104 @@ created yet, so PR-1/4/5 are covered by synthetic in-test histories instead.
 production: `ListFromSummary` returns an error on a decode failure rather than
 a partial slice, so `Summarize` has no count to pass. Wiring it needs a change
 to the message service and belongs with a later PR.
+
+### 7.3 Defects found after implementation
+
+Two defects were found by inspecting a real session rather than the test
+suite. Both are recorded here with the reasoning, because each one invalidates
+a claim this document makes elsewhere, and a future implementer will otherwise
+re-derive the same wrong design.
+
+**D-1 — `files:` was blind to shell edits, so §10's artifact metric was 0%.**
+
+The manifest derived its file list from tool-call input. That covers `view`,
+`edit`, `write`, `multiedit` and `lsp_replace_symbol`, and nothing else. An
+agent that edits through a shell command — `sed -i`, a heredoc, a
+redirection, `python3 - <<EOF` — leaves **no path in any tool input**, so
+`files:` came out empty while the working tree was full of changes. §10 claims
+artifact accuracy is "100% by construction (code-generated); a mismatch is a
+bug". The construction was sound; the *input* was wrong, and the metric would
+have read 0% against `git status --porcelain`.
+
+Parsing the command string for paths was rejected: `sed -i`, `tee`, `git mv`,
+shell functions and heredocs are not reliably parseable, and a wrong match is
+worse than a missing entry, because it makes the whole section untrustworthy
+again — exactly the prose-quality problem the manifest exists to remove.
+
+The fix is to ask git, which is what §10 already used as ground truth. At
+compaction the working tree is queried once
+(`git status --porcelain=v1 -z`, 5s timeout, bounded to 50 entries), and the
+result is merged into the tool-derived list by path, with provenance marked:
+
+```
+files:
+- path=internal/agent/agent.go ops=read,edit reads=4 edits=2 last=... src=tool
+- path=internal/agent/summary_manifest.go ops=none src=git state=modified
+```
+
+A path can be both: `src=git` says git confirms it changed, `ops=`/`reads=`/
+`edits=` still carry what the file tools recorded, because git cannot report
+reads. When git could not be consulted, the section says so rather than
+rendering nothing, which is the same "not there vs not indexed" distinction
+the `coverage` line exists for:
+
+```
+- (working tree not checked; 3 bash call(s) may have modified files)
+```
+
+This is a deliberate widening of the section's meaning: `files:` now answers
+"what is changed right now" (the resumption question) rather than "what was
+touched in the archived range" (a history question git cannot answer by
+itself). §4.4's field list is unchanged apart from `src=`/`state=`.
+
+**D-2 — G2's `oldTokens` reads the wrong counter, so the guard misfires.**
+
+§4.8 defines `oldTokens = currentSession.CompletionTokens`, described as "the
+previous summary's output size", and adds "no new column is needed for any
+guard". That second claim does not hold. `updateSessionTokenCounters`
+**overwrites** both counters on every step:
+
+```go
+if usage.OutputTokens != 0 { session.CompletionTokens = usage.OutputTokens }
+```
+
+So after a compaction, the first completed turn rewrites
+`CompletionTokens` to that turn's output. The next compaction then compares
+the new summary against one conversational reply, not against the summary it
+is replacing — and G2, whose entire job is catching summary-of-summary
+collapse, is measuring the wrong quantity in exactly the scenario it exists
+for. Both directions misfire: a small intermediate turn lowers the threshold
+and admits a genuinely collapsed summary; a large one raises it and rejects a
+healthy summary.
+
+The fix measures the previous summary directly, at the point of use:
+
+```go
+prev, err := a.messages.Get(ctx, currentSession.SummaryMessageID)
+narrative, _, _ := strings.Cut(prev.Content().Text, manifestLeadIn)
+prevTokens = approxTokenCount(strings.TrimSpace(narrative))
+```
+
+Three details matter. The manifest and transcript blocks must be cut off
+before measuring — they are code-appended, and counting them would inflate
+`PrevTokens` and make G2 more permissive. `approxTokenCount` is sufficient
+because G2 is a ratio guard, not a billing check; a stored usage figure would
+make it exact but needs a column. And the guard stays inert when there is no
+previous summary (`prevTokens == 0`), matching §4.8's own condition.
+
+This is a documentation correction as much as a code one: **§4.8's "no new
+column is needed" is only true if you re-read the previous summary row**, and
+that row must be parsed for the narrative boundary. PR-9's
+`summary_prompt_prefix_len` makes the same measurement cheaper once it lands.
+
+**Also added: `tool_result_bytes` on the `archived:` line** (§4.4 did not ask
+for it). The model was told `tool_calls=7` with no way to distinguish a
+session carrying four kilobytes of tool output from one carrying four
+hundred. §4.3 argues the tombstone needs a byte count so the model can price a
+retrieval; the same argument applies one level up, where the decision is
+whether the archive is worth searching at all.
+
+---
 
 **Not verifiable in this environment.** `sqlc` is not installed and
 `golangci-lint` (both v1 and v2 on `PATH`) refuses to load the config because
@@ -1430,7 +1537,7 @@ PR-7 shadow mode give the data), change behavior second.
 | Repeated tool call rate | After a compaction, count `(tool, normalized args)` pairs seen **before** the anchor and repeated within the next 5 turns | decreases after PR-7 ships as `on` |
 | Byte savings from elision | Shadow-mode log totals | ≥ 40% of tool-result bytes on long sessions |
 | Resumption probe accuracy | Force a compaction at 50% of a recorded session, ask 4 probes (original error message / which files changed / what is next / what was decided about X), score against the un-compacted arm | within 10 points of the un-compacted arm |
-| Artifact accuracy | Manifest file list vs `git status --porcelain` at the same point | 100% by construction (code-generated); a mismatch is a bug |
+| Artifact accuracy | Manifest file list vs `git status --porcelain` at the same point | 100% by construction (code-generated); a mismatch is a bug. Only holds because `files:` is merged with git — see D-1 in §7.3 |
 | Tokens per completed task | End-to-end on a fixed task set, before/after | must not increase |
 | `recall` usage | Calls per compacted session; hit/empty/stale-misuse counts | measure; misuse < 5% |
 | Cache hit ratio around compaction | `cache_read / (cache_read + cache_creation)` | no material drop |

@@ -1,6 +1,9 @@
 package agent
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -227,12 +230,161 @@ func TestBuildContextManifestOmitsEmptySections(t *testing.T) {
 		manifestMsg("u1", message.User, 1000, message.TextContent{Text: "hello"}),
 	}
 
-	block := buildContextManifest(manifestInput{Messages: msgs, AnchorAt: 2000})
+	block := buildContextManifest(manifestInput{
+		Messages:      msgs,
+		AnchorAt:      2000,
+		WorktreeKnown: true,
+	})
 
 	require.NotContains(t, block, "failures:")
-	require.NotContains(t, block, "files:")
+	require.NotContains(t, block, "files:",
+		"a verified-clean tree with no file tool calls has nothing to list")
 	require.Contains(t, block, "anchors:")
 	require.Contains(t, block, "archived: messages=1")
+}
+
+// When git was not consulted, an absent file list would read as "nothing
+// changed" — the exact confusion the coverage line exists to prevent.
+func TestBuildContextManifestSaysWhenWorktreeUnchecked(t *testing.T) {
+	t.Parallel()
+
+	msgs := []message.Message{
+		manifestMsg("b", message.Assistant, 1000,
+			message.ToolCall{ID: "c1", Name: "bash", Input: `{"command":"sed -i s/a/b/ x.go"}`},
+		),
+	}
+
+	block := buildContextManifest(manifestInput{Messages: msgs, AnchorAt: 2000})
+
+	require.Contains(t, block, "files:")
+	require.Contains(t, block, "working tree not checked")
+	require.Contains(t, block, "1 bash call(s) may have modified files")
+}
+
+func TestBuildContextManifestSaysWhenWorktreeClean(t *testing.T) {
+	t.Parallel()
+
+	msgs := []message.Message{
+		manifestMsg("b", message.Assistant, 1000,
+			message.ToolCall{ID: "c1", Name: "bash", Input: `{"command":"go build ./..."}`},
+		),
+	}
+
+	block := buildContextManifest(manifestInput{
+		Messages:      msgs,
+		AnchorAt:      2000,
+		WorktreeKnown: true,
+	})
+
+	require.Contains(t, block, "working tree clean")
+	require.Contains(t, block, "reported no changes")
+}
+
+// An edit made through a shell command leaves no path in any tool input, so
+// the file list has to come from git or it is simply wrong.
+func TestBuildContextManifestIncludesShellEditedFiles(t *testing.T) {
+	t.Parallel()
+
+	msgs := []message.Message{
+		manifestMsg("b", message.Assistant, 1000,
+			message.ToolCall{ID: "c1", Name: "bash", Input: `{"command":"sed -i s/a/b/ x.go"}`},
+		),
+	}
+
+	block := buildContextManifest(manifestInput{
+		Messages:      msgs,
+		AnchorAt:      2000,
+		WorktreeKnown: true,
+		Worktree: []manifestWorktreeFile{
+			{Path: "x.go", Status: "modified"},
+		},
+	})
+
+	require.Contains(t, block, "path=x.go ops=none")
+	require.Contains(t, block, "src=git state=modified")
+}
+
+// A path touched by a file tool and also dirty is listed once, with both
+// provenances and the tool's counters intact.
+func TestBuildContextManifestMergesToolAndWorktreeEntries(t *testing.T) {
+	t.Parallel()
+
+	msgs := []message.Message{
+		manifestMsg("e", message.Assistant, 1500,
+			message.ToolCall{ID: "c1", Name: "view", Input: `{"file_path":"a.go"}`},
+		),
+		manifestMsg("f", message.Assistant, 1600,
+			message.ToolCall{ID: "c2", Name: "edit", Input: `{"file_path":"a.go"}`},
+		),
+	}
+
+	block := buildContextManifest(manifestInput{
+		Messages:      msgs,
+		AnchorAt:      2000,
+		WorktreeKnown: true,
+		Worktree:      []manifestWorktreeFile{{Path: "a.go", Status: "modified"}},
+	})
+
+	require.Equal(t, 1, strings.Count(block, "path=a.go"))
+	require.Contains(t, block, "ops=read,edit reads=1 edits=1")
+	require.Contains(t, block, "src=git state=modified")
+}
+
+func TestBuildContextManifestReportsToolResultBytes(t *testing.T) {
+	t.Parallel()
+
+	msgs := []message.Message{
+		manifestMsg("b", message.Assistant, 1000,
+			message.ToolCall{ID: "c1", Name: "bash", Input: `{"command":"cat big.log"}`},
+		),
+		manifestMsg("b-r", message.Tool, 1001, message.ToolResult{
+			ToolCallID: "c1", Name: "bash", Content: strings.Repeat("x", 4096),
+		}),
+	}
+
+	block := buildContextManifest(manifestInput{Messages: msgs, AnchorAt: 2000})
+
+	require.Contains(t, block, "tool_result_bytes=4096")
+}
+
+func TestParseWorktreeStatus(t *testing.T) {
+	t.Parallel()
+
+	t.Run("modified, untracked and deleted", func(t *testing.T) {
+		t.Parallel()
+
+		out := " M a.go\x00?? b.go\x00 D c.go\x00"
+		files := parseWorktreeStatus(out, 10)
+
+		require.Len(t, files, 3)
+		require.Equal(t, manifestWorktreeFile{Path: "a.go", Status: "modified"}, files[0])
+		require.Equal(t, manifestWorktreeFile{Path: "b.go", Status: "untracked"}, files[1])
+		require.Equal(t, manifestWorktreeFile{Path: "c.go", Status: "deleted"}, files[2])
+	})
+
+	t.Run("a rename skips the original path", func(t *testing.T) {
+		t.Parallel()
+
+		out := "R  new.go\x00old.go\x00 M next.go\x00"
+		files := parseWorktreeStatus(out, 10)
+
+		require.Len(t, files, 2, "the original path must not become an entry of its own")
+		require.Equal(t, "new.go", files[0].Path)
+		require.Equal(t, "renamed", files[0].Status)
+		require.Equal(t, "next.go", files[1].Path)
+	})
+
+	t.Run("empty output", func(t *testing.T) {
+		t.Parallel()
+		require.Empty(t, parseWorktreeStatus("", 10))
+	})
+
+	t.Run("respects the limit", func(t *testing.T) {
+		t.Parallel()
+
+		out := " M a.go\x00 M b.go\x00 M c.go\x00"
+		require.Len(t, parseWorktreeStatus(out, 2), 2)
+	})
 }
 
 func TestBuildContextManifestBudgetDropsFilesFirst(t *testing.T) {
@@ -409,4 +561,56 @@ func TestBuildContextManifestAnchorsKeepNewest(t *testing.T) {
 	oldest := "u" + string(rune('a'))
 	require.Contains(t, block, "id="+newest, "the most recent request must be kept")
 	require.NotContains(t, block, "id="+oldest+" ", "the oldest request is the one to drop")
+}
+
+// A working directory that is not a repository must not fail the summary; the
+// manifest just reports that it could not check.
+func TestWorktreeDirtyFilesOutsideRepository(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	_, err := worktreeDirtyFiles(t.Context(), dir)
+	require.Error(t, err, "git status in a non-repository must report the failure")
+}
+
+func TestWorktreeDirtyFilesReportsChanges(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("one"), 0o644))
+	runGit(t, dir, "init", "--quiet")
+	runGit(t, dir, "add", "tracked.txt")
+	runGit(t, dir, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "--quiet", "-m", "init")
+
+	clean, err := worktreeDirtyFiles(t.Context(), dir)
+	require.NoError(t, err)
+	require.Empty(t, clean, "a clean tree reports no files")
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("two"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "new.txt"), []byte("x"), 0o644))
+
+	dirty, err := worktreeDirtyFiles(t.Context(), dir)
+	require.NoError(t, err)
+
+	byPath := make(map[string]string, len(dirty))
+	for _, f := range dirty {
+		byPath[f.Path] = f.Status
+	}
+	require.Equal(t, "modified", byPath["tracked.txt"])
+	require.Equal(t, "untracked", byPath["new.txt"])
+}
+
+func TestWorktreeDirtyFilesRejectsEmptyDir(t *testing.T) {
+	t.Parallel()
+
+	_, err := worktreeDirtyFiles(t.Context(), "")
+	require.Error(t, err)
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	require.NoError(t, cmd.Run(), "git %v", args)
 }

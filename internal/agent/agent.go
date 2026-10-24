@@ -1668,10 +1668,28 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 	// given to the model to write: paths, commands and exit codes are
 	// guaranteed by plumbing, while the model's prose keeps the judgement
 	// (why a file mattered) in `## Artifacts`.
+	//
+	// The working tree is queried because tool calls are not the only way a
+	// file changes: an edit made through a shell command names no path in
+	// any tool input, so a manifest built from tool calls alone would report
+	// an empty file list while the tree is full of changes. git is the
+	// authority here; the command string is never parsed for paths.
+	var worktreeFiles []manifestWorktreeFile
+	var worktreeKnown bool
+	if a.cfg != nil {
+		if files, err := worktreeDirtyFiles(ctx, a.cfg.WorkingDir()); err != nil {
+			slog.Warn("Could not read working tree for summary manifest", "error", err)
+		} else {
+			worktreeFiles = files
+			worktreeKnown = true
+		}
+	}
 	if manifest := buildContextManifest(manifestInput{
-		Messages:    msgs,
-		AnchorAt:    time.Now().Unix(),
-		GeneratedAt: time.Now(),
+		Messages:      msgs,
+		AnchorAt:      time.Now().Unix(),
+		GeneratedAt:   time.Now(),
+		Worktree:      worktreeFiles,
+		WorktreeKnown: worktreeKnown,
 	}); manifest != "" {
 		summaryMessage.AppendContent("\n\n" + manifestLeadIn + manifest)
 		if updateErr := a.messages.Update(genCtx, summaryMessage); updateErr != nil {

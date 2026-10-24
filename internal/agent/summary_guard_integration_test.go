@@ -3,10 +3,15 @@ package agent
 import (
 	"context"
 	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"charm.land/catwalk/pkg/catwalk"
 	"charm.land/fantasy"
+	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/message"
 	"github.com/stretchr/testify/require"
 )
@@ -53,6 +58,16 @@ func (m *summaryStreamModel) StreamObject(context.Context, fantasy.ObjectCall) (
 
 func (m *summaryStreamModel) Provider() string { return "fake" }
 func (m *summaryStreamModel) Model() string    { return "fake-model" }
+
+// testConfigStore builds a config store rooted at dir, so the summary path can
+// query a real working tree.
+func testConfigStore(t *testing.T, dir string) *config.ConfigStore {
+	t.Helper()
+
+	store, err := config.Init(dir, "", false)
+	require.NoError(t, err)
+	return store
+}
 
 func summaryTestAgent(env fakeEnv, model fantasy.LanguageModel) *sessionAgent {
 	return testSessionAgent(env, model, model, "test prompt").(*sessionAgent)
@@ -299,4 +314,76 @@ func TestSummarize_AppendsManifestAfterModelProse(t *testing.T) {
 	// lead-in marks the manifest as data, not instructions.
 	require.Less(t, strings.Index(content, body), strings.Index(content, manifestLeadIn))
 	require.Less(t, strings.Index(content, manifestLeadIn), strings.Index(content, "<context_manifest"))
+}
+
+// The user-visible payoff: a session that edited files through shell commands
+// still ends up with a file list, because the list comes from git rather than
+// from tool-call arguments.
+func TestSummarize_ListsFilesEditedThroughShell(t *testing.T) {
+	t.Parallel()
+
+	env := testEnv(t)
+	model := &summaryStreamModel{text: "## Current State\n- edited", finishReason: fantasy.FinishReasonStop}
+	sa := NewSessionAgent(SessionAgentOptions{
+		LargeModel: Model{
+			Model:      model,
+			CatwalkCfg: catwalk.Model{ContextWindow: 200_000, DefaultMaxTokens: 10_000},
+		},
+		SmallModel: Model{
+			Model:      model,
+			CatwalkCfg: catwalk.Model{ContextWindow: 200_000, DefaultMaxTokens: 10_000},
+		},
+		IsYolo:   true,
+		Sessions: env.sessions,
+		Messages: env.messages,
+		Cfg:      testConfigStore(t, env.workingDir),
+	}).(*sessionAgent)
+
+	ctx := t.Context()
+	sess, err := env.sessions.Create(ctx, "shell edits")
+	require.NoError(t, err)
+
+	// Create a repository with one committed file, then change it the way an
+	// agent working through a shell would: no file tool, no path in any tool
+	// call input.
+	require.NoError(t, os.WriteFile(filepath.Join(env.workingDir, "a.go"), []byte("package a\n"), 0o644))
+	for _, args := range [][]string{
+		{"init", "--quiet"},
+		{"add", "a.go"},
+		{"-c", "user.email=t@t", "-c", "user.name=t", "commit", "--quiet", "-m", "init"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = env.workingDir
+		require.NoError(t, cmd.Run(), "git %v", args)
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(env.workingDir, "a.go"), []byte("package a // changed\n"), 0o644))
+
+	_, err = env.messages.Create(ctx, sess.ID, message.CreateMessageParams{
+		Role:  message.User,
+		Parts: []message.ContentPart{message.TextContent{Text: "change a.go"}},
+	})
+	require.NoError(t, err)
+	_, err = env.messages.Create(ctx, sess.ID, message.CreateMessageParams{
+		Role: message.Assistant,
+		Parts: []message.ContentPart{
+			message.ToolCall{ID: "call_sed", Name: "bash", Input: `{"command":"sed -i s/a/b/ a.go"}`, Finished: true},
+		},
+	})
+	require.NoError(t, err)
+	_, err = env.messages.Create(ctx, sess.ID, message.CreateMessageParams{
+		Role:  message.Tool,
+		Parts: []message.ContentPart{message.ToolResult{ToolCallID: "call_sed", Name: "bash", Content: ""}},
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, sa.Summarize(ctx, sess.ID, fantasy.ProviderOptions{}, nil))
+
+	after, err := env.sessions.Get(ctx, sess.ID)
+	require.NoError(t, err)
+	msg, err := env.messages.Get(ctx, after.SummaryMessageID)
+	require.NoError(t, err)
+
+	content := msg.Content().Text
+	require.Contains(t, content, "path=a.go", "a shell-edited file must appear in the summary")
+	require.Contains(t, content, "src=git state=modified")
 }
