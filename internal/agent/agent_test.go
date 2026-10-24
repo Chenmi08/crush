@@ -88,9 +88,10 @@ func TestPreparePrompt_FiltersImageAttachments(t *testing.T) {
 
 	// When supportsImages is false, image attachments should be stripped
 	// from history AND from the files list.
-	history, files := agent.preparePrompt(msgs, false, imageAtt)
-	// First message is the system reminder, second is the user message.
+	history, files := agent.preparePrompt(msgs, promptOptions{}, false, imageAtt)
+	// The head reminder, then the user message.
 	require.Len(t, history, 2)
+	require.Equal(t, fantasy.MessageRoleUser, history[1].Role)
 	require.Len(t, history[1].Content, 1)
 	text, ok := fantasy.AsMessagePart[fantasy.TextPart](history[1].Content[0])
 	require.True(t, ok)
@@ -100,7 +101,7 @@ func TestPreparePrompt_FiltersImageAttachments(t *testing.T) {
 
 	// When supportsImages is true, image attachments should remain in
 	// history and be included in the files list.
-	history, files = agent.preparePrompt(msgs, true, imageAtt)
+	history, files = agent.preparePrompt(msgs, promptOptions{}, true, imageAtt)
 	require.Len(t, history, 2)
 	require.Len(t, history[1].Content, 2)
 	text, ok = fantasy.AsMessagePart[fantasy.TextPart](history[1].Content[0])
@@ -197,7 +198,7 @@ func TestPreparePrompt_OrphanedToolUse(t *testing.T) {
 	msgs, err := env.messages.List(ctx, sess.ID)
 	require.NoError(t, err)
 
-	history, _ := agent.preparePrompt(msgs, true)
+	history, _ := agent.preparePrompt(msgs, promptOptions{Recite: true}, true)
 
 	// The history must contain a synthetic tool result for the orphaned call.
 	found := false
@@ -271,7 +272,7 @@ func TestPreparePrompt_OrphanedToolUseMixed(t *testing.T) {
 	msgs, err := env.messages.List(ctx, sess.ID)
 	require.NoError(t, err)
 
-	history, _ := agent.preparePrompt(msgs, true)
+	history, _ := agent.preparePrompt(msgs, promptOptions{Recite: true}, true)
 
 	// Should have a synthetic result only for the orphaned call.
 	var syntheticCount int
@@ -404,7 +405,7 @@ func TestPreparePrompt_NonAdjacentToolResults(t *testing.T) {
 
 	require.Equal(t, message.User, msgs[2].Role, "interleaved user should be between assistant and results in DB order")
 
-	history, _ := agent.preparePrompt(msgs, false)
+	history, _ := agent.preparePrompt(msgs, promptOptions{Recite: true}, false)
 
 	requireToolCallAdjacency(t, history)
 
@@ -454,7 +455,7 @@ func TestPreparePrompt_ResultBeforeAssistant(t *testing.T) {
 	msgs, err := env.messages.List(ctx, sess.ID)
 	require.NoError(t, err)
 
-	history, _ := agent.preparePrompt(msgs, false)
+	history, _ := agent.preparePrompt(msgs, promptOptions{Recite: true}, false)
 
 	requireToolCallAdjacency(t, history)
 
@@ -521,7 +522,7 @@ func TestPreparePrompt_BundledResultsAcrossAssistants(t *testing.T) {
 	msgs, err := env.messages.List(ctx, sess.ID)
 	require.NoError(t, err)
 
-	history, _ := agent.preparePrompt(msgs, false)
+	history, _ := agent.preparePrompt(msgs, promptOptions{Recite: true}, false)
 
 	requireToolCallAdjacency(t, history)
 
@@ -571,7 +572,7 @@ func TestPreparePrompt_DropsOrphanedToolResults(t *testing.T) {
 	msgs, err := env.messages.List(ctx, sess.ID)
 	require.NoError(t, err)
 
-	history, _ := agent.preparePrompt(msgs, false)
+	history, _ := agent.preparePrompt(msgs, promptOptions{Recite: true}, false)
 
 	for _, msg := range history {
 		require.NotEqual(t, fantasy.MessageRoleTool, msg.Role, "orphaned tool results must be dropped")

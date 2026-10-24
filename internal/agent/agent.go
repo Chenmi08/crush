@@ -892,7 +892,11 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	ctx = context.WithValue(ctx, tools.SessionIDContextKey, call.SessionID)
 	ctx = tools.WithSandboxPolicy(ctx, a.sandboxPolicySnapshot())
 
-	history, files := a.preparePrompt(msgs, largeModel.CatwalkCfg.SupportsImages, call.Attachments...)
+	history, files := a.preparePrompt(msgs, promptOptions{
+		Todos:  currentSession.Todos,
+		Recite: !a.isSubAgent,
+		Goal:   call.Prompt,
+	}, largeModel.CatwalkCfg.SupportsImages, call.Attachments...)
 
 	startTime := time.Now()
 	a.eventPromptSent(call.SessionID)
@@ -1575,7 +1579,11 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 		return nil
 	}
 
-	aiMsgs, _ := a.preparePrompt(msgs, largeModel.CatwalkCfg.SupportsImages)
+	// No head reminder and no recitation: the summary prompt embeds the
+	// list itself, and the summarizer is not resuming the work. A reminder
+	// here would claim the list is empty in the same request that carries
+	// it.
+	aiMsgs, _ := a.preparePrompt(msgs, promptOptions{NoHead: true}, largeModel.CatwalkCfg.SupportsImages)
 
 	genCtx, cancel := context.WithCancel(ctx)
 	ac := &activeCancel{cancel: cancel}
@@ -1960,16 +1968,37 @@ func (a *sessionAgent) createUserMessage(ctx context.Context, call SessionAgentC
 	return msg, nil
 }
 
-func (a *sessionAgent) preparePrompt(msgs []message.Message, supportsImages bool, attachments ...message.Attachment) ([]fantasy.Message, []fantasy.FilePart) {
+// promptOptions carries the session state the prompt layers need without
+// handing the function a session service, so [preparePrompt] stays pure and
+// testable. It is a struct rather than extra parameters because Todos and
+// Recite are independent: an empty list is a real state a turn must be told
+// about, while a summarizer has no use for either.
+type promptOptions struct {
+	// Todos is the session's todo list, as stored.
+	Todos []session.Todo
+	// NoHead suppresses the head reminder. Summarization sets it because
+	// its own prompt carries the list: rendering "your todo list is
+	// currently empty" in the same request would assert the opposite.
+	NoHead bool
+	// Recite appends the tail restatement of the current goal and task. It
+	// is a turn feature: the summarizer is not resuming work, so a
+	// recitation there is noise on top of the list its own prompt already
+	// carries.
+	Recite bool
+	// Goal is the prompt of the turn being served. It is needed because
+	// msgs is a snapshot taken before the new user message is stored, so
+	// the newest message in it belongs to the previous turn. Empty falls
+	// back to the newest stored user message.
+	Goal string
+}
+
+// preparePrompt turns stored messages into the model-facing history and the
+// file parts attached to the current turn.
+func (a *sessionAgent) preparePrompt(msgs []message.Message, opts promptOptions, supportsImages bool, attachments ...message.Attachment) ([]fantasy.Message, []fantasy.FilePart) {
 	var history []fantasy.Message
-	if !a.isSubAgent {
+	if !a.isSubAgent && !opts.NoHead {
 		history = append(history, fantasy.NewUserMessage(
-			fmt.Sprintf(
-				"<system_reminder>%s</system_reminder>",
-				`This is a reminder that your todo list is currently empty. DO NOT mention this to the user explicitly because they are already aware.
-If you are working on tasks that would benefit from a todo list please use the "todos" tool to create one.
-If not, please feel free to ignore. Again do not mention this message to the user.`,
-			),
+			fmt.Sprintf("<system_reminder>%s</system_reminder>", todoReminder(opts.Todos)),
 		))
 	}
 	// Collect all tool call IDs present in assistant messages, then index
@@ -2032,6 +2061,14 @@ If not, please feel free to ignore. Again do not mention this message to the use
 			continue
 		}
 		aiMsgs := m.ToAIMessage()
+		// ToAIMessage trims text, so a message whose content is whitespace
+		// only converts to an assistant turn with no parts at all. Sending
+		// that is useless, and a trailing one would separate the tail
+		// recitation from the conversation with a blank turn, which
+		// providers that require alternation can reject.
+		if m.Role == message.Assistant && allMessagesEmpty(aiMsgs) {
+			continue
+		}
 		if !supportsImages {
 			for i := range aiMsgs {
 				if aiMsgs[i].Role == fantasy.MessageRoleUser {
@@ -2043,6 +2080,17 @@ If not, please feel free to ignore. Again do not mention this message to the use
 
 		if m.Role == message.Assistant && len(m.ToolCalls()) > 0 {
 			history = append(history, toolResultsForCalls(m, toolResultsByCall))
+		}
+	}
+
+	// Restate the goal and the task at the tail, so the two positions long
+	// context actually retains carry the same intent. It is appended as the
+	// last element and is never preceded by a blank assistant message, or
+	// providers that require strict role alternation would reject the
+	// request.
+	if opts.Recite {
+		if recitation := goalRecitation(opts.Goal, msgs, opts.Todos); recitation != "" {
+			history = append(history, fantasy.NewUserMessage(recitation))
 		}
 	}
 
@@ -2062,6 +2110,21 @@ If not, please feel free to ignore. Again do not mention this message to the use
 	}
 
 	return history, files
+}
+
+// allMessagesEmpty reports whether every converted message carries no parts.
+// It is the post-conversion counterpart of the pre-filter above, which cannot
+// see that ToAIMessage trims text before deciding whether to emit a text part.
+func allMessagesEmpty(msgs []fantasy.Message) bool {
+	if len(msgs) == 0 {
+		return true
+	}
+	for _, msg := range msgs {
+		if len(msg.Content) > 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // filterDisabledMCPTools removes tools from MCP servers disabled via the

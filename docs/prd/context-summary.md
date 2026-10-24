@@ -598,11 +598,13 @@ actually done" without reading the tree.
 | 4 | **done**, reviewed | `templates/summary.md`, `summary_prompt.go`, `agent.go` |
 | 5 | **done**, reviewed, amended (§7.3) | `summary_manifest.go`, `summary_worktree.go`, `agent.go` |
 | 6 | **done** | `tools/recall.go`, `message.go`, `messages.sql`, `config.go`, `coordinator.go` |
-| 7-12 | not started | — |
+| 10 | **done**, reviewed | `todo_reminder.go`, `agent.go` |
+| 7-9, 11-12 | not started | — |
 
-This is the §7.1 minimum viable subset (1, 4, 5) plus PR-2 and PR-6. One
-generated query, no schema change, and no new configuration option (the tool
-name is added to the built-in allow-list, which is not user-facing config).
+This is the §7.1 minimum viable subset (1, 4, 5) plus PR-2, PR-3, PR-6 and
+PR-10. PR-3 adds one migration; PR-6 adds one generated query. No new
+user-facing configuration option exists yet (PR-6's tool name is added to the
+built-in allow-list, which is not config).
 "Reviewed" means the
 two-axis review recorded below has been run and its findings applied; it does
 not mean the PRDs' acceptance commands all ran, since `task lint` cannot
@@ -823,6 +825,35 @@ failed run, and the client/server path preserves that distinction: the wire
 event is `proto.AgentEventTypeSummarizeDisabled` and it carries the reason in
 `Progress` with `Error` cleared, so `crush run` (which aborts on a non-nil
 `Error`) ignores it instead of failing.
+
+**PR-10 — real todo injection and tail recitation.** The head reminder is now
+computed from the session's stored list, with the historical "your todo list is
+currently empty" text kept byte-for-byte for the empty case. `preparePrompt`
+takes a `promptOptions{Todos, Recite, Goal, NoHead}` rather than a bare
+`todos` slice, because three states have to stay distinguishable: no list to
+report, a real empty list, and no reminder wanted at all.
+
+Three findings from review changed the shape:
+
+- **The recitation names the wrong goal if it reads the message history.**
+  `Run` snapshots the session before it stores the new user message, so the
+  newest stored message belongs to the *previous* turn — and, right after a
+  compaction, `getSessionMessages` re-roles the summary to a user message, so
+  the tail would recite the summary narrative. `promptOptions.Goal` carries
+  the turn's own prompt; the history is only a fallback. Two Run-level tests
+  fail without the fix.
+- **The summarizer must not carry the head reminder.** It renders `todoReminder(nil)`
+  while `buildSummaryPrompt` embeds the real list, so the same request claimed
+  both "the list is empty" and a populated list. `NoHead` suppresses it; the
+  summarizer already has the list in the right place.
+- **A whitespace-only assistant row used to convert to a turn with no parts**,
+  because the skip filter compared `Content().Text == ""` while `ToAIMessage`
+  trims. That blank turn sat between the conversation and the recitation. The
+  filter now also rejects a converted assistant turn with no content.
+
+Sub-agents get neither the head reminder nor the recitation: a sub-agent owns
+its own task prompt and has no todo list of its own. `clipToBytes` reserves the
+ellipsis inside the byte budget rather than adding three bytes past it.
 
 **Known gaps, in dependency order.** The cross-cutting fixture in §9
 (`internal/agent/testdata/summary/`) is also not created yet, so PR-1/2/4/5 are
