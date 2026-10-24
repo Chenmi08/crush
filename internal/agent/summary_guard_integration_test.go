@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"charm.land/catwalk/pkg/catwalk"
@@ -16,23 +17,75 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// summaryStreamModel is a [fantasy.LanguageModel] stub that streams a fixed
-// summary body and reports the configured finish reason, so the guard path in
+// summaryStreamModel is a [fantasy.LanguageModel] stub that streams a summary
+// body and reports the configured finish reason, so the guard paths in
 // [sessionAgent.Summarize] can be exercised without a provider.
+//
+// A single fixed body is the common case. Setting bodies scripts one body per
+// call instead, which is how a test expresses "the first compaction succeeds,
+// the next one collapses", and every call's prompt is recorded so a retry can
+// be told from a first attempt.
 type summaryStreamModel struct {
+	mu           sync.Mutex
 	text         string
+	bodies       []string
 	finishReason fantasy.FinishReason
+	prompts      []string
+	calls        int
 }
 
-func (m *summaryStreamModel) Generate(context.Context, fantasy.Call) (*fantasy.Response, error) {
+// next returns the body for this call and records the prompt it was asked
+// with.
+func (m *summaryStreamModel) next(call fantasy.Call) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.prompts = append(m.prompts, promptText(call.Prompt))
+	body := m.text
+	if m.calls < len(m.bodies) {
+		body = m.bodies[m.calls]
+	}
+	m.calls++
+	return body
+}
+
+// callCount reports how many streams the model has served.
+func (m *summaryStreamModel) callCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.calls
+}
+
+// recordedPrompts returns a copy of the prompts seen so far.
+func (m *summaryStreamModel) recordedPrompts() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.prompts...)
+}
+
+// promptText flattens a prompt to plain text for assertions.
+func promptText(prompt fantasy.Prompt) string {
+	var sb strings.Builder
+	for _, msg := range prompt {
+		for _, part := range msg.Content {
+			if tp, ok := fantasy.AsMessagePart[fantasy.TextPart](part); ok {
+				sb.WriteString(tp.Text)
+				sb.WriteString("\n")
+			}
+		}
+	}
+	return sb.String()
+}
+
+func (m *summaryStreamModel) Generate(_ context.Context, call fantasy.Call) (*fantasy.Response, error) {
 	return &fantasy.Response{
-		Content:      fantasy.ResponseContent{fantasy.TextContent{Text: m.text}},
+		Content:      fantasy.ResponseContent{fantasy.TextContent{Text: m.next(call)}},
 		FinishReason: m.finishReason,
 	}, nil
 }
 
-func (m *summaryStreamModel) Stream(context.Context, fantasy.Call) (fantasy.StreamResponse, error) {
-	text := m.text
+func (m *summaryStreamModel) Stream(_ context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
+	text := m.next(call)
 	reason := m.finishReason
 	return func(yield func(fantasy.StreamPart) bool) {
 		if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextStart, ID: "1"}) {

@@ -448,17 +448,23 @@ authoritative and the session stays usable.
 | --- | --- | --- |
 | G1 truncation | `resp.Response.FinishReason == fantasy.FinishReasonLength` | mark summary message `FinishReasonError` / `"Summarization Error"` / "summary hit the output limit"; do **not** update anchor; count as a failure |
 | G2 collapse | `newTokens < oldTokens * 0.5` **and** the dropped span is non-empty | reject, retry once with a stricter prompt; still failing → mark error, do not update anchor |
-| G3 inflation | `approxTokenCount(new summary content) >= prevContextTokens` | reject; do not update anchor |
+| G3 inflation | `newTokens >= prevContextTokens` | reject; do not update anchor |
 | G4 repeat | consecutive failures `>= 3` | persist `summary_fail_count`, disable automatic summarization for that session, emit one user-visible notice |
 
 Concrete inputs for G2/G3 (read them **before** the reset block, which sets
 `PromptTokens = 0`):
 
-- `oldTokens` = `currentSession.CompletionTokens` (the previous summary's
-  output size; `0` when there is no previous summary).
-- `newTokens` = `summaryCompletionTokens(usage, summaryMessage)` — the same
-  helper the reset block uses, so the guard and the stored value cannot
-  disagree.
+- `oldTokens` = the narrative size of the previous summary, re-read from
+  `messages.Get(SummaryMessageID)` and cut at `manifestLeadIn` (see D-2); `0`
+  when there is no previous summary.
+- `newTokens` = `summaryNarrativeTokens(summaryMessage.Content().Text)` —
+  measured the same way as `oldTokens`, on the narrative only (everything
+  before `manifestLeadIn`). Provider usage is deliberately **not** used:
+  a usage figure and a byte-derived estimate are not comparable, and the
+  manifest is appended after the guard runs, so the two would describe
+  different strings. `summaryCompletionTokens` still supplies the stored
+  session counter; the guard and the counter are allowed to differ because
+  they answer different questions.
 - `prevContextTokens` = `currentSession.PromptTokens + currentSession.CompletionTokens`
   (the size of the context being replaced; `0` on the first compaction, in
   which case G3 does not apply).
@@ -587,29 +593,100 @@ actually done" without reading the tree.
 | PR | Status | Files |
 | --- | --- | --- |
 | 1 | **done**, reviewed | `agent.go`, `summary_guard.go` |
-| 2 | not started | — |
+| 2 | **done** | `summary_guard.go`, `agent.go` |
 | 3 | not started | — |
 | 4 | **done**, reviewed | `templates/summary.md`, `summary_prompt.go`, `agent.go` |
 | 5 | **done**, reviewed, amended (§7.3) | `summary_manifest.go`, `summary_worktree.go`, `agent.go` |
 | 6-12 | not started | — |
 
-This is the §7.1 minimum viable subset (1, 4, 5). Zero schema changes, zero
+This is the §7.1 minimum viable subset (1, 4, 5) plus PR-2, which was cheap
+because it extends a helper that already existed. Zero schema changes, zero
 config changes, zero new dependencies. "Reviewed" means the two-axis review
 recorded below has been run and its findings applied; it does not mean the
 PRDs' acceptance commands all ran, since `task lint` cannot execute here.
 
 **PR-1 — truncation guard.** `summaryMaxOutputTokens = 20_000` is attached to
 the summarizer via `fantasy.WithMaxOutputTokens` (fixes P2). The pure helper
-`summaryOutcome(*fantasy.AgentResult) (int64, error)` returns
+`summaryOutcome(*fantasy.AgentResult) error` returns
 `errSummaryTruncated` on `FinishReasonLength`; nil, empty and unknown finish
 reasons pass, because some providers report none and treating "unknown" as
 truncation would discard usable summaries (fixes P1). On rejection the summary
 message is finalized as `FinishReasonError` / `"Summarization Error"` /
 `"summary hit the output limit"` and execution returns before the anchor
 update, so `SummaryMessageID` keeps pointing at the previous complete
-summary. The returned token count is informational only; size comparisons are
-left to PR-2, which measures persisted content with `summaryCompletionTokens`
-so the guard and the stored value cannot disagree.
+summary. The helper returns no token count: size comparisons belong to PR-2,
+which measures the persisted narrative so the two sides of its ratio are
+directly comparable.
+
+**PR-2 — collapse and inflation guards.** `validateSummary(summarySizes) error`
+is pure and returns `errSummaryCollapsed` below `summaryCollapseRatio = 0.5` of
+the previous summary, and `errSummaryInflated` when the new document is at
+least as large as the context it replaces. Both checks are inert without their
+baseline (`PrevTokens == 0`, `PrevContext == 0`), so a first compaction can
+never be rejected. `PrevTokens` is **measured from the stored previous summary
+row** (D-2 in §7.3), not taken from `CompletionTokens`; the narrative is cut at
+`manifestLeadIn` first so the code-appended blocks do not inflate the baseline.
+`PrevContext` is `PromptTokens + CompletionTokens`, captured before the reset
+block. `NewTokens` is measured with the same `summaryNarrativeTokens` helper as
+`PrevTokens`: both sides of the ratio must be the same quantity, and a provider
+usage count is not comparable to a byte-derived estimate of a different string.
+
+A collapse gets `summaryCollapseRetries = 1` retry with
+`summaryCollapseRetrySuffix` appended to the prompt; a second collapse, or any
+inflation, is rejected without a retry. Every rejection — the retried attempt,
+the final attempt, and a truncation — persists the attempt as
+`FinishReasonError` / `"Summarization Error"`, and the only path that reaches
+the anchor update is the one that passed every guard.
+
+Two shapes were chosen while implementing and are worth recording.
+
+- **Each attempt gets its own summary message.** `Summarize`'s stream setup
+  moved into a closure, so a retry does not rewrite text the UI has already
+  streamed; the rejected attempt keeps its failed row. Rejected rows are then
+  excluded by `getSessionMessages`, which would otherwise feed a previous
+  attempt's partial prose into the next compaction as a second version of the
+  session's state (D6).
+- **`rejectSummary` returns only the persistence error.** The guard error is
+  returned by the caller, because the collapse path has to retry instead of
+  surfacing it. The first draft returned the cause from the helper and the
+  retry never ran; the two integration tests exist because of that. The
+  stream-error path uses the same helper, so the `"Summarization Error"`
+  label and the failed-row shape have exactly one definition.
+
+Also fixed while implementing, because PR-2 was the first PR to exercise the
+rejection path end to end: `manifestAnchors` skipped summary rows only by
+checking `Role == User`, but `getSessionMessages` rewrites the previous
+summary's role to `user`, so a summary id could be offered as a `recall`
+handle it cannot resolve. §7.2's PR-5 paragraph already claimed the exclusion;
+the code now does it, with a regression test. And `stripAnalysisBlock` now
+runs before the guards rather than after them, so a *rejected* row — which is
+still persisted and still visible — cannot carry the `<analysis>` scratchpad
+either.
+
+Two smaller decisions are worth recording:
+
+- **The dropped-span input is not wired yet.** §4.8's G2 condition is
+  `newTokens < oldTokens * 0.5` **and** the dropped span is non-empty. The
+  second half only becomes meaningful once PR-9 knows whether a previous
+  summary is part of the span, which is why §7 defers it there. Until then
+  `PrevTokens > 0` stands in for it; a previous summary always means a
+  non-empty span. §12's risk row still describes the end state, not today's.
+- **A dangling anchor skips the collapse guard, not the compaction.** When
+  `messages.Get(SummaryMessageID)` fails the row is gone, which is not the
+  same as "no previous summary", so it is logged at `Warn` under its own
+  message rather than folded into the inert case. The compaction still runs:
+  `ListFromSummary` falls back to the whole session in that situation, so
+  G3 still bounds the new document against the context actually being
+  replaced, and refusing would wedge a session that is already over its
+  window. The alternative — treat an unreadable baseline as a failure — was
+  rejected because it would make a missing row permanently disable
+  compaction.
+
+Known gaps: rejected attempts' provider usage is not added to the session's
+cost or cumulative totals, because the rejection paths do not save the session
+at all (adding it means deciding what a failed compaction costs, which belongs
+with PR-3's failure accounting). Guard rejections also do not yet increment a
+counter, so the circuit breaker still has nothing to read.
 
 **PR-4 — prompt and template.** `templates/summary.md` now carries the seven
 model-authored headings of §4.7 in order; `## Full Transcript` is absent by
@@ -669,11 +746,11 @@ error (the two guards it fed returned a token count nobody used); and
 `setSummaryContent` moved to `message.Message.SetContent`, where the package
 already owns `AppendContent`.
 
-**Known gaps, in dependency order.** PR-2 extends `summaryOutcome`'s
-neighbourhood with `validateSummary`; PR-3's circuit breaker has no failure
-counter to increment until its column exists. Neither is started. The
-cross-cutting fixture in §9 (`internal/agent/testdata/summary/`) is also not
-created yet, so PR-1/4/5 are covered by synthetic in-test histories instead.
+**Known gaps, in dependency order.** PR-3's circuit breaker has no failure
+counter to increment until its column exists, so a rejection is still retried
+on every subsequent turn. The cross-cutting fixture in §9
+(`internal/agent/testdata/summary/`) is also not created yet, so PR-1/2/4/5 are
+covered by synthetic in-test histories instead.
 `manifestInput.Undecodable` is implemented and unit-tested but unreachable in
 production: `ListFromSummary` returns an error on a decode failure rather than
 a partial slice, so `Summarize` has no count to pass. Wiring it needs a change
@@ -812,9 +889,11 @@ locale-dependent "read-only filesystem" message and
   - The anchor update block (`currentSession.SummaryMessageID = ...` through
     `sessions.Save`) must execute only on the complete path.
 - New file `internal/agent/summary_guard.go` (keeps `agent.go` from growing):
-  - `func summaryOutcome(resp *fantasy.AgentResult) (tokenCount int64, err error)`
-    or an equivalent small helper that both PR-1 and PR-2 can extend. Keep
-    it pure so it is unit-testable without a provider.
+  - `func summaryOutcome(resp *fantasy.AgentResult) error` — or an equivalent
+    small helper that both PR-1 and PR-2 can extend. Keep it pure so it is
+    unit-testable without a provider. (As shipped it returns only the error;
+    nothing consumed a token count, and PR-2 measures the persisted narrative
+    instead.)
 
 **Tests**
 
@@ -851,13 +930,13 @@ locale-dependent "read-only filesystem" message and
     bare `int64`s here because two of them are token counts and two are
     context sizes, and swapping them is a silent bug.
   - Field meanings are exactly §4.8's bullets (`oldTokens`, `newTokens`,
-    `prevContextTokens`). `NewTokens` comes from
-    `summaryCompletionTokens(...)`, never from `len(content)/4` computed
-    separately.
-  - Thresholds as named constants: `summaryCollapseRatio = 0.5`. Collapse
-    requires `s.PrevTokens > 0`; inflation is `s.NewTokens >= s.PrevContext`
-    and requires `s.PrevContext > 0`. Keep the function pure — no session,
-    no clock.
+    `prevContextTokens`). `NewTokens` comes from `summaryNarrativeTokens`,
+    the same measurement as `PrevTokens`; never from `len(content)/4`
+    computed separately, and not from provider usage.
+  - Thresholds as named constants: `summaryCollapseRatio = 0.5` and
+    `summaryCollapseRetries = 1`. Collapse requires `s.PrevTokens > 0`;
+    inflation is `s.NewTokens >= s.PrevContext` and requires
+    `s.PrevContext > 0`. Keep the function pure — no session, no clock.
 - `internal/agent/agent.go`
   - Call `validateSummary` before persisting the anchor.
   - On collapse: retry once with an appended prompt suffix asking the model

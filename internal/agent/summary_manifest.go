@@ -609,10 +609,15 @@ func manifestCommand(call *manifestToolCall) string {
 
 // manifestAnchors lists message ids the agent can hand to `recall`: the user
 // messages (the least derivable content in a session) and the failures.
+//
+// Summary rows are skipped even when they arrive as a user message:
+// getSessionMessages rewrites the previous summary's role so the resumption
+// prompt reads naturally, but its id is not something a retrieval tool can
+// resolve, and the next summary replaces it anyway.
 func manifestAnchors(msgs []message.Message, failures []manifestFailure) []manifestAnchor {
 	var anchors []manifestAnchor
 	for _, m := range msgs {
-		if m.Role != message.User {
+		if m.Role != message.User || m.IsSummaryMessage {
 			continue
 		}
 		anchors = append(anchors, manifestAnchor{ID: m.ID, Kind: "user", At: m.CreatedAt})

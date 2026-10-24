@@ -1564,99 +1564,185 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 		}
 	}()
 
-	agent := fantasy.NewAgent(
-		largeModel.Model,
-		fantasy.WithSystemPrompt(string(summaryPrompt)),
-		fantasy.WithUserAgent(userAgent),
-		fantasy.WithMaxOutputTokens(summaryMaxOutputTokens),
-	)
-	summaryMessage, err := a.messages.Create(ctx, sessionID, message.CreateMessageParams{
-		Role:             message.Assistant,
-		Model:            largeModel.ModelCfg.Model,
-		Provider:         largeModel.ModelCfg.Provider,
-		IsSummaryMessage: true,
-	})
-	if err != nil {
-		return err
+	// The size guards compare the new summary against the summary it
+	// replaces, so measure that document from its stored row. The session's
+	// CompletionTokens cannot be used: every completed step overwrites it,
+	// so after one conversational turn it holds that turn's reply instead
+	// of the summary being replaced.
+	var prevSummaryTokens int64
+	if currentSession.SummaryMessageID != "" {
+		prev, getErr := a.messages.Get(ctx, currentSession.SummaryMessageID)
+		switch {
+		case getErr != nil:
+			// A dangling anchor means the previous summary row is gone.
+			// That is not the same as "no previous summary", so say so
+			// rather than reporting a guard that silently did nothing.
+			// The collapse check cannot run without a baseline, and
+			// refusing to compact would wedge a session that is already
+			// over its window: ListFromSummary falls back to the whole
+			// session, so G3 still bounds the result against the context
+			// actually being replaced.
+			slog.Warn(
+				"Previous summary row is unreadable; collapse guard skipped",
+				"session_id", sessionID,
+				"summary_message_id", currentSession.SummaryMessageID,
+				"error", getErr,
+			)
+		default:
+			prevSummaryTokens = summaryNarrativeTokens(prev.Content().Text)
+		}
+	}
+	// Read before the reset block at the end of this function: these
+	// counters describe the context being replaced.
+	prevContextTokens := currentSession.PromptTokens + currentSession.CompletionTokens
+
+	// One summarization stream. A closure rather than inline code so a
+	// rejected summary can be retried with a stricter prompt without
+	// duplicating the streaming setup, and so every attempt gets its own
+	// summary message: a retry must not overwrite the text the UI already
+	// streamed.
+	runAttempt := func(promptText string) (message.Message, *fantasy.AgentResult, error) {
+		agent := fantasy.NewAgent(
+			largeModel.Model,
+			fantasy.WithSystemPrompt(string(summaryPrompt)),
+			fantasy.WithUserAgent(userAgent),
+			fantasy.WithMaxOutputTokens(summaryMaxOutputTokens),
+		)
+		summaryMessage, err := a.messages.Create(ctx, sessionID, message.CreateMessageParams{
+			Role:             message.Assistant,
+			Model:            largeModel.ModelCfg.Model,
+			Provider:         largeModel.ModelCfg.Provider,
+			IsSummaryMessage: true,
+		})
+		if err != nil {
+			return message.Message{}, nil, err
+		}
+
+		resp, err := agent.Stream(genCtx, fantasy.AgentStreamCall{
+			Prompt:          promptText,
+			Messages:        aiMsgs,
+			Headers:         sessionHeaders(largeModel, sessionID, ""),
+			ProviderOptions: opts,
+			OnAuthRefresh:   onAuthRefresh,
+			ModelProvider: func() fantasy.LanguageModel {
+				return a.largeModel.Get().Model
+			},
+			PrepareStep: func(callContext context.Context, options fantasy.PrepareStepFunctionOptions) (_ context.Context, prepared fantasy.PrepareStepResult, err error) {
+				prepared.Messages = options.Messages
+				if systemPromptPrefix != "" {
+					prepared.Messages = append([]fantasy.Message{fantasy.NewSystemMessage(systemPromptPrefix)}, prepared.Messages...)
+				}
+				return callContext, prepared, nil
+			},
+			OnReasoningDelta: func(id string, text string) error {
+				summaryMessage.AppendReasoningContent(text)
+				return a.messages.Update(genCtx, summaryMessage)
+			},
+			OnReasoningEnd: func(id string, reasoning fantasy.ReasoningContent) error {
+				// Handle anthropic signature.
+				if anthropicData, ok := reasoning.ProviderMetadata["anthropic"]; ok {
+					if signature, ok := anthropicData.(*anthropic.ReasoningOptionMetadata); ok && signature.Signature != "" {
+						summaryMessage.AppendReasoningSignature(signature.Signature)
+					}
+				}
+				summaryMessage.FinishThinking()
+				return a.messages.Update(genCtx, summaryMessage)
+			},
+			OnTextDelta: func(id, text string) error {
+				summaryMessage.AppendContent(text)
+				return a.messages.Update(genCtx, summaryMessage)
+			},
+		})
+		if err != nil {
+			isCancelErr := errors.Is(err, context.Canceled)
+			if isCancelErr {
+				// User cancelled summarize we need to remove the summary message.
+				deleteErr := a.messages.Delete(ctx, summaryMessage.ID)
+				return message.Message{}, nil, deleteErr
+			}
+			// Mark the summary message as finished with an error so the UI
+			// stops spinning. The caller's context is used rather than
+			// genCtx: the stream just failed, so genCtx may be the thing
+			// that died.
+			if updateErr := a.rejectSummary(ctx, summaryMessage, err.Error()); updateErr != nil {
+				return message.Message{}, nil, updateErr
+			}
+			return message.Message{}, nil, err
+		}
+		return summaryMessage, resp, nil
 	}
 
 	summaryPromptText := buildSummaryPrompt(currentSession.Todos)
 
-	resp, err := agent.Stream(genCtx, fantasy.AgentStreamCall{
-		Prompt:          summaryPromptText,
-		Messages:        aiMsgs,
-		Headers:         sessionHeaders(largeModel, sessionID, ""),
-		ProviderOptions: opts,
-		OnAuthRefresh:   onAuthRefresh,
-		ModelProvider: func() fantasy.LanguageModel {
-			return a.largeModel.Get().Model
-		},
-		PrepareStep: func(callContext context.Context, options fantasy.PrepareStepFunctionOptions) (_ context.Context, prepared fantasy.PrepareStepResult, err error) {
-			prepared.Messages = options.Messages
-			if systemPromptPrefix != "" {
-				prepared.Messages = append([]fantasy.Message{fantasy.NewSystemMessage(systemPromptPrefix)}, prepared.Messages...)
-			}
-			return callContext, prepared, nil
-		},
-		OnReasoningDelta: func(id string, text string) error {
-			summaryMessage.AppendReasoningContent(text)
-			return a.messages.Update(genCtx, summaryMessage)
-		},
-		OnReasoningEnd: func(id string, reasoning fantasy.ReasoningContent) error {
-			// Handle anthropic signature.
-			if anthropicData, ok := reasoning.ProviderMetadata["anthropic"]; ok {
-				if signature, ok := anthropicData.(*anthropic.ReasoningOptionMetadata); ok && signature.Signature != "" {
-					summaryMessage.AppendReasoningSignature(signature.Signature)
-				}
-			}
-			summaryMessage.FinishThinking()
-			return a.messages.Update(genCtx, summaryMessage)
-		},
-		OnTextDelta: func(id, text string) error {
-			summaryMessage.AppendContent(text)
-			return a.messages.Update(genCtx, summaryMessage)
-		},
-	})
-	if err != nil {
-		isCancelErr := errors.Is(err, context.Canceled)
-		if isCancelErr {
-			// User cancelled summarize we need to remove the summary message.
-			deleteErr := a.messages.Delete(ctx, summaryMessage.ID)
-			return deleteErr
+	var (
+		summaryMessage message.Message
+		resp           *fantasy.AgentResult
+	)
+	for attempt := 0; ; attempt++ {
+		summaryMessage, resp, err = runAttempt(summaryPromptText)
+		if err != nil {
+			return err
 		}
-		// Mark the summary message as finished with an error so the UI
-		// stops spinning.
-		summaryMessage.AddFinish(message.FinishReasonError, "Summarization Error", err.Error())
-		if updateErr := a.messages.Update(ctx, summaryMessage); updateErr != nil {
-			return updateErr
-		}
-		return err
-	}
 
-	if guardErr := summaryOutcome(resp); guardErr != nil {
-		// The provider stopped mid-document. Persisting this summary as a
-		// success would replace the whole conversation with a partial
-		// summary and leave no signal anywhere that it is incomplete, so
-		// record the failure on the summary message instead and leave the
-		// session's anchor (the previous, complete summary) untouched.
+		// The prompt lets the model think inside an <analysis> block. It is
+		// stripped as soon as the stream completes, before any guard runs:
+		// the UI has already streamed the deltas live, but every persisted
+		// row — including a rejected one — must be free of the scratchpad.
+		// Measuring after the strip also keeps the size guards from counting
+		// text that will not be stored.
+		summaryMessage.SetContent(stripAnalysisBlock(summaryMessage.Content().Text))
+
+		if guardErr := summaryOutcome(resp); guardErr != nil {
+			// The provider stopped mid-document. Persisting this summary as
+			// a success would replace the whole conversation with a partial
+			// summary and leave no signal anywhere that it is incomplete, so
+			// record the failure on the summary message instead and leave the
+			// session's anchor (the previous, complete summary) untouched.
+			slog.Warn(
+				"Summary hit the output limit, keeping the previous summary",
+				"session_id", sessionID,
+				"summary_message_id", summaryMessage.ID,
+			)
+			if updateErr := a.rejectSummary(genCtx, summaryMessage, "summary hit the output limit"); updateErr != nil {
+				return updateErr
+			}
+			return guardErr
+		}
+
+		sizeErr := validateSummary(summarySizes{
+			PrevTokens:  prevSummaryTokens,
+			NewTokens:   summaryNarrativeTokens(summaryMessage.Content().Text),
+			PrevContext: prevContextTokens,
+		})
+		if sizeErr == nil {
+			break
+		}
+
+		if errors.Is(sizeErr, errSummaryCollapsed) && attempt < summaryCollapseRetries {
+			slog.Warn(
+				"Summary collapsed; retrying once with a stricter prompt",
+				"session_id", sessionID,
+				"summary_message_id", summaryMessage.ID,
+				"previous_tokens", prevSummaryTokens,
+			)
+			if rejectErr := a.rejectSummary(genCtx, summaryMessage, sizeErr.Error()); rejectErr != nil {
+				return rejectErr
+			}
+			summaryPromptText += summaryCollapseRetrySuffix
+			continue
+		}
+
 		slog.Warn(
-			"Summary hit the output limit, keeping the previous summary",
+			"Summary rejected by the size guards, keeping the previous summary",
 			"session_id", sessionID,
 			"summary_message_id", summaryMessage.ID,
+			"error", sizeErr,
 		)
-		summaryMessage.AddFinish(message.FinishReasonError, "Summarization Error", "summary hit the output limit")
-		if updateErr := a.messages.Update(genCtx, summaryMessage); updateErr != nil {
+		if updateErr := a.rejectSummary(genCtx, summaryMessage, sizeErr.Error()); updateErr != nil {
 			return updateErr
 		}
-		return guardErr
+		return sizeErr
 	}
-
-	// The prompt lets the model think inside an <analysis> block. It is
-	// stripped only here, on completion: the UI streams the deltas live,
-	// and the block must not become part of the context the session is
-	// reduced to. The subsequent update is terminal (it adds the finish
-	// part), so it also flushes the trim.
-	summaryMessage.SetContent(stripAnalysisBlock(summaryMessage.Content().Text))
 
 	summaryMessage.AddFinish(message.FinishReasonEndTurn, "", "")
 	err = a.messages.Update(genCtx, summaryMessage)
@@ -1736,6 +1822,18 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 	a.messageQueue.Set(sessionID, queuedMessages[1:])
 	_, qErr := a.Run(ctx, firstQueuedMessage)
 	return qErr
+}
+
+// rejectSummary records a summary that a guard refused as a failed message.
+// The message is kept so the turn has a visible outcome, but the session's
+// anchor is left alone: the previous, complete summary remains the only
+// context, which is what makes every rejection a safe one.
+//
+// Only a persistence failure is returned. The guard error belongs to the
+// caller, which sometimes has to retry instead of surfacing it.
+func (a *sessionAgent) rejectSummary(ctx context.Context, summaryMessage message.Message, details string) error {
+	summaryMessage.AddFinish(message.FinishReasonError, "Summarization Error", details)
+	return a.messages.Update(ctx, summaryMessage)
 }
 
 func (a *sessionAgent) getCacheControlOptions() fantasy.ProviderOptions {
@@ -1997,7 +2095,20 @@ func (a *sessionAgent) getSessionMessages(ctx context.Context, session session.S
 			msgs[0].Role = message.User
 		}
 	}
-	return msgs, nil
+
+	// A rejected compaction is persisted as a failed summary message so the
+	// turn has a visible outcome, but its partial text is not a second
+	// version of the session's state: only the message currently named by
+	// SummaryMessageID is. Dropping the rest keeps the prompt to a single
+	// authoritative view after a guard rejection.
+	kept := make([]message.Message, 0, len(msgs))
+	for _, msg := range msgs {
+		if msg.IsSummaryMessage && msg.ID != session.SummaryMessageID {
+			continue
+		}
+		kept = append(kept, msg)
+	}
+	return kept, nil
 }
 
 // hasUserTextMessage reports whether any user message in msgs contains

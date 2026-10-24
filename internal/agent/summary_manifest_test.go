@@ -223,6 +223,25 @@ func TestBuildContextManifestAnchors(t *testing.T) {
 	require.Contains(t, block, "id=f kind=failure")
 }
 
+// getSessionMessages rewrites the previous summary's role to user so the
+// resumption prompt reads naturally. Its id is still not a recall handle:
+// the next summary replaces it, so it must not be offered as an anchor.
+func TestBuildContextManifestSkipsSummaryRowsInAnchors(t *testing.T) {
+	t.Parallel()
+
+	prev := manifestMsg("prev-summary", message.User, 1000, message.TextContent{Text: "old summary"})
+	prev.IsSummaryMessage = true
+	msgs := []message.Message{
+		prev,
+		manifestMsg("u1", message.User, 2000, message.TextContent{Text: "next request"}),
+	}
+
+	block := buildContextManifest(manifestInput{Messages: msgs, AnchorAt: 3000})
+
+	require.Contains(t, block, "id=u1 kind=user")
+	require.NotContains(t, block, "prev-summary")
+}
+
 func TestBuildContextManifestOmitsEmptySections(t *testing.T) {
 	t.Parallel()
 
