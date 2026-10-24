@@ -67,4 +67,5 @@ type Session struct {
 	CacheCreationTokens int64          `json:"cache_creation_tokens"`
 	DisabledSkills      sql.NullString `json:"disabled_skills"`
 	Channel             sql.NullString `json:"channel"`
+	SummaryFailCount    int64          `json:"summary_fail_count"`
 }

@@ -64,6 +64,10 @@ func (m *mockSessionService) UpdateTitleAndUsage(context.Context, string, string
 	return nil
 }
 
+func (m *mockSessionService) RecordSummaryFailure(context.Context, string) (int, error) {
+	return 0, nil
+}
+
 func (m *mockSessionService) SetDisabledSkills(context.Context, string, []string) error {
 	return nil
 }

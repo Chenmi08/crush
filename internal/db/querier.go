@@ -35,6 +35,7 @@ type Querier interface {
 	GetUsageByDayOfWeek(ctx context.Context) ([]GetUsageByDayOfWeekRow, error)
 	GetUsageByHour(ctx context.Context) ([]GetUsageByHourRow, error)
 	GetUsageByModel(ctx context.Context) ([]GetUsageByModelRow, error)
+	IncrementSessionSummaryFailCount(ctx context.Context, id string) (int64, error)
 	InsertMCPDisabledServer(ctx context.Context, name string) error
 	InsertMCPEnabledServer(ctx context.Context, name string) error
 	// Backs prompt history when no session is open. Needs

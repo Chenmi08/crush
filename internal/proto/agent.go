@@ -12,6 +12,12 @@ const (
 	AgentEventTypeError     AgentEventType = "error"
 	AgentEventTypeResponse  AgentEventType = "response"
 	AgentEventTypeSummarize AgentEventType = "summarize"
+	// AgentEventTypeSummarizeDisabled reports that automatic compaction
+	// was paused for a session. It is not an error: the turn that
+	// triggered it completes normally. The reason travels in Progress
+	// rather than Error precisely so an error-only consumer (e.g.
+	// `crush run`) does not abort on it.
+	AgentEventTypeSummarizeDisabled AgentEventType = "summarize_disabled"
 )
 
 // MarshalText implements the [encoding.TextMarshaler] interface.
@@ -41,8 +47,12 @@ type AgentEvent struct {
 	// When summarizing.
 	SessionID    string `json:"session_id,omitempty"`
 	SessionTitle string `json:"session_title,omitempty"`
-	Progress     string `json:"progress,omitempty"`
-	Done         bool   `json:"done,omitempty"`
+	// Progress carries summarization progress, and the reason for an
+	// AgentEventTypeSummarizeDisabled event. The latter rides here
+	// rather than in Error because a paused compaction is not a run
+	// failure.
+	Progress string `json:"progress,omitempty"`
+	Done     bool   `json:"done,omitempty"`
 
 	// AWS SSO progress fields, carried for TypeAWSSSOAuth and
 	// TypeAWSSSOAuthResult so the refresh dialog works in client/server

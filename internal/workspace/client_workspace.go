@@ -1315,6 +1315,11 @@ func (w *ClientWorkspace) translateEvent(ev any) tea.Msg {
 		if e.Payload.Error != nil {
 			n.Message = e.Payload.Error.Error()
 		}
+		if e.Payload.Type == proto.AgentEventTypeSummarizeDisabled {
+			// The reason was carried in Progress precisely because
+			// this event is not an error.
+			n.Message = e.Payload.Progress
+		}
 		return pubsub.Event[notify.Notification]{
 			Type:    e.Type,
 			Payload: n,

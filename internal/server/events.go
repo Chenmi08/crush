@@ -141,6 +141,14 @@ func wrapEvent(ev any) *pubsub.Payload {
 		if e.Payload.Type == notify.TypeAgentError {
 			payload.Type = proto.AgentEventTypeError
 		}
+		if e.Payload.Type == notify.TypeSummarizeDisabled {
+			// Not an error: a paused compaction must not abort a
+			// headless run. The reason rides in Progress so
+			// error-only consumers ignore it.
+			payload.Type = proto.AgentEventTypeSummarizeDisabled
+			payload.Progress = e.Payload.Message
+			payload.Error = nil
+		}
 		return envelope(pubsub.PayloadTypeAgentEvent, pubsub.Event[proto.AgentEvent]{
 			Type:    e.Type,
 			Payload: payload,

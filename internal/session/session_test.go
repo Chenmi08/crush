@@ -334,3 +334,47 @@ func TestExplicitlyEmptyDisabledSkillsDoNotInheritDefault(t *testing.T) {
 	require.Empty(t, fetched.DisabledSkills)
 	require.NotNil(t, fetched.DisabledSkills, "an explicit empty set must not read as unset")
 }
+
+func TestSummaryFailCountRoundTrip(t *testing.T) {
+	// Not parallel: db.ResetPool closes every pooled connection, so a
+	// parallel run would race the other tests' connections. Every test in
+	// this file that releases the pool is serial for that reason.
+	dataDir := t.TempDir()
+	t.Cleanup(func() {
+		require.NoError(t, db.Release(dataDir))
+		db.ResetPool()
+	})
+
+	conn, err := db.Connect(t.Context(), dataDir)
+	require.NoError(t, err)
+	sessions := NewService(db.New(conn), conn)
+
+	created, err := sessions.Create(t.Context(), "breaker")
+	require.NoError(t, err)
+	require.Zero(t, created.SummaryFailCount, "a new session starts with a closed breaker")
+
+	created.SummaryFailCount = maxTripCount
+	saved, err := sessions.Save(t.Context(), created)
+	require.NoError(t, err)
+	require.Equal(t, maxTripCount, saved.SummaryFailCount)
+
+	fetched, err := sessions.Get(t.Context(), created.ID)
+	require.NoError(t, err)
+	require.Equal(t, maxTripCount, fetched.SummaryFailCount)
+
+	// A fetch-modify-save cycle for unrelated fields must preserve the
+	// persisted counter, or an unrelated save would silently reopen the
+	// breaker.
+	fetched.Todos = []Todo{{
+		Content:    "Keep the breaker state",
+		Status:     TodoStatusInProgress,
+		ActiveForm: "Keeping the breaker state",
+	}}
+	updated, err := sessions.Save(t.Context(), fetched)
+	require.NoError(t, err)
+	require.Equal(t, maxTripCount, updated.SummaryFailCount)
+}
+
+// maxTripCount is local to this test so the session package does not import
+// the agent's policy constant.
+const maxTripCount = 3

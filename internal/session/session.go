@@ -90,6 +90,11 @@ type Session struct {
 	CompletionTokens int64
 	EstimatedUsage   bool
 	SummaryMessageID string
+	// SummaryFailCount counts consecutive summarization failures. It is
+	// the circuit breaker's state: once it reaches the agent's limit,
+	// automatic summarization stops retrying for this session instead of
+	// burning a request on every turn. A successful summary resets it.
+	SummaryFailCount int
 	Cost             float64
 	Todos            []Todo
 	// DisabledSkills lists the skills this session opted out of, on top
@@ -116,6 +121,11 @@ type Service interface {
 	SetDisabledSkills(ctx context.Context, id string, names []string) error
 	SetChannel(ctx context.Context, sessionID, channel string) (Session, error)
 	UpdateTitleAndUsage(ctx context.Context, sessionID, title string, tokens SessionTokens, cost float64) error
+	// RecordSummaryFailure increments the session's consecutive
+	// summarization-failure counter and returns the new value. It writes
+	// only that column so it cannot clobber a concurrent title, usage or
+	// todo update with a stale full-row snapshot.
+	RecordSummaryFailure(ctx context.Context, id string) (int, error)
 	Rename(ctx context.Context, id string, title string) error
 	Delete(ctx context.Context, id string) error
 	MCPDisabledServers(ctx context.Context) ([]string, error)
@@ -277,7 +287,8 @@ func (s *service) Save(ctx context.Context, session Session) (Session, error) {
 			String: session.SummaryMessageID,
 			Valid:  session.SummaryMessageID != "",
 		},
-		Cost: session.Cost,
+		SummaryFailCount: int64(session.SummaryFailCount),
+		Cost:             session.Cost,
 		Todos: sql.NullString{
 			String: todosJSON,
 			Valid:  todosJSON != "",
@@ -341,6 +352,19 @@ func (s *service) UpdateTitleAndUsage(ctx context.Context, sessionID, title stri
 	}
 	s.publishSessionUpdate(ctx, sessionID)
 	return nil
+}
+
+// RecordSummaryFailure increments the session's consecutive summarization
+// failure counter atomically and returns the new value. The increment is done
+// in SQL rather than read-modify-write so two concurrent failures cannot both
+// read the same count and persist the same total.
+func (s *service) RecordSummaryFailure(ctx context.Context, id string) (int, error) {
+	count, err := s.q.IncrementSessionSummaryFailCount(ctx, id)
+	if err != nil {
+		return 0, err
+	}
+	s.publishSessionUpdate(ctx, id)
+	return int(count), nil
 }
 
 // SetDisabledSkills replaces a session's per-session disabled-skill set and
@@ -455,6 +479,7 @@ func (s *service) fromDBItem(item db.Session) Session {
 		PromptTokens:     item.PromptTokens,
 		CompletionTokens: item.CompletionTokens,
 		SummaryMessageID: item.SummaryMessageID.String,
+		SummaryFailCount: int(item.SummaryFailCount),
 		Cost:             item.Cost,
 		Todos:            todos,
 		DisabledSkills:   disabledSkills,

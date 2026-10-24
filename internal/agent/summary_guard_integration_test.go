@@ -30,8 +30,12 @@ type summaryStreamModel struct {
 	text         string
 	bodies       []string
 	finishReason fantasy.FinishReason
-	prompts      []string
-	calls        int
+	// reasons scripts one finish reason per call, overriding
+	// finishReason. It is how a test says "fail, fail, fail, then
+	// succeed".
+	reasons []fantasy.FinishReason
+	prompts []string
+	calls   int
 }
 
 // next returns the body for this call and records the prompt it was asked
@@ -47,6 +51,14 @@ func (m *summaryStreamModel) next(call fantasy.Call) string {
 	}
 	m.calls++
 	return body
+}
+
+// nextReason returns the finish reason for call n.
+func (m *summaryStreamModel) nextReason(n int) fantasy.FinishReason {
+	if n < len(m.reasons) {
+		return m.reasons[n]
+	}
+	return m.finishReason
 }
 
 // callCount reports how many streams the model has served.
@@ -85,8 +97,10 @@ func (m *summaryStreamModel) Generate(_ context.Context, call fantasy.Call) (*fa
 }
 
 func (m *summaryStreamModel) Stream(_ context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
+	m.mu.Lock()
+	reason := m.nextReason(m.calls)
+	m.mu.Unlock()
 	text := m.next(call)
-	reason := m.finishReason
 	return func(yield func(fantasy.StreamPart) bool) {
 		if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextStart, ID: "1"}) {
 			return

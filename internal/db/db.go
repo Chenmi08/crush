@@ -102,6 +102,9 @@ func Prepare(ctx context.Context, db DBTX) (*Queries, error) {
 	if q.getUsageByModelStmt, err = db.PrepareContext(ctx, getUsageByModel); err != nil {
 		return nil, fmt.Errorf("error preparing query GetUsageByModel: %w", err)
 	}
+	if q.incrementSessionSummaryFailCountStmt, err = db.PrepareContext(ctx, incrementSessionSummaryFailCount); err != nil {
+		return nil, fmt.Errorf("error preparing query IncrementSessionSummaryFailCount: %w", err)
+	}
 	if q.insertMCPDisabledServerStmt, err = db.PrepareContext(ctx, insertMCPDisabledServer); err != nil {
 		return nil, fmt.Errorf("error preparing query InsertMCPDisabledServer: %w", err)
 	}
@@ -303,6 +306,11 @@ func (q *Queries) Close() error {
 			err = fmt.Errorf("error closing getUsageByModelStmt: %w", cerr)
 		}
 	}
+	if q.incrementSessionSummaryFailCountStmt != nil {
+		if cerr := q.incrementSessionSummaryFailCountStmt.Close(); cerr != nil {
+			err = fmt.Errorf("error closing incrementSessionSummaryFailCountStmt: %w", cerr)
+		}
+	}
 	if q.insertMCPDisabledServerStmt != nil {
 		if cerr := q.insertMCPDisabledServerStmt.Close(); cerr != nil {
 			err = fmt.Errorf("error closing insertMCPDisabledServerStmt: %w", cerr)
@@ -478,6 +486,7 @@ type Queries struct {
 	getUsageByDayOfWeekStmt              *sql.Stmt
 	getUsageByHourStmt                   *sql.Stmt
 	getUsageByModelStmt                  *sql.Stmt
+	incrementSessionSummaryFailCountStmt *sql.Stmt
 	insertMCPDisabledServerStmt          *sql.Stmt
 	insertMCPEnabledServerStmt           *sql.Stmt
 	listAllUserMessagesStmt              *sql.Stmt
@@ -532,6 +541,7 @@ func (q *Queries) WithTx(tx *sql.Tx) *Queries {
 		getUsageByDayOfWeekStmt:              q.getUsageByDayOfWeekStmt,
 		getUsageByHourStmt:                   q.getUsageByHourStmt,
 		getUsageByModelStmt:                  q.getUsageByModelStmt,
+		incrementSessionSummaryFailCountStmt: q.incrementSessionSummaryFailCountStmt,
 		insertMCPDisabledServerStmt:          q.insertMCPDisabledServerStmt,
 		insertMCPEnabledServerStmt:           q.insertMCPEnabledServerStmt,
 		listAllUserMessagesStmt:              q.listAllUserMessagesStmt,

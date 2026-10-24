@@ -1224,7 +1224,12 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 				} else {
 					threshold = int64(float64(cw) * smallContextWindowRatio)
 				}
-				if (remaining <= threshold) && !a.disableAutoSummarize {
+				// A session whose breaker has tripped is not cut short
+				// for compaction: the run keeps going with the context
+				// it has, and skipping the stop avoids both a failed
+				// turn and the resummarize-on-every-turn loop that
+				// follows from re-queueing an interrupted call here.
+				if (remaining <= threshold) && !a.disableAutoSummarize && !summaryBreakerTripped(currentSession) {
 					shouldSummarize = true
 					return true
 				}
@@ -1384,8 +1389,15 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 
 	if shouldSummarize {
 		a.activeRequests.Del(call.SessionID)
-		if summarizeErr := a.Summarize(genCtx, call.SessionID, call.ProviderOptions, call.OnAuthRefresh); summarizeErr != nil {
-			return nil, summarizeErr
+		skip, fatal := summarizeOutcome(a.Summarize(genCtx, call.SessionID, call.ProviderOptions, call.OnAuthRefresh))
+		if fatal != nil {
+			return nil, fatal
+		}
+		if skip {
+			slog.Info(
+				"Skipping summarization: automatic compaction is paused for this session",
+				"session_id", call.SessionID,
+			)
 		}
 		// If the agent wasn't done...
 		if len(currentAssistant.ToolCalls()) > 0 {
@@ -1542,6 +1554,18 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 	if err != nil {
 		return fmt.Errorf("failed to get session: %w", err)
 	}
+	// The circuit breaker runs before anything else so a session that
+	// cannot be summarized stops paying for a full-context request on
+	// every turn. This also covers a manual compaction: the user gets the
+	// one notice the trip already published instead of another failure.
+	if summaryBreakerTripped(currentSession) {
+		slog.Info(
+			"Summarization skipped: circuit breaker is open",
+			"session_id", sessionID,
+			"summary_fail_count", currentSession.SummaryFailCount,
+		)
+		return errSummaryDisabled
+	}
 	msgs, err := a.getSessionMessages(ctx, currentSession)
 	if err != nil {
 		return err
@@ -1681,6 +1705,14 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 	for attempt := 0; ; attempt++ {
 		summaryMessage, resp, err = runAttempt(summaryPromptText)
 		if err != nil {
+			// A provider failure counts toward the breaker too: the
+			// storm the breaker exists for does not care whether the
+			// summary was rejected by a guard or never arrived. A user
+			// cancellation is not a failure and the attempt's row was
+			// deleted, so it is excluded.
+			if !errors.Is(err, context.Canceled) {
+				a.recordSummaryFailure(ctx, &currentSession, err)
+			}
 			return err
 		}
 
@@ -1706,6 +1738,7 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 			if updateErr := a.rejectSummary(genCtx, summaryMessage, "summary hit the output limit"); updateErr != nil {
 				return updateErr
 			}
+			a.recordSummaryFailure(ctx, &currentSession, guardErr)
 			return guardErr
 		}
 
@@ -1728,6 +1761,9 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 			if rejectErr := a.rejectSummary(genCtx, summaryMessage, sizeErr.Error()); rejectErr != nil {
 				return rejectErr
 			}
+			// The rejected attempt is intentionally not counted: the
+			// breaker limits compaction failures across turns, and the
+			// retry belongs to this one.
 			summaryPromptText += summaryCollapseRetrySuffix
 			continue
 		}
@@ -1741,6 +1777,7 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 		if updateErr := a.rejectSummary(genCtx, summaryMessage, sizeErr.Error()); updateErr != nil {
 			return updateErr
 		}
+		a.recordSummaryFailure(ctx, &currentSession, sizeErr)
 		return sizeErr
 	}
 
@@ -1800,6 +1837,9 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 	// Just in case, get just the last usage info.
 	usage := resp.Response.Usage
 	currentSession.SummaryMessageID = summaryMessage.ID
+	// A summary that passed every guard reopens the breaker; the counter
+	// is consecutive, not cumulative.
+	currentSession.SummaryFailCount = 0
 	currentSession.CompletionTokens = summaryCompletionTokens(usage, summaryMessage)
 	currentSession.PromptTokens = 0
 	currentSession.EstimatedUsage = usageIsZero(usage)
@@ -1834,6 +1874,36 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 func (a *sessionAgent) rejectSummary(ctx context.Context, summaryMessage message.Message, details string) error {
 	summaryMessage.AddFinish(message.FinishReasonError, "Summarization Error", details)
 	return a.messages.Update(ctx, summaryMessage)
+}
+
+// recordSummaryFailure increments the session's consecutive-failure counter
+// and persists it. One compaction that ends rejected counts once, no matter
+// how many attempts it made: the counter exists to stop retry storms across
+// turns, and the collapse retry lives inside a single turn.
+//
+// The trip that reaches [maxSummaryFailures] publishes exactly one
+// user-visible notice. Later rejections cannot reach this function because
+// [sessionAgent.Summarize] returns [errSummaryDisabled] before doing any
+// work once the breaker is open.
+func (a *sessionAgent) recordSummaryFailure(ctx context.Context, s *session.Session, cause error) {
+	count, err := a.sessions.RecordSummaryFailure(ctx, s.ID)
+	if err != nil {
+		slog.Error("Failed to record summary failure", "session_id", s.ID, "error", err)
+		return
+	}
+	s.SummaryFailCount = count
+	if s.SummaryFailCount != maxSummaryFailures || a.notify == nil {
+		return
+	}
+	a.notify.Publish(pubsub.CreatedEvent, notify.Notification{
+		SessionID:    s.ID,
+		SessionTitle: s.Title,
+		Type:         notify.TypeSummarizeDisabled,
+		Message: fmt.Sprintf(
+			"Automatic summarization is paused for this session after %d consecutive failures: %v",
+			maxSummaryFailures, cause,
+		),
+	})
 }
 
 func (a *sessionAgent) getCacheControlOptions() fantasy.ProviderOptions {

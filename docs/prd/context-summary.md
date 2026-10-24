@@ -594,7 +594,7 @@ actually done" without reading the tree.
 | --- | --- | --- |
 | 1 | **done**, reviewed | `agent.go`, `summary_guard.go` |
 | 2 | **done** | `summary_guard.go`, `agent.go` |
-| 3 | not started | — |
+| 3 | **done** | `summary_guard.go`, `agent.go`, `session.go`, migration + sqlc |
 | 4 | **done**, reviewed | `templates/summary.md`, `summary_prompt.go`, `agent.go` |
 | 5 | **done**, reviewed, amended (§7.3) | `summary_manifest.go`, `summary_worktree.go`, `agent.go` |
 | 6 | **done** | `tools/recall.go`, `message.go`, `messages.sql`, `config.go`, `coordinator.go` |
@@ -803,9 +803,28 @@ error (the two guards it fed returned a token count nobody used); and
 `setSummaryContent` moved to `message.Message.SetContent`, where the package
 already owns `AppendContent`.
 
-**Known gaps, in dependency order.** PR-3's circuit breaker has no failure
-counter to increment until its column exists, so a rejection is still retried
-on every subsequent turn. The cross-cutting fixture in §9
+**PR-3 — failure circuit breaker.** `sessions.summary_fail_count` is
+incremented atomically by a targeted `UPDATE ... RETURNING` query rather than
+by a full-row `Save`: `Summarize` holds a session snapshot taken before a
+potentially minutes-long provider round-trip, so saving that snapshot would
+clobber a concurrent rename or usage update, and two concurrent failures could
+both read the same count. `session.Session` still maps the column, so a
+fetch-modify-save round trip preserves it. `summaryBreakerTripped` is checked
+both at the top of `Summarize` (so no provider request is made once open) and
+in `Run`'s `StopWhen`, which is what makes the trips a *skip* rather than a
+turn failure: a session that cannot be summarized finishes its turn with the
+context it already has instead of being cut short and re-queued forever.
+Provider errors count toward the breaker (excluding context cancellation); the
+in-turn collapse retry does not, so one rejected compaction counts once.
+
+The notice is a new `notify.TypeSummarizeDisabled`, published exactly on the
+trip that reaches the threshold. It is not `TypeAgentError` because it is not a
+failed run, and the client/server path preserves that distinction: the wire
+event is `proto.AgentEventTypeSummarizeDisabled` and it carries the reason in
+`Progress` with `Error` cleared, so `crush run` (which aborts on a non-nil
+`Error`) ignores it instead of failing.
+
+**Known gaps, in dependency order.** The cross-cutting fixture in §9
 (`internal/agent/testdata/summary/`) is also not created yet, so PR-1/2/4/5 are
 covered by synthetic in-test histories instead.
 `manifestInput.Undecodable` is implemented and unit-tested but unreachable in

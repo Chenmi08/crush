@@ -51,6 +51,7 @@ SET
     cache_read_tokens = ?,
     cache_creation_tokens = ?,
     summary_message_id = ?,
+    summary_fail_count = ?,
     cost = ?,
     todos = ?,
     disabled_skills = ?,
@@ -94,3 +95,10 @@ WHERE id = ?;
 -- name: DeleteSession :exec
 DELETE FROM sessions
 WHERE id = ?;
+
+-- name: IncrementSessionSummaryFailCount :one
+UPDATE sessions
+SET
+    summary_fail_count = summary_fail_count + 1
+WHERE id = ?
+RETURNING summary_fail_count;

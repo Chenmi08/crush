@@ -78,6 +78,16 @@ func (s *stubSessions) Get(_ context.Context, id string) (session.Session, error
 	return session.Session{}, errors.New("not found")
 }
 
+func (s *stubSessions) RecordSummaryFailure(_ context.Context, id string) (int, error) {
+	for i := range s.all {
+		if s.all[i].ID == id {
+			s.all[i].SummaryFailCount++
+			return s.all[i].SummaryFailCount, nil
+		}
+	}
+	return 0, errors.New("not found")
+}
+
 func (s *stubSessions) SetDisabledSkills(_ context.Context, id string, names []string) error {
 	for i := range s.all {
 		if s.all[i].ID == id {

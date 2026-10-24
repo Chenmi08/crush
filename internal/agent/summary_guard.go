@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"charm.land/fantasy"
+	"github.com/charmbracelet/crush/internal/session"
 )
 
 // Errors returned by the summary guards. Each one is a hard rejection: the
@@ -27,7 +28,18 @@ var (
 	// errSummaryInflated reports a summary larger than the context it
 	// replaces, which would grow the conversation instead of compacting it.
 	errSummaryInflated = errors.New("summary was larger than the context it replaces")
+
+	// errSummaryDisabled reports that automatic summarization was skipped
+	// because the session already failed too many times in a row. It is
+	// not a turn failure: the caller continues without compacting.
+	errSummaryDisabled = errors.New("automatic summarization is paused for this session")
 )
+
+// maxSummaryFailures is the number of consecutive guarded summarization
+// failures after which a session stops trying to summarize automatically.
+// Without it, a session the model cannot summarize is retried on every
+// turn forever, and each retry is a full-context request.
+const maxSummaryFailures = 3
 
 // summaryCollapseRatio is the fraction of the previous summary's size a new
 // summary must reach to be accepted. A document that drops below half has
@@ -107,6 +119,33 @@ func summaryOutcome(resp *fantasy.AgentResult) error {
 		return errSummaryTruncated
 	}
 	return nil
+}
+
+// summarizeOutcome classifies the error an automatic compaction returns from
+// the point of view of the turn that triggered it. A tripped breaker means
+// "continue the turn without compacting" (skip), while a guard rejection or a
+// provider failure means "the turn cannot continue safely" (fatal).
+//
+// Skipping is deliberately not a turn failure (D11): a summarization problem
+// must not become a conversation problem. The caller still takes the normal
+// resume path when tool calls are pending, so a turn that was cut short for
+// compaction is completed by the queued continuation — which then runs
+// uncompacted because [sessionAgent.Run]'s StopWhen consults the same breaker.
+func summarizeOutcome(err error) (skip bool, fatal error) {
+	if err == nil {
+		return false, nil
+	}
+	if errors.Is(err, errSummaryDisabled) {
+		return true, nil
+	}
+	return false, err
+}
+
+// summaryBreakerTripped reports whether a session has failed summarization
+// enough times in a row that it should stop trying. It is pure so the
+// policy can be tested without a session service.
+func summaryBreakerTripped(s session.Session) bool {
+	return s.SummaryFailCount >= maxSummaryFailures
 }
 
 // summaryNarrativeTokens measures the model-written part of a summary. The

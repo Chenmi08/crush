@@ -25,6 +25,12 @@ const (
 	// finished. Message carries the error text when it failed, empty on
 	// success.
 	TypeAWSSSOAuthResult Type = "aws_sso_auth_result"
+	// TypeSummarizeDisabled indicates automatic summarization has been
+	// paused for a session because it failed too many times in a row.
+	// The reason travels in Notification.Message. It is deliberately not
+	// TypeAgentError: a trip is a skipped compaction, not a failed turn,
+	// and the two must not share an error surface.
+	TypeSummarizeDisabled Type = "summarize_disabled"
 )
 
 // Notification represents a domain event published by the agent.
@@ -39,8 +45,8 @@ type Notification struct {
 	// specific request rather than to any in-flight run on the
 	// session. Empty when no caller set one.
 	RunID string
-	// Message carries the error text for TypeAgentError. Other
-	// notification types ignore it.
+	// Message carries the error text for TypeAgentError and the reason
+	// for TypeSummarizeDisabled. Other notification types ignore it.
 	Message string
 	// AWSSOCommand carries the shell command for TypeAWSSSOAuth.
 	AWSSOCommand string

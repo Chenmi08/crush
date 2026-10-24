@@ -1,10 +1,12 @@
 package agent
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	"charm.land/fantasy"
+	"github.com/charmbracelet/crush/internal/session"
 	"github.com/stretchr/testify/require"
 )
 
@@ -148,4 +150,81 @@ func TestSummaryNarrativeTokens(t *testing.T) {
 
 		require.Zero(t, summaryNarrativeTokens(""))
 	})
+}
+
+func TestSummarizeOutcome(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		err       error
+		wantSkip  bool
+		wantFatal error
+	}{
+		{
+			name: "success is neither skipped nor fatal",
+		},
+		{
+			name:     "tripped breaker is a skip",
+			err:      errSummaryDisabled,
+			wantSkip: true,
+		},
+		{
+			name:      "truncation is fatal",
+			err:       errSummaryTruncated,
+			wantFatal: errSummaryTruncated,
+		},
+		{
+			name:      "collapse is fatal",
+			err:       errSummaryCollapsed,
+			wantFatal: errSummaryCollapsed,
+		},
+		{
+			name:      "inflation is fatal",
+			err:       errSummaryInflated,
+			wantFatal: errSummaryInflated,
+		},
+		{
+			name:      "wrapped breaker error is still a skip",
+			err:       fmt.Errorf("summarize: %w", errSummaryDisabled),
+			wantSkip:  true,
+			wantFatal: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			skip, fatal := summarizeOutcome(tt.err)
+			require.Equal(t, tt.wantSkip, skip)
+			if tt.wantFatal == nil {
+				require.NoError(t, fatal)
+				return
+			}
+			require.ErrorIs(t, fatal, tt.wantFatal)
+		})
+	}
+}
+
+func TestSummaryBreakerTripped(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name  string
+		count int
+		want  bool
+	}{
+		{name: "fresh session", count: 0},
+		{name: "one failure", count: 1},
+		{name: "one below the limit", count: maxSummaryFailures - 1},
+		{name: "at the limit", count: maxSummaryFailures, want: true},
+		{name: "past the limit", count: maxSummaryFailures + 5, want: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			require.Equal(t, tt.want, summaryBreakerTripped(session.Session{SummaryFailCount: tt.count}))
+		})
+	}
 }
