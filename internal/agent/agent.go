@@ -228,9 +228,13 @@ type sessionAgent struct {
 	// turns; sendChannelReply treats nil as "routing disabled".
 	cfg                  *config.ConfigStore
 	disableAutoSummarize bool
-	isYolo               bool
-	notify               pubsub.Publisher[notify.Notification]
-	runComplete          pubsub.Publisher[notify.RunComplete]
+	// elidePolicy decides which old tool results leave the prompt. Its
+	// zero value is elideOff, so an agent built without a config keeps
+	// today's prompt.
+	elidePolicy elidePolicy
+	isYolo      bool
+	notify      pubsub.Publisher[notify.Notification]
+	runComplete pubsub.Publisher[notify.RunComplete]
 	// allSkills is the pre-filter discovery set. It is filtered per run by
 	// the session's DisabledSkills so the model sees the session's own
 	// skill catalog instead of a workspace-wide one.
@@ -318,6 +322,7 @@ func NewSessionAgent(
 		messages:             opts.Messages,
 		cfg:                  opts.Cfg,
 		disableAutoSummarize: opts.DisableAutoSummarize,
+		elidePolicy:          elidePolicyFromConfig(opts.Cfg),
 		tools:                csync.NewSliceFrom(opts.Tools),
 		isYolo:               opts.IsYolo,
 		notify:               opts.Notify,
@@ -892,10 +897,23 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	ctx = context.WithValue(ctx, tools.SessionIDContextKey, call.SessionID)
 	ctx = tools.WithSandboxPolicy(ctx, a.sandboxPolicySnapshot())
 
+	// Results produced during this turn are never elided, even if the
+	// policy would otherwise pick them. The turn is what the model is
+	// actively working on: eliding a `recall` payload it asked for a
+	// moment ago would make the retrieval a loop, and eliding anything
+	// else would hide the outcome of a call it just made.
+	//
+	// The set starts empty because the history assembled here predates
+	// the turn's own results; the stream callbacks fill it. It is carried
+	// into a compaction triggered by this turn, which is the one prompt
+	// built after those results exist.
+	var turnToolResults map[string]struct{}
+
 	history, files := a.preparePrompt(msgs, promptOptions{
 		Todos:  currentSession.Todos,
 		Recite: !a.isSubAgent,
 		Goal:   call.Prompt,
+		Elide:  a.elidePolicy,
 	}, largeModel.CatwalkCfg.SupportsImages, call.Attachments...)
 
 	startTime := time.Now()
@@ -1129,6 +1147,10 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			return a.messages.Update(ctx, *currentAssistant)
 		},
 		OnToolResult: func(result fantasy.ToolResultContent) error {
+			if turnToolResults == nil {
+				turnToolResults = make(map[string]struct{})
+			}
+			turnToolResults[result.ToolCallID] = struct{}{}
 			toolResult := a.convertToToolResult(result)
 			if sanitizedToolCalls[result.ToolCallID] {
 				toolResult.Content = "Tool call failed: arguments were not valid JSON. Please check your tool call format and try again."
@@ -1393,7 +1415,11 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 
 	if shouldSummarize {
 		a.activeRequests.Del(call.SessionID)
-		skip, fatal := summarizeOutcome(a.Summarize(genCtx, call.SessionID, call.ProviderOptions, call.OnAuthRefresh))
+		// The compaction's prompt is the only one built after this
+		// turn's results exist, so it is where the turn-local exemption
+		// has to travel.
+		summaryCtx := withElideExempt(genCtx, turnToolResults)
+		skip, fatal := summarizeOutcome(a.Summarize(summaryCtx, call.SessionID, call.ProviderOptions, call.OnAuthRefresh))
 		if fatal != nil {
 			return nil, fatal
 		}
@@ -1583,7 +1609,11 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 	// list itself, and the summarizer is not resuming the work. A reminder
 	// here would claim the list is empty in the same request that carries
 	// it.
-	aiMsgs, _ := a.preparePrompt(msgs, promptOptions{NoHead: true}, largeModel.CatwalkCfg.SupportsImages)
+	aiMsgs, _ := a.preparePrompt(msgs, promptOptions{
+		NoHead:      true,
+		Elide:       a.elidePolicy,
+		ExemptElide: elideExemptFrom(ctx),
+	}, largeModel.CatwalkCfg.SupportsImages)
 
 	genCtx, cancel := context.WithCancel(ctx)
 	ac := &activeCancel{cancel: cancel}
@@ -1990,6 +2020,14 @@ type promptOptions struct {
 	// the newest message in it belongs to the previous turn. Empty falls
 	// back to the newest stored user message.
 	Goal string
+	// Elide is the tool-result eviction policy. Its zero value is
+	// [elideOff], so a caller that does not opt in gets today's prompt.
+	Elide elidePolicy
+	// ExemptElide holds the ids of tool results produced during the turn
+	// being served. They are never elided: a `recall` result fetched
+	// earlier in this turn must survive until the turn ends, or the model
+	// retrieves it again on the next compaction.
+	ExemptElide map[string]struct{}
 }
 
 // preparePrompt turns stored messages into the model-facing history and the
@@ -2019,34 +2057,31 @@ func (a *sessionAgent) preparePrompt(msgs []message.Message, opts promptOptions,
 			knownToolCallIDs[tc.ID] = struct{}{}
 		}
 	}
-	toolResultsByCall := make(map[string][]fantasy.MessagePart)
+	// Every remaining result is collected in the order it was recorded, so
+	// the elision decision ("the last N results stay") counts results
+	// rather than rows: one row may hold several results, and a per-row
+	// rule would keep a different number of them depending on how the
+	// provider batched its calls.
+	var recorded []recordedToolResult
 	for _, m := range msgs {
 		if m.Role != message.Tool {
 			continue
 		}
-		for _, aiMsg := range m.ToAIMessage() {
-			for _, part := range aiMsg.Content {
-				tr, ok := fantasy.AsMessagePart[fantasy.ToolResultPart](part)
-				if !ok {
-					// Tool-role ToAIMessage only emits ToolResultParts today;
-					// log so unexpected parts do not vanish silently.
-					slog.Warn(
-						"Dropping unexpected non-tool-result part from tool message",
-						"part_type", fmt.Sprintf("%T", part),
-					)
-					continue
-				}
-				if _, known := knownToolCallIDs[tr.ToolCallID]; !known {
-					slog.Warn(
-						"Dropping orphaned tool result with no matching tool call",
-						"tool_call_id", tr.ToolCallID,
-					)
-					continue
-				}
-				toolResultsByCall[tr.ToolCallID] = append(toolResultsByCall[tr.ToolCallID], part)
+		for _, result := range m.ToolResults() {
+			if _, known := knownToolCallIDs[result.ToolCallID]; !known {
+				// The orphan check runs before elision so a dropped result
+				// never becomes a tombstone pointing at an id the model
+				// cannot resolve.
+				slog.Warn(
+					"Dropping orphaned tool result with no matching tool call",
+					"tool_call_id", result.ToolCallID,
+				)
+				continue
 			}
+			recorded = append(recorded, recordedToolResult{Result: result, At: m.CreatedAt})
 		}
 	}
+	toolResultsByCall := elideToolResults(recorded, opts.Elide, opts.ExemptElide)
 
 	for _, m := range msgs {
 		if len(m.Parts) == 0 {

@@ -439,10 +439,8 @@ func manifestFailureKey(content string) string {
 		if firstNonEmpty == "" {
 			firstNonEmpty = trimmed
 		}
-		for _, marker := range manifestFailureMarkers {
-			if strings.Contains(trimmed, marker) {
-				return clipManifestLine(trimmed)
-			}
+		if hasFailureMarker(trimmed) {
+			return clipManifestLine(trimmed)
 		}
 	}
 	return clipManifestLine(firstNonEmpty)

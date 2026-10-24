@@ -682,6 +682,10 @@ Boolean Keys:
 String Keys:
   exa-api-key string               Exa API key for the built-in web search;
                                    falls back to $EXA_API_KEY when unset
+  compaction-elide string          replace old tool results in the prompt with
+                                   a short placeholder the recall tool can
+                                   restore: shadow (default; measure only),
+                                   on, or off
   data-directory string            directory for project data and state;
                                    defaults to a hashed per-project directory
                                    under the consolidated projects root

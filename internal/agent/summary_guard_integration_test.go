@@ -35,7 +35,11 @@ type summaryStreamModel struct {
 	// succeed".
 	reasons []fantasy.FinishReason
 	prompts []string
-	calls   int
+	// histories holds the flattened message history of every call, which
+	// is where the prompt layers (reminders, tombstones, recitations)
+	// land: they are sent as messages, not as the prompt text.
+	histories []string
+	calls     int
 }
 
 // next returns the body for this call and records the prompt it was asked
@@ -45,6 +49,7 @@ func (m *summaryStreamModel) next(call fantasy.Call) string {
 	defer m.mu.Unlock()
 
 	m.prompts = append(m.prompts, promptText(call.Prompt))
+	m.histories = append(m.histories, fullPromptText(call.Prompt))
 	body := m.text
 	if m.calls < len(m.bodies) {
 		body = m.bodies[m.calls]
@@ -68,6 +73,13 @@ func (m *summaryStreamModel) callCount() int {
 	return m.calls
 }
 
+// recordedHistories returns a copy of the full request text seen so far.
+func (m *summaryStreamModel) recordedHistories() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.histories...)
+}
+
 // recordedPrompts returns a copy of the prompts seen so far.
 func (m *summaryStreamModel) recordedPrompts() []string {
 	m.mu.Lock()
@@ -75,7 +87,7 @@ func (m *summaryStreamModel) recordedPrompts() []string {
 	return append([]string(nil), m.prompts...)
 }
 
-// promptText flattens a prompt to plain text for assertions.
+// promptText flattens a prompt's text parts to plain text for assertions.
 func promptText(prompt fantasy.Prompt) string {
 	var sb strings.Builder
 	for _, msg := range prompt {
@@ -87,6 +99,37 @@ func promptText(prompt fantasy.Prompt) string {
 		}
 	}
 	return sb.String()
+}
+
+// fullPromptText flattens a prompt including tool results, which are carried
+// as their own part type and are what the tombstone replaces.
+func fullPromptText(prompt fantasy.Prompt) string {
+	var sb strings.Builder
+	sb.WriteString(promptText(prompt))
+	for _, msg := range prompt {
+		for _, part := range msg.Content {
+			tr, ok := fantasy.AsMessagePart[fantasy.ToolResultPart](part)
+			if !ok {
+				continue
+			}
+			sb.WriteString(toolResultOutputText(tr.Output))
+			sb.WriteString("\n")
+		}
+	}
+	return sb.String()
+}
+
+// toolResultOutputText renders a tool result's output as plain text. The
+// switch appears once because every test helper that flattens a prompt needs
+// the same mapping from the two output shapes to a string.
+func toolResultOutputText(output fantasy.ToolResultOutputContent) string {
+	switch out := output.(type) {
+	case fantasy.ToolResultOutputContentText:
+		return out.Text
+	case fantasy.ToolResultOutputContentError:
+		return out.Error.Error()
+	}
+	return ""
 }
 
 func (m *summaryStreamModel) Generate(_ context.Context, call fantasy.Call) (*fantasy.Response, error) {

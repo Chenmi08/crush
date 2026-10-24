@@ -126,7 +126,41 @@ type ToolResult struct {
 	IsError    bool   `json:"is_error"`
 }
 
-func (ToolResult) isPart() {}
+func (tr ToolResult) isPart() {}
+
+// ToAIToolResultPart converts one stored result into the provider-facing
+// part. It is the single definition of that conversion, shared by the whole
+// tool-role message conversion and by callers that need to rewrite a single
+// result — the compaction elision layer replaces the content of one result
+// but must emit it in the same shape.
+func (tr ToolResult) ToAIToolResultPart() fantasy.ToolResultPart {
+	var content fantasy.ToolResultOutputContent
+	switch {
+	case tr.IsError:
+		content = fantasy.ToolResultOutputContentError{
+			Error: errors.New(tr.Content),
+		}
+	case tr.Data != "":
+		if stringext.IsValidBase64(tr.Data) {
+			content = fantasy.ToolResultOutputContentMedia{
+				Data:      tr.Data,
+				MediaType: tr.MIMEType,
+			}
+		} else {
+			content = fantasy.ToolResultOutputContentText{
+				Text: mediaLoadFailedPlaceholder,
+			}
+		}
+	default:
+		content = fantasy.ToolResultOutputContentText{
+			Text: tr.Content,
+		}
+	}
+	return fantasy.ToolResultPart{
+		ToolCallID: tr.ToolCallID,
+		Output:     content,
+	}
+}
 
 type Finish struct {
 	Reason  FinishReason `json:"reason"`
@@ -726,31 +760,7 @@ func (m *Message) ToAIMessage() []fantasy.Message {
 	case Tool:
 		var parts []fantasy.MessagePart
 		for _, result := range m.ToolResults() {
-			var content fantasy.ToolResultOutputContent
-			if result.IsError {
-				content = fantasy.ToolResultOutputContentError{
-					Error: errors.New(result.Content),
-				}
-			} else if result.Data != "" {
-				if stringext.IsValidBase64(result.Data) {
-					content = fantasy.ToolResultOutputContentMedia{
-						Data:      result.Data,
-						MediaType: result.MIMEType,
-					}
-				} else {
-					content = fantasy.ToolResultOutputContentText{
-						Text: mediaLoadFailedPlaceholder,
-					}
-				}
-			} else {
-				content = fantasy.ToolResultOutputContentText{
-					Text: result.Content,
-				}
-			}
-			parts = append(parts, fantasy.ToolResultPart{
-				ToolCallID: result.ToolCallID,
-				Output:     content,
-			})
+			parts = append(parts, result.ToAIToolResultPart())
 		}
 		messages = append(messages, fantasy.Message{
 			Role:    fantasy.MessageRoleTool,

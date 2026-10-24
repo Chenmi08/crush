@@ -599,12 +599,13 @@ actually done" without reading the tree.
 | 5 | **done**, reviewed, amended (§7.3) | `summary_manifest.go`, `summary_worktree.go`, `agent.go` |
 | 6 | **done** | `tools/recall.go`, `message.go`, `messages.sql`, `config.go`, `coordinator.go` |
 | 10 | **done**, reviewed | `todo_reminder.go`, `agent.go` |
-| 7-9, 11-12 | not started | — |
+| 7 | **done**, reviewed | `tombstone.go`, `agent.go`, `message.go`, `config.go`, `shellconfig/options.go` |
+| 8-9, 11-12 | not started | — |
 
-This is the §7.1 minimum viable subset (1, 4, 5) plus PR-2, PR-3, PR-6 and
-PR-10. PR-3 adds one migration; PR-6 adds one generated query. No new
-user-facing configuration option exists yet (PR-6's tool name is added to the
-built-in allow-list, which is not config).
+This is the §7.1 minimum viable subset (1, 4, 5) plus PR-2, PR-3, PR-6, PR-7
+and PR-10. PR-3 adds one migration; PR-6 adds one generated query; PR-7 adds
+the first user-facing configuration option in this PRD
+(`compaction-elide`, §6).
 "Reviewed" means the
 two-axis review recorded below has been run and its findings applied; it does
 not mean the PRDs' acceptance commands all ran, since `task lint` cannot
@@ -854,6 +855,61 @@ Three findings from review changed the shape:
 Sub-agents get neither the head reminder nor the recitation: a sub-agent owns
 its own task prompt and has no todo list of its own. `clipToBytes` reserves the
 ellipsis inside the byte budget rather than adding three bytes past it.
+
+**PR-7 — tool-result elision with tombstones.** `compaction_elide` has three
+values: `shadow` (the default) computes the decision, logs it, and sends the
+full payload; `on` replaces eligible results with a tombstone; `off` leaves
+the prompt exactly as it was. `internal/agent/tombstone.go` holds the whole
+layer: `elidePolicy` (mode, `KeepRecent` 3, `KeepBytes` 2048, `view` and
+`lsp_diagnostics` exempt), `shouldElide`, and `renderTombstone`. The decision
+and the rendering are pure and table-tested; the only I/O in the file is the
+shadow-mode log line.
+
+The prompt change is confined to `preparePrompt`: the tool-result collection
+now iterates `message.ToolResults()` instead of converting whole rows and
+re-parsing the parts, so the policy sees `Name`, `Content`, `Data` and can
+carry each result's `CreatedAt` into the tombstone. Ordering is unchanged —
+the orphan filter still runs first and the results are still re-emitted next
+to the assistant message that requested them — because elision replaces the
+content of a result, never its position. `message.ToolResult` gained
+`ToAIToolResultPart()` so the shared conversion has one definition; the
+tool-role branch of `ToAIMessage` now calls it.
+
+Decisions worth recording:
+
+- **The turn-local exemption travels in the context.** `Run` fills a set from
+  the stream's `OnToolResult` callbacks and attaches it with
+  `withElideExempt` before calling `Summarize`; the compaction's prompt is the
+  one prompt built after the turn's own results exist. It is not another
+  `Summarize` parameter because it is read by exactly one prompt builder and
+  describes the turn, not the compaction.
+- **`saved_bytes` is the payload size.** The log line reports what would be
+  removed, matching PR-7's own `slog.Info(... "saved_bytes", n)` wording; the
+  tombstone that replaces it is a bounded few hundred bytes, and subtracting
+  it per call would make the shadow-mode total disagree with the per-call
+  numbers a reviewer checks it against.
+- **Elision runs on every prompt, not only above the threshold.** §4.2 places
+  step ① after the threshold is crossed, but `preparePrompt` has no threshold
+  to test: the ladder's trigger lives in `Run`'s `StopWhen`, and the prompt is
+  built before any step has run. The policy is inert for short sessions by
+  construction (`KeepRecent` and `KeepBytes` between them mean a session with
+  a handful of small results elides nothing), and `shadow` is the default, so
+  this cannot change behavior on first ship. Moving the trigger into
+  `preparePrompt` would mean a session that elides nothing on a turn and then
+  does on the next, which is the same decision with a worse boundary.
+- **Media results are never elided.** `recall` serves text, so eliding a
+  binary payload would be a permanent loss rather than a reversible one;
+  `shouldElide` requires `Data == ""`. §4.3 does not mention this case.
+- **Previews are ANSI-stripped.** §4.3 does not say, but a tombstone exists to
+  be short and readable; copying escape sequences into it would spend the
+  400-byte budget on styling and render as garbage in the archived position.
+  The recalled body is still returned unmodified.
+- **`optEnum` was added to the shell config parser** so `compaction-elide`
+  can reject an unknown value at parse time instead of falling back
+  silently, and `config.Load` validates the same value for hand-edited JSON.
+  The values themselves are typed constants in the config package, which the
+  agent aliases rather than re-declaring, so the three spellings have one
+  definition.
 
 **Known gaps, in dependency order.** The cross-cutting fixture in §9
 (`internal/agent/testdata/summary/`) is also not created yet, so PR-1/2/4/5 are

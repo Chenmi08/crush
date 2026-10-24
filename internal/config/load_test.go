@@ -2617,3 +2617,32 @@ func TestConfig_LoadFromBytes_EnvMerge(t *testing.T) {
 	require.Equal(t, "second", loadedConfig.Env["AWS_PROFILE"])
 	require.Equal(t, "us-east-1", loadedConfig.Env["AWS_REGION"])
 }
+
+func TestValidateCompactionElide(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		value   CompactionElideMode
+		wantErr bool
+	}{
+		{name: "unset means shadow", value: ""},
+		{name: "shadow", value: CompactionElideShadow},
+		{name: "off", value: CompactionElideOff},
+		{name: "on", value: CompactionElideOn},
+		{name: "misspelled value is rejected", value: "shadwo", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := validateCompactionElide(&Config{Options: &Options{CompactionElide: tt.value}})
+			if tt.wantErr {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "compaction_elide")
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}

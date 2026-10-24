@@ -477,6 +477,17 @@ type Sandbox struct {
 	DenyWrite []string `json:"deny_write,omitempty" jsonschema:"description=Paths kept unwritable even inside a writable root. Denials take precedence over grants,example=./secrets"`
 }
 
+// CompactionElideMode is the user-facing spelling of the tool-result elision
+// mode. It is a typed string rather than a bare string so the three values
+// have one definition and the zero value is documented to mean the default.
+type CompactionElideMode string
+
+const (
+	CompactionElideOff    CompactionElideMode = "off"
+	CompactionElideShadow CompactionElideMode = "shadow"
+	CompactionElideOn     CompactionElideMode = "on"
+)
+
 type TrailerStyle string
 
 const (
@@ -508,6 +519,12 @@ type Options struct {
 	Debug                bool        `json:"debug,omitempty" jsonschema:"description=Enable debug logging,default=false"`
 	DebugLSP             bool        `json:"debug_lsp,omitempty" jsonschema:"description=Enable debug logging for LSP servers,default=false"`
 	DisableAutoSummarize bool        `json:"disable_auto_summarize,omitempty" jsonschema:"description=Disable automatic conversation summarization,default=false"`
+	// CompactionElide controls whether old tool results are replaced with
+	// a short placeholder that can be read back with the `recall` tool.
+	// "shadow" (the default) measures what would be elided and logs it
+	// without changing the request; "on" applies it; "off" disables the
+	// layer entirely.
+	CompactionElide CompactionElideMode `json:"compaction_elide,omitempty" jsonschema:"description=Replace old tool results in the prompt with a short placeholder that the recall tool can restore. shadow measures the savings without changing the request\\, on applies it\\, off disables it,enum=off,enum=shadow,enum=on,default=shadow"`
 	// DataDirectory is where Crush keeps per-project state such as
 	// the SQLite database and workspace overrides. Relative paths are
 	// resolved against the working directory; absolute paths are used

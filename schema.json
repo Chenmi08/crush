@@ -613,6 +613,16 @@
           "description": "Disable automatic conversation summarization",
           "default": false
         },
+        "compaction_elide": {
+          "type": "string",
+          "enum": [
+            "off",
+            "shadow",
+            "on"
+          ],
+          "description": "Replace old tool results in the prompt with a short placeholder that the recall tool can restore. shadow measures the savings without changing the request, on applies it, off disables it",
+          "default": "shadow"
+        },
         "data_directory": {
           "type": "string",
           "description": "Directory for storing application data. Relative paths are resolved against the working directory; absolute paths are used as-is. Defaults to a hashed per-project directory under the consolidated projects root.",

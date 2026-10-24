@@ -60,6 +60,15 @@ func Load(workingDir, dataDir string, debug bool) (*ConfigStore, error) {
 		return nil, fmt.Errorf("invalid sandbox configuration: %w", err)
 	}
 
+	// A misspelled string option would otherwise be stored and silently
+	// fall back to the default, which is indistinguishable from the user
+	// never setting it. Only options whose handler cannot report the error
+	// itself are checked here; `option` in a shell config validates its own
+	// values at parse time.
+	if err := validateCompactionElide(cfg); err != nil {
+		return nil, err
+	}
+
 	store := &ConfigStore{
 		config:         cfg,
 		workingDir:     workingDir,
@@ -1605,4 +1614,21 @@ func (c *Config) ValidateHooks() error {
 		}
 	}
 	return nil
+}
+
+// validateCompactionElide rejects an unknown compaction_elide value. The empty
+// value is the documented default (shadow) and is accepted.
+func validateCompactionElide(cfg *Config) error {
+	if cfg.Options == nil {
+		return nil
+	}
+	switch CompactionElideMode(cfg.Options.CompactionElide) {
+	case "", CompactionElideOff, CompactionElideShadow, CompactionElideOn:
+		return nil
+	}
+	return fmt.Errorf(
+		"invalid options.compaction_elide %q: expected %s, %s or %s",
+		cfg.Options.CompactionElide,
+		CompactionElideOff, CompactionElideShadow, CompactionElideOn,
+	)
 }

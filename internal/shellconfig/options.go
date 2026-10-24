@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -157,6 +158,20 @@ func handleOption(ctx context.Context, args []string, stdin io.Reader, stdout, s
 		slog.Info("Option set in shell config", "key", key, "value", n)
 		return nil
 
+	case optEnum:
+		// An unknown value is a usage error, not a silent fallback: the
+		// user typed something the program will not honor, and the only
+		// place that can be said is here.
+		if !slices.Contains(spec.values, val) {
+			return usage(stderr, fmt.Sprintf(
+				"option: %s expects one of %s, got %q",
+				key, strings.Join(spec.values, ", "), val,
+			))
+		}
+		o[spec.jsonKey] = val
+		slog.Info("Option set in shell config", "key", key, "value", val)
+		return nil
+
 	default: // optString
 		if val == "" {
 			return usage(stderr, fmt.Sprintf("option: %s requires a value", key))
@@ -175,6 +190,9 @@ const (
 	optBool
 	optList
 	optInt
+	// optEnum is a string restricted to a fixed set of values. The value
+	// set lives on the spec so validation and documentation cannot drift.
+	optEnum
 )
 
 // optionSpec describes one user-facing option key: the JSON field it writes,
@@ -186,6 +204,9 @@ type optionSpec struct {
 	jsonKey  string
 	kind     optionKind
 	inverted bool
+	// values is the allowed set for optEnum. It is ignored by the other
+	// kinds.
+	values []string
 }
 
 // optionSpecs maps user-facing kebab-case keys to their JSON field and type.
@@ -212,10 +233,11 @@ var optionSpecs = map[string]optionSpec{
 	"exa":                  {jsonKey: "disable_exa", kind: optBool, inverted: true},
 
 	// String fields.
-	"notifications":  {jsonKey: "notifications", kind: optString},
-	"data-directory": {jsonKey: "data_directory", kind: optString},
-	"initialize-as":  {jsonKey: "initialize_as", kind: optString},
-	"exa-api-key":    {jsonKey: "exa_api_key", kind: optString},
+	"notifications":    {jsonKey: "notifications", kind: optString},
+	"data-directory":   {jsonKey: "data_directory", kind: optString},
+	"initialize-as":    {jsonKey: "initialize_as", kind: optString},
+	"exa-api-key":      {jsonKey: "exa_api_key", kind: optString},
+	"compaction-elide": {jsonKey: "compaction_elide", kind: optEnum, values: []string{"off", "shadow", "on"}},
 
 	// Integer fields, in seconds.
 	"request-timeout": {jsonKey: "request_timeout", kind: optInt},

@@ -299,3 +299,39 @@ func TestOption_ImageInvalidValue(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "expects a positive integer")
 }
+
+func TestOption_CompactionElide(t *testing.T) {
+	t.Parallel()
+
+	for _, value := range []string{"off", "shadow", "on"} {
+		t.Run(value, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			path := filepath.Join(dir, "crushrc")
+
+			jsonBytes, err := LoadShellConfig(t.Context(), path, []byte("option compaction-elide "+value))
+			require.NoError(t, err)
+
+			var result map[string]any
+			require.NoError(t, json.Unmarshal(jsonBytes, &result))
+
+			opts := result["options"].(map[string]any)
+			require.Equal(t, value, opts["compaction_elide"])
+		})
+	}
+}
+
+func TestOption_CompactionElideRejectsUnknownValue(t *testing.T) {
+	t.Parallel()
+
+	// A value the program will not honor must fail here, not be stored
+	// and silently fall back later.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "crushrc")
+
+	_, err := LoadShellConfig(t.Context(), path, []byte("option compaction-elide bogus"))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "compaction-elide")
+	require.Contains(t, err.Error(), "off, shadow, on")
+}
