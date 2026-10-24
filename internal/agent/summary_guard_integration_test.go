@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"charm.land/fantasy"
@@ -218,10 +219,84 @@ func TestSummarize_StripsAnalysisBlockBeforePersisting(t *testing.T) {
 	require.NotContains(t, content, "<analysis>")
 	require.NotContains(t, content, "let me think about this")
 
-	// The narrative is preserved verbatim.
-	require.Equal(t, body, content)
+	// The narrative is preserved verbatim; the code-generated manifest may
+	// follow it.
+	narrative, _, _ := strings.Cut(content, manifestLeadIn)
+	require.Equal(t, body, strings.TrimSpace(narrative))
 	// The seven authored headings survive the strip.
 	for _, heading := range []string{"## Current State", "## User Messages"} {
 		require.Contains(t, content, heading)
 	}
+}
+
+func TestSummarize_AppendsManifestAfterModelProse(t *testing.T) {
+	t.Parallel()
+
+	env := testEnv(t)
+	body := "## Current State\n- the failing test is `TestSummarize`"
+	model := &summaryStreamModel{text: body, finishReason: fantasy.FinishReasonStop}
+	sa := summaryTestAgent(env, model)
+
+	ctx := t.Context()
+	sess, err := env.sessions.Create(ctx, "summary session")
+	require.NoError(t, err)
+
+	// One failing bash call, one edited file, one user message.
+	_, err = env.messages.Create(ctx, sess.ID, message.CreateMessageParams{
+		Role:  message.User,
+		Parts: []message.ContentPart{message.TextContent{Text: "fix the failing test"}},
+	})
+	require.NoError(t, err)
+	_, err = env.messages.Create(ctx, sess.ID, message.CreateMessageParams{
+		Role: message.Assistant,
+		Parts: []message.ContentPart{
+			message.ToolCall{
+				ID:       "call_test",
+				Name:     "bash",
+				Input:    `{"command":"go test ./internal/agent/..."}`,
+				Finished: true,
+			},
+			message.ToolCall{
+				ID:       "call_edit",
+				Name:     "edit",
+				Input:    `{"file_path":"internal/agent/agent.go"}`,
+				Finished: true,
+			},
+		},
+	})
+	require.NoError(t, err)
+	_, err = env.messages.Create(ctx, sess.ID, message.CreateMessageParams{
+		Role: message.Tool,
+		Parts: []message.ContentPart{
+			message.ToolResult{
+				ToolCallID: "call_test",
+				Name:       "bash",
+				Content:    "--- FAIL: TestSummarize (0.31s)\nFAIL\n\nExit code 1",
+			},
+			message.ToolResult{
+				ToolCallID: "call_edit",
+				Name:       "edit",
+				Content:    "ok",
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, sa.Summarize(ctx, sess.ID, fantasy.ProviderOptions{}, nil))
+
+	after, err := env.sessions.Get(ctx, sess.ID)
+	require.NoError(t, err)
+	msg, err := env.messages.Get(ctx, after.SummaryMessageID)
+	require.NoError(t, err)
+
+	content := msg.Content().Text
+	require.Contains(t, content, "<context_manifest")
+	require.Contains(t, content, `cmd="go test ./internal/agent/..."`)
+	require.Contains(t, content, "path=internal/agent/agent.go ops=edit edits=1")
+
+	// The model's prose precedes the code-generated block: the summary the
+	// model wrote is not rewritten, the facts are appended to it. The
+	// lead-in marks the manifest as data, not instructions.
+	require.Less(t, strings.Index(content, body), strings.Index(content, manifestLeadIn))
+	require.Less(t, strings.Index(content, manifestLeadIn), strings.Index(content, "<context_manifest"))
 }

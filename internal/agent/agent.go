@@ -1664,6 +1664,21 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 		return err
 	}
 
+	// Append the code-generated fact sheet. It is appended rather than
+	// given to the model to write: paths, commands and exit codes are
+	// guaranteed by plumbing, while the model's prose keeps the judgement
+	// (why a file mattered) in `## Artifacts`.
+	if manifest := buildContextManifest(manifestInput{
+		Messages:    msgs,
+		AnchorAt:    time.Now().Unix(),
+		GeneratedAt: time.Now(),
+	}); manifest != "" {
+		summaryMessage.AppendContent("\n\n" + manifestLeadIn + manifest)
+		if updateErr := a.messages.Update(genCtx, summaryMessage); updateErr != nil {
+			return updateErr
+		}
+	}
+
 	var openrouterCost *float64
 	for _, step := range resp.Steps {
 		stepCost := a.openrouterCost(step.ProviderMetadata)
