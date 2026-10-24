@@ -18,6 +18,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -1631,7 +1632,14 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 	// CompletionTokens cannot be used: every completed step overwrites it,
 	// so after one conversational turn it holds that turn's reply instead
 	// of the summary being replaced.
-	var prevSummaryTokens int64
+	var (
+		prevSummaryTokens int64
+		// prevSummaryContent is the stored text of the summary being
+		// replaced. The transcript pruner needs the path inside it: that
+		// file is still the answer to "where is the history before the
+		// previous compaction", and it must survive this one.
+		prevSummaryContent string
+	)
 	if currentSession.SummaryMessageID != "" {
 		prev, getErr := a.messages.Get(ctx, currentSession.SummaryMessageID)
 		switch {
@@ -1651,7 +1659,8 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 				"error", getErr,
 			)
 		default:
-			prevSummaryTokens = summaryNarrativeTokens(prev.Content().Text)
+			prevSummaryContent = prev.Content().Text
+			prevSummaryTokens = summaryNarrativeTokens(prevSummaryContent)
 		}
 	}
 	// Read before the reset block at the end of this function: these
@@ -1858,6 +1867,20 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 		}
 	}
 
+	// Export the pre-compaction conversation and point the summary at it.
+	// The transcript is the coarse retrieval index: `rg` over a file the
+	// model can name covers the "I remember seeing an error somewhere"
+	// case that a per-result handle cannot. A failure here is logged and
+	// ignored — the manifest and the messages table still hold the facts,
+	// and refusing to compact would wedge a session that is already over
+	// its window.
+	if block, ok := a.appendTranscript(sessionID, prevSummaryContent, msgs); ok {
+		summaryMessage.AppendContent("\n\n" + block)
+		if updateErr := a.messages.Update(genCtx, summaryMessage); updateErr != nil {
+			return updateErr
+		}
+	}
+
 	var openrouterCost *float64
 	for _, step := range resp.Steps {
 		stepCost := a.openrouterCost(step.ProviderMetadata)
@@ -1900,6 +1923,63 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 	a.messageQueue.Set(sessionID, queuedMessages[1:])
 	_, qErr := a.Run(ctx, firstQueuedMessage)
 	return qErr
+}
+
+// appendTranscript writes the archived span to the session's transcript
+// directory and returns the `## Full Transcript` block to append to the
+// summary. The second result is false when the export was skipped or failed,
+// in which case the caller continues without it.
+//
+// msgs is the slice [sessionAgent.getSessionMessages] returned: exactly the
+// messages the new summary replaces. Its first element may be the previous
+// summary with its role rewritten to `user`, which [transcriptFromMessage]
+// corrects back to the stored role.
+//
+// prevSummaryContent is the stored text of the summary being replaced, or ""
+// on a first compaction. Its transcript is protected from pruning: that file
+// is where the history before the previous compaction lives.
+func (a *sessionAgent) appendTranscript(sessionID, prevSummaryContent string, msgs []message.Message) (string, bool) {
+	sessionsDir := a.transcriptDir()
+	if sessionsDir == "" {
+		slog.Warn(
+			"No data directory configured; skipping transcript export",
+			"session_id", sessionID,
+		)
+		return "", false
+	}
+
+	at := time.Now()
+	path, err := writeTranscript(sessionsDir, sessionID, msgs, at)
+	if err != nil {
+		slog.Warn(
+			"Could not export transcript for summary",
+			"session_id", sessionID,
+			"error", err,
+		)
+		return "", false
+	}
+	// The new file is the newest, so it is never a deletion candidate; the
+	// interesting case is the previous summary's transcript, which this
+	// compaction would otherwise age out from under its pointer.
+	protect := []string{path, transcriptPathFromContent(prevSummaryContent)}
+	if pruneErr := pruneTranscripts(sessionsDir, sessionID, protect, transcriptKeep); pruneErr != nil {
+		slog.Warn("Could not prune old transcripts", "session_id", sessionID, "error", pruneErr)
+	}
+
+	first, last := messageRange(msgs, at)
+	return transcriptBlock(path, len(msgs), first, last), true
+}
+
+// transcriptDir returns the directory transcript files live in, or "" when the
+// agent has no config.
+func (a *sessionAgent) transcriptDir() string {
+	if a.cfg == nil || a.cfg.Config() == nil || a.cfg.Config().Options == nil {
+		return ""
+	}
+	if a.cfg.Config().Options.DataDirectory == "" {
+		return ""
+	}
+	return filepath.Join(a.cfg.Config().Options.DataDirectory, "sessions")
 }
 
 // rejectSummary records a summary that a guard refused as a failed message.

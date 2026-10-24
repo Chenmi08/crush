@@ -600,10 +600,11 @@ actually done" without reading the tree.
 | 6 | **done** | `tools/recall.go`, `message.go`, `messages.sql`, `config.go`, `coordinator.go` |
 | 10 | **done**, reviewed | `todo_reminder.go`, `agent.go` |
 | 7 | **done**, reviewed | `tombstone.go`, `agent.go`, `message.go`, `config.go`, `shellconfig/options.go` |
-| 8-9, 11-12 | not started | — |
+| 8 | **done**, reviewed | `transcript.go`, `agent.go` |
+| 9, 11-12 | not started | — |
 
-This is the §7.1 minimum viable subset (1, 4, 5) plus PR-2, PR-3, PR-6, PR-7
-and PR-10. PR-3 adds one migration; PR-6 adds one generated query; PR-7 adds
+This is the §7.1 minimum viable subset (1, 4, 5) plus PR-2, PR-3, PR-6, PR-7,
+PR-8 and PR-10. PR-3 adds one migration; PR-6 adds one generated query; PR-7 adds
 the first user-facing configuration option in this PRD
 (`compaction-elide`, §6).
 "Reviewed" means the
@@ -910,6 +911,49 @@ Decisions worth recording:
   The values themselves are typed constants in the config package, which the
   agent aliases rather than re-declaring, so the three spellings have one
   definition.
+
+**PR-8 — transcript export.** Every successful compaction writes the span it
+is replacing to `<DataDirectory>/sessions/<session-id>/transcript-<unix>.jsonl`
+(one JSON object per line, `0o600` in a `0o700` directory) and appends a
+`## Full Transcript` block naming the absolute path, the message count and the
+timestamp range. `internal/agent/transcript.go` holds the writer, the block
+renderer and the pruner; `Summarize` calls `appendTranscript` after the
+manifest and before the anchor update. A failed export is logged at `Warn` and
+the compaction continues.
+
+Decisions worth recording:
+
+- **The exported slice is the one already fetched.** `Summarize` reads the
+  archived span through `getSessionMessages`, so the transcript is written
+  from that slice rather than from a second query. There is no "the new
+  anchor" to compute against at that point: the anchor has not moved yet.
+- **The stored role is restored for summary rows.** `getSessionMessages`
+  rewrites the previous summary's role to `user` so the prompt reads it as
+  context. The transcript records the row, not the prompt, so
+  `transcriptRole` puts `assistant` back — otherwise the JSONL would claim the
+  model wrote the summary as a user message.
+- **Pruning sorts by the filename, not by mtime.** The filename carries the
+  write timestamp, which survives a copy or a restore; mtime does not.
+  Protected paths, not age, decide what survives: the file just written and
+  the one the *previous* summary names (`transcriptPathFromContent` on the row
+  read for the size guards). §4.5's "never delete one that a live summary
+  points to" only bites on the previous summary — the new file is always the
+  newest and therefore never a deletion candidate — which is exactly why the
+  path is recovered from that row and not assumed.
+- **The transcript file is created with `O_EXCL`.** `os.WriteFile` applies the
+  mode only when it creates the file, so two compactions in the same second
+  would overwrite the earlier transcript and leave a summary pointing at the
+  wrong bytes. A collision now takes the next free timestamp.
+- **The path component is validated in `writeTranscript` itself.** There is no
+  shared safe-path helper in this repo, and `filepath.Join` cleans `..`
+  instead of refusing it, which would silently write outside the data
+  directory. The check rejects any id whose `filepath.Base` differs from the
+  id, any id containing `..`, `/`, `\` or NUL, and any id with a control
+  character.
+- **Encoding cannot fail today, and the caller is told when it does.**
+  `transcriptMessage` is all strings, so `json.Marshal` has no error path;
+  returning it rather than logging and skipping keeps a future field from
+  silently dropping messages out of the only surviving record.
 
 **Known gaps, in dependency order.** The cross-cutting fixture in §9
 (`internal/agent/testdata/summary/`) is also not created yet, so PR-1/2/4/5 are
