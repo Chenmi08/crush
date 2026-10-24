@@ -378,3 +378,37 @@ func TestSummaryFailCountRoundTrip(t *testing.T) {
 // maxTripCount is local to this test so the session package does not import
 // the agent's policy constant.
 const maxTripCount = 3
+
+func TestSummaryAnchorRoundTrip(t *testing.T) {
+	// Not parallel: see TestSummaryFailCountRoundTrip.
+	dataDir := t.TempDir()
+	t.Cleanup(func() {
+		require.NoError(t, db.Release(dataDir))
+		db.ResetPool()
+	})
+
+	conn, err := db.Connect(t.Context(), dataDir)
+	require.NoError(t, err)
+	sessions := NewService(db.New(conn), conn)
+
+	created, err := sessions.Create(t.Context(), "anchor")
+	require.NoError(t, err)
+	require.Empty(t, created.SummaryAnchorMessageID, "a new session has no compaction span")
+	require.Zero(t, created.SummaryPromptPrefixLen)
+
+	created.SummaryAnchorMessageID = "msg_first"
+	created.SummaryPromptPrefixLen = 1200
+	saved, err := sessions.Save(t.Context(), created)
+	require.NoError(t, err)
+	require.Equal(t, "msg_first", saved.SummaryAnchorMessageID)
+	require.Equal(t, 1200, saved.SummaryPromptPrefixLen)
+
+	// A fetch-modify-save cycle for an unrelated field preserves both, or a
+	// later compaction would merge against the wrong span.
+	saved.Title = "renamed"
+	saved.Todos = []Todo{{Content: "keep the anchor", Status: TodoStatusPending}}
+	updated, err := sessions.Save(t.Context(), saved)
+	require.NoError(t, err)
+	require.Equal(t, "msg_first", updated.SummaryAnchorMessageID)
+	require.Equal(t, 1200, updated.SummaryPromptPrefixLen)
+}

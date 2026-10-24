@@ -76,7 +76,7 @@ func TestBuildSummaryPromptWithTodos(t *testing.T) {
 		{Content: "Add manifest", Status: session.TodoStatusPending},
 	}
 
-	prompt := buildSummaryPrompt(todos)
+	prompt := buildSummaryPrompt(todos, "")
 
 	for _, todo := range todos {
 		require.Contains(t, prompt, todo.Content)
@@ -95,7 +95,7 @@ func TestBuildSummaryPromptWithTodos(t *testing.T) {
 func TestBuildSummaryPromptWithoutTodos(t *testing.T) {
 	t.Parallel()
 
-	prompt := buildSummaryPrompt(nil)
+	prompt := buildSummaryPrompt(nil, "")
 
 	require.Contains(t, prompt, "no todo list")
 	require.Contains(t, prompt, "do not invent one")

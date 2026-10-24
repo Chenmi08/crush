@@ -1639,6 +1639,9 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 		// file is still the answer to "where is the history before the
 		// previous compaction", and it must survive this one.
 		prevSummaryContent string
+		// prevSummaryNarrative is the model-written part of that summary,
+		// which the next summary merges into rather than rewrites.
+		prevSummaryNarrative string
 	)
 	if currentSession.SummaryMessageID != "" {
 		prev, getErr := a.messages.Get(ctx, currentSession.SummaryMessageID)
@@ -1660,7 +1663,12 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 			)
 		default:
 			prevSummaryContent = prev.Content().Text
-			prevSummaryTokens = summaryNarrativeTokens(prevSummaryContent)
+			// Measure and hand to the prompt the same narrative, split at
+			// the stored prefix when there is one. Both sides have to
+			// describe the same string, or a merge is asked to preserve a
+			// document the guard measured differently.
+			prevSummaryNarrative = splitPreviousSummary(prev, currentSession.SummaryPromptPrefixLen)
+			prevSummaryTokens = approxTokenCount(prevSummaryNarrative)
 		}
 	}
 	// Read before the reset block at the end of this function: these
@@ -1743,7 +1751,7 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 		return summaryMessage, resp, nil
 	}
 
-	summaryPromptText := buildSummaryPrompt(currentSession.Todos)
+	summaryPromptText := buildSummaryPrompt(currentSession.Todos, prevSummaryNarrative)
 
 	var (
 		summaryMessage message.Message
@@ -1833,6 +1841,11 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 	if err != nil {
 		return err
 	}
+	// The narrative length is measured now, while the content is still only
+	// the model's prose. Measuring it after the blocks below are appended
+	// would mean re-deriving the boundary by searching for markers, which is
+	// the parsing this column exists to avoid.
+	summaryPrefix := len(strings.TrimSpace(summaryMessage.Content().Text))
 
 	// Append the code-generated fact sheet. It is appended rather than
 	// given to the model to write: paths, commands and exit codes are
@@ -1898,6 +1911,13 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 	// Just in case, get just the last usage info.
 	usage := resp.Response.Usage
 	currentSession.SummaryMessageID = summaryMessage.ID
+	// The anchor is the oldest message this summary replaces: the span
+	// that was just exported, whose first element may be the previous
+	// summary itself. It is the start of the span the next merge covers.
+	currentSession.SummaryAnchorMessageID = summaryAnchorID(msgs)
+	// The narrative length is what lets the next compaction recover the
+	// model-written part without parsing the appended blocks.
+	currentSession.SummaryPromptPrefixLen = summaryPrefix
 	// A summary that passed every guard reopens the breaker; the counter
 	// is consecutive, not cumulative.
 	currentSession.SummaryFailCount = 0
@@ -2938,26 +2958,30 @@ func (a *sessionAgent) workaroundProviderMediaLimitations(messages []fantasy.Mes
 	return convertedMessages
 }
 
-// buildSummaryPrompt constructs the prompt text for session summarization.
-// The todo list is injected as input: the summary template already asks for
-// it to be restated under "## Current State", and the injected block is the
-// prompt, not the output.
-func buildSummaryPrompt(todos []session.Todo) string {
+// buildSummaryPrompt renders the user turn that asks for a summary. previous
+// is the model-written narrative of the summary being replaced, or "" on a
+// first compaction; when it is set the model is told to merge rather than
+// rewrite.
+func buildSummaryPrompt(todos []session.Todo, previous string) string {
 	var sb strings.Builder
 	sb.WriteString("Provide a detailed summary of our conversation above, following the required sections.")
 	if len(todos) == 0 {
 		sb.WriteString("\n\nThe session has no todo list. Say so under `## Current State`; do not invent one.")
-		return sb.String()
-	}
-	sb.WriteString("\n\nThe session's todo list at the time of this summary:\n\n")
-	for _, t := range todos {
-		fmt.Fprintf(&sb, "- [%s] %s\n", t.Status, t.Content)
-		if t.ActiveForm != "" {
-			fmt.Fprintf(&sb, "  active form: %s\n", t.ActiveForm)
+	} else {
+		sb.WriteString("\n\nThe session's todo list at the time of this summary:\n\n")
+		for _, t := range todos {
+			fmt.Fprintf(&sb, "- [%s] %s\n", t.Status, t.Content)
+			if t.ActiveForm != "" {
+				fmt.Fprintf(&sb, "  active form: %s\n", t.ActiveForm)
+			}
 		}
+		sb.WriteString("\nRestate this list, with each item's status, under `## Current State`. ")
+		sb.WriteString("Instruct the resuming assistant to keep tracking these tasks with the `todos` tool.")
 	}
-	sb.WriteString("\nRestate this list, with each item's status, under `## Current State`. ")
-	sb.WriteString("Instruct the resuming assistant to keep tracking these tasks with the `todos` tool.")
+	if previous != "" {
+		sb.WriteString("\n\n")
+		sb.WriteString(mergeInstruction(previous))
+	}
 	return sb.String()
 }
 

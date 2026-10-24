@@ -14,19 +14,26 @@ package proto
 // live SSE stream. Hold-only clients (streams == 0) do not contribute.
 // Like IsBusy, it is computed on read by REST handlers.
 type Session struct {
-	ID                  string  `json:"id"`
-	ParentSessionID     string  `json:"parent_session_id"`
-	Title               string  `json:"title"`
-	MessageCount        int64   `json:"message_count"`
-	PromptTokens        int64   `json:"prompt_tokens"`
-	CompletionTokens    int64   `json:"completion_tokens"`
-	TotalInputTokens    int64   `json:"total_input_tokens"`
-	TotalOutputTokens   int64   `json:"total_output_tokens"`
-	CacheReadTokens     int64   `json:"cache_read_tokens"`
-	CacheCreationTokens int64   `json:"cache_creation_tokens"`
-	SummaryMessageID    string  `json:"summary_message_id"`
-	Cost                float64 `json:"cost"`
-	Todos               []Todo  `json:"todos,omitempty"`
+	ID                  string `json:"id"`
+	ParentSessionID     string `json:"parent_session_id"`
+	Title               string `json:"title"`
+	MessageCount        int64  `json:"message_count"`
+	PromptTokens        int64  `json:"prompt_tokens"`
+	CompletionTokens    int64  `json:"completion_tokens"`
+	TotalInputTokens    int64  `json:"total_input_tokens"`
+	TotalOutputTokens   int64  `json:"total_output_tokens"`
+	CacheReadTokens     int64  `json:"cache_read_tokens"`
+	CacheCreationTokens int64  `json:"cache_creation_tokens"`
+	SummaryMessageID    string `json:"summary_message_id"`
+	// SummaryAnchorMessageID and SummaryPromptPrefixLen describe the
+	// current summary's span and its model-written length. They travel with
+	// the session because a client/server save replaces the stored row: a
+	// missing field here would silently reset the merge state on every save
+	// made over the wire.
+	SummaryAnchorMessageID string  `json:"summary_anchor_message_id,omitempty"`
+	SummaryPromptPrefixLen int     `json:"summary_prompt_prefix_len,omitempty"`
+	Cost                   float64 `json:"cost"`
+	Todos                  []Todo  `json:"todos,omitempty"`
 	// DisabledSkills carries the session's per-session skill opt-outs.
 	DisabledSkills  []string `json:"disabled_skills,omitempty"`
 	Channel         string   `json:"channel,omitempty"`

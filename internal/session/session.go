@@ -95,8 +95,18 @@ type Session struct {
 	// automatic summarization stops retrying for this session instead of
 	// burning a request on every turn. A successful summary resets it.
 	SummaryFailCount int
-	Cost             float64
-	Todos            []Todo
+	// SummaryAnchorMessageID is the id of the oldest message the current
+	// summary replaces: the start of the span the next compaction must
+	// merge into it. It is empty for a session summarized before the
+	// column existed, in which case the next compaction is a first one.
+	SummaryAnchorMessageID string
+	// SummaryPromptPrefixLen is the byte length of the model-written
+	// narrative inside the current summary's content. The manifest,
+	// transcript pointer and any later code-appended block follow it, so
+	// this is how later code recovers the narrative without parsing.
+	SummaryPromptPrefixLen int
+	Cost                   float64
+	Todos                  []Todo
 	// DisabledSkills lists the skills this session opted out of, on top
 	// of (and independent from) the global options.disabled_skills
 	// default a new session is seeded from.
@@ -288,7 +298,12 @@ func (s *service) Save(ctx context.Context, session Session) (Session, error) {
 			Valid:  session.SummaryMessageID != "",
 		},
 		SummaryFailCount: int64(session.SummaryFailCount),
-		Cost:             session.Cost,
+		SummaryAnchorMessageID: sql.NullString{
+			String: session.SummaryAnchorMessageID,
+			Valid:  session.SummaryAnchorMessageID != "",
+		},
+		SummaryPromptPrefixLen: int64(session.SummaryPromptPrefixLen),
+		Cost:                   session.Cost,
 		Todos: sql.NullString{
 			String: todosJSON,
 			Valid:  todosJSON != "",
@@ -472,20 +487,22 @@ func (s *service) fromDBItem(item db.Session) Session {
 		disabledSkills = s.defaultDisabledSkills()
 	}
 	return Session{
-		ID:               item.ID,
-		ParentSessionID:  item.ParentSessionID.String,
-		Title:            item.Title,
-		MessageCount:     item.MessageCount,
-		PromptTokens:     item.PromptTokens,
-		CompletionTokens: item.CompletionTokens,
-		SummaryMessageID: item.SummaryMessageID.String,
-		SummaryFailCount: int(item.SummaryFailCount),
-		Cost:             item.Cost,
-		Todos:            todos,
-		DisabledSkills:   disabledSkills,
-		Channel:          item.Channel.String,
-		CreatedAt:        item.CreatedAt,
-		UpdatedAt:        item.UpdatedAt,
+		ID:                     item.ID,
+		ParentSessionID:        item.ParentSessionID.String,
+		Title:                  item.Title,
+		MessageCount:           item.MessageCount,
+		PromptTokens:           item.PromptTokens,
+		CompletionTokens:       item.CompletionTokens,
+		SummaryMessageID:       item.SummaryMessageID.String,
+		SummaryFailCount:       int(item.SummaryFailCount),
+		SummaryAnchorMessageID: item.SummaryAnchorMessageID.String,
+		SummaryPromptPrefixLen: int(item.SummaryPromptPrefixLen),
+		Cost:                   item.Cost,
+		Todos:                  todos,
+		DisabledSkills:         disabledSkills,
+		Channel:                item.Channel.String,
+		CreatedAt:              item.CreatedAt,
+		UpdatedAt:              item.UpdatedAt,
 		Totals: SessionTokens{
 			InputTokens:         item.TotalInputTokens,
 			OutputTokens:        item.TotalOutputTokens,

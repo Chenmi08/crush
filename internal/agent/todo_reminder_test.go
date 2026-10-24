@@ -492,6 +492,23 @@ func (m *promptCapturingModel) lastRequest(t *testing.T) fantasy.Prompt {
 	return m.requests[len(m.requests)-1]
 }
 
+// runRequest returns the captured request that carries the turn's prompt. The
+// title generator runs on a detached goroutine against the same mock model, so
+// "the last request" can be the title call depending on goroutine timing; the
+// run's request is identified by its prompt instead.
+func (m *promptCapturingModel) runRequest(t *testing.T, prompt string) fantasy.Prompt {
+	t.Helper()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := len(m.requests) - 1; i >= 0; i-- {
+		if strings.Contains(promptText(m.requests[i]), prompt) {
+			return m.requests[i]
+		}
+	}
+	require.Fail(t, "no captured request carried the turn prompt", prompt)
+	return fantasy.Prompt{}
+}
+
 // TestRun_RecitesThisTurnsGoal is the regression for the staleness bug: Run
 // snapshots the session before storing the new user message, so a recitation
 // that read the last stored message would name the previous turn's request on
@@ -514,8 +531,9 @@ func TestRun_RecitesThisTurnsGoal(t *testing.T) {
 	require.NoError(t, err)
 
 	// The second request is what the model was working on, not the first.
-	require.Contains(t, promptText(model.lastRequest(t)), "Current goal: SECOND REQUEST")
-	require.NotContains(t, promptText(model.lastRequest(t)), "Current goal: FIRST REQUEST")
+	second := model.runRequest(t, "SECOND REQUEST")
+	require.Contains(t, promptText(second), "Current goal: SECOND REQUEST")
+	require.NotContains(t, promptText(second), "Current goal: FIRST REQUEST")
 }
 
 // TestRun_RecitesGoalNotTheSummaryAfterCompaction covers the same bug on the
@@ -544,8 +562,9 @@ func TestRun_RecitesGoalNotTheSummaryAfterCompaction(t *testing.T) {
 	_, err = sa.Run(ctx, SessionAgentCall{SessionID: sessionID, Prompt: "THIRD REQUEST"})
 	require.NoError(t, err)
 
-	require.Contains(t, promptText(model.lastRequest(t)), "Current goal: THIRD REQUEST")
-	require.NotContains(t, promptText(model.lastRequest(t)), "Current goal: SUMMARY NARRATIVE")
+	third := model.runRequest(t, "THIRD REQUEST")
+	require.Contains(t, promptText(third), "Current goal: THIRD REQUEST")
+	require.NotContains(t, promptText(third), "Current goal: SUMMARY NARRATIVE")
 }
 
 // TestRun_HeadReminderCarriesTheStoredTodos proves the Run wiring, which the
@@ -571,7 +590,7 @@ func TestRun_HeadReminderCarriesTheStoredTodos(t *testing.T) {
 	_, err = sa.Run(ctx, SessionAgentCall{SessionID: sess.ID, Prompt: "carry on"})
 	require.NoError(t, err)
 
-	request := promptText(model.lastRequest(t))
+	request := promptText(model.runRequest(t, "carry on"))
 	require.Contains(t, request, "[in_progress] Wire the reminder")
 	require.Contains(t, request, "Current task: Wiring the reminder")
 }
@@ -600,7 +619,7 @@ func TestRun_SubAgentGetsNoRecitation(t *testing.T) {
 	_, err = sa.Run(ctx, SessionAgentCall{SessionID: sess.ID, Prompt: "do the sub task"})
 	require.NoError(t, err)
 
-	request := promptText(model.lastRequest(t))
+	request := promptText(model.runRequest(t, "do the sub task"))
 	require.NotContains(t, request, "Current goal:")
 	require.NotContains(t, request, "todo list is currently empty")
 }

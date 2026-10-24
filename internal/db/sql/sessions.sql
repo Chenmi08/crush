@@ -52,6 +52,8 @@ SET
     cache_creation_tokens = ?,
     summary_message_id = ?,
     summary_fail_count = ?,
+    summary_anchor_message_id = ?,
+    summary_prompt_prefix_len = ?,
     cost = ?,
     todos = ?,
     disabled_skills = ?,

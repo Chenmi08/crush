@@ -601,10 +601,11 @@ actually done" without reading the tree.
 | 10 | **done**, reviewed | `todo_reminder.go`, `agent.go` |
 | 7 | **done**, reviewed | `tombstone.go`, `agent.go`, `message.go`, `config.go`, `shellconfig/options.go` |
 | 8 | **done**, reviewed | `transcript.go`, `agent.go` |
-| 9, 11-12 | not started | — |
+| 9 | **done**, reviewed | `summary_merge.go`, `agent.go`, `session.go`, migration + sqlc |
+| 11-12 | not started | — |
 
 This is the §7.1 minimum viable subset (1, 4, 5) plus PR-2, PR-3, PR-6, PR-7,
-PR-8 and PR-10. PR-3 adds one migration; PR-6 adds one generated query; PR-7 adds
+PR-8, PR-9 and PR-10. PR-3 adds one migration; PR-6 adds one generated query; PR-7 adds
 the first user-facing configuration option in this PRD
 (`compaction-elide`, §6).
 "Reviewed" means the
@@ -954,6 +955,76 @@ Decisions worth recording:
   `transcriptMessage` is all strings, so `json.Marshal` has no error path;
   returning it rather than logging and skipping keeps a future field from
   silently dropping messages out of the only surviving record.
+
+**PR-9 — incremental merge.** The second and later compactions now merge into
+the previous summary instead of rewriting it. Two columns carry the state it
+needs: `sessions.summary_anchor_message_id` (the id of the oldest message the
+current summary replaces) and `sessions.summary_prompt_prefix_len` (the byte
+length of the model-written narrative inside the summary content). Both are
+set on every successful compaction; `internal/agent/summary_merge.go` holds
+the split, the merge instruction and the anchor helper.
+
+How the pieces fit:
+
+- **The summarization input is unchanged.** `getSessionMessages` already
+  returns exactly `[previous summary .. now]`, which is the span the new
+  summary replaces, so `buildSummaryPrompt(todos, previous)` only has to add
+  an instruction. `previous` is the narrative split out of the stored row.
+- **The prefix length is the decided mechanism, not an open question.**
+  `summaryPrefixLen` measures everything before the first code-appended block
+  (the manifest lead-in, or the transcript heading when the manifest was
+  empty) and stores it, so `splitPreviousSummary` never parses. A summary
+  written before the column existed has length 0 and falls back to the same
+  string search the guards already used.
+- **The guard and the prompt measure the same string.** `PrevTokens` is
+  `approxTokenCount` of the narrative returned by `splitPreviousSummary`, not
+  a second measurement with a different boundary. `summaryNarrativeTokens` is
+  still what `NewTokens` uses, and the two agree because the new summary has
+  no appended block at the moment it is measured.
+- **The merge instruction carries a size floor, not a countdown.** It names the
+  previous document's approximate token count so "never write less" is
+  actionable. That is an output floor (D9 forbids telling the model how much
+  window remains, which is a different number).
+- **`SummaryAnchorMessageID` is written but not yet read.** Nothing in this
+  PRD consumes it: `getSessionMessages` already provides the merge span, and
+  the manifest is built from that same slice. It exists because the follow-up
+  partial-compaction work (§8, PR-15) needs "where does this summary start",
+  and recomputing it later would mean a query over the whole session. It is
+  populated now so the data is there when it is read.
+
+Findings from review, applied:
+
+- **The prefix length is captured, not re-derived.** The first draft scanned
+  the final content for the appended-block markers, which is the parsing §5
+  says the column exists to remove. `Summarize` now takes
+  `len(strings.TrimSpace(...))` of the content at the moment it is still only
+  the model's prose — before the manifest and transcript blocks are appended —
+  and the value stored is exactly the offset `splitPreviousSummary` slices at.
+- **The first draft protected the wrong transcript from pruning.** It passed
+  the file just written, which is always the newest and therefore never a
+  deletion candidate, so the guard was a no-op and a summary that outlived
+  four later compactions kept a pointer to a deleted file. The previous
+  summary's path is now recovered from the row read for the size guards and
+  protected as well.
+- **A summary with only a transcript block had no recoverable boundary.** The
+  marker scan (the fallback for rows stored before the column existed) looked
+  for the manifest lead-in alone, so the transcript heading became part of the
+  "narrative" and inflated the next compaction's `PrevTokens`. Both markers
+  are now boundaries, in one shared list, which matters whenever the archived
+  span has no failures and no changed files.
+- **The merge wording gained the spec's qualifier.** "Never shrink without
+  cause" was implemented as "never shrink", which would tell a model whose
+  work was genuinely resolved to pad. The instruction now says a shorter merge
+  is acceptable only when facts were resolved or superseded.
+- **The merge state travels over the wire.** A client/server save replaces
+  the stored row from a proto struct that had neither column, so any remote
+  save would have silently reset the span and prefix length. Both are now on
+  `proto.Session` and both directions of the conversion, with a round-trip
+  assertion alongside the existing ones.
+- **The migration follows the repo's form.** `StatementBegin/End` markers, an
+  explanatory comment and a `CHECK (>= 0)` on the counter, matching the
+  token-totals migration it sits next to; a round-trip test applies it up and
+  down against the embedded set.
 
 **Known gaps, in dependency order.** The cross-cutting fixture in §9
 (`internal/agent/testdata/summary/`) is also not created yet, so PR-1/2/4/5 are

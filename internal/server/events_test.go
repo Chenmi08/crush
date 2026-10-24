@@ -324,10 +324,12 @@ func TestSessionProtoRoundTripPreservesFields(t *testing.T) {
 	t.Parallel()
 
 	sess := session.Session{
-		ID:             "s1",
-		Title:          "t",
-		DisabledSkills: []string{"alpha"},
-		Channel:        "webhook",
+		ID:                     "s1",
+		Title:                  "t",
+		DisabledSkills:         []string{"alpha"},
+		Channel:                "webhook",
+		SummaryAnchorMessageID: "msg_anchor",
+		SummaryPromptPrefixLen: 2048,
 		Totals: session.SessionTokens{
 			InputTokens:         100,
 			OutputTokens:        200,
@@ -342,4 +344,8 @@ func TestSessionProtoRoundTripPreservesFields(t *testing.T) {
 	require.Equal(t, sess.DisabledSkills, round.DisabledSkills)
 	require.Equal(t, sess.Channel, round.Channel)
 	require.Equal(t, sess.Totals, round.Totals)
+	// The merge state has to survive the wire, or a save made through the
+	// client would reset it and the next compaction would lose the span.
+	require.Equal(t, sess.SummaryAnchorMessageID, round.SummaryAnchorMessageID)
+	require.Equal(t, sess.SummaryPromptPrefixLen, round.SummaryPromptPrefixLen)
 }
