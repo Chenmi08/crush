@@ -52,6 +52,11 @@ type Service interface {
 	// ListFromSummary returns the messages at or after summaryMessageID,
 	// which is all a compacted session still sends.
 	ListFromSummary(ctx context.Context, sessionID, summaryMessageID string) ([]Message, error)
+	// ListToolMessages returns every tool-role message of a session, oldest
+	// first. Unlike ListFromSummary it is not bounded by the summary
+	// anchor: it exists so archived tool results stay reachable after
+	// compaction drops them from the prompt.
+	ListToolMessages(ctx context.Context, sessionID string) ([]Message, error)
 	ListUserMessages(ctx context.Context, sessionID string) ([]Message, error)
 	ListAllUserMessages(ctx context.Context) ([]Message, error)
 	GetLastAssistantMessage(ctx context.Context, sessionID string) (Message, error)
@@ -539,6 +544,21 @@ func (s *service) ListFromSummary(ctx context.Context, sessionID, summaryMessage
 	// session rather than sending nothing.
 	if len(dbMessages) == 0 {
 		return s.List(ctx, sessionID)
+	}
+	messages := make([]Message, len(dbMessages))
+	for i, dbMessage := range dbMessages {
+		messages[i], err = s.fromDBItem(dbMessage)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return messages, nil
+}
+
+func (s *service) ListToolMessages(ctx context.Context, sessionID string) ([]Message, error) {
+	dbMessages, err := s.q.ListToolMessagesBySession(ctx, sessionID)
+	if err != nil {
+		return nil, err
 	}
 	messages := make([]Message, len(dbMessages))
 	for i, dbMessage := range dbMessages {

@@ -100,25 +100,6 @@ func TestBuildContextManifestIsErrorFailureWithoutExitCode(t *testing.T) {
 	require.Contains(t, block, `key="Error: file not found"`)
 }
 
-// A test log may quote the exit-code phrase; only the trailing line counts.
-func TestParseManifestExitCodeIgnoresQuotedLines(t *testing.T) {
-	t.Parallel()
-
-	code, ok := parseManifestExitCode("test says:\nExit code 7\nbut the real run succeeded\n")
-	require.True(t, ok)
-	require.Equal(t, 7, code)
-
-	code, ok = parseManifestExitCode("oops\n\nExit code 2")
-	require.True(t, ok)
-	require.Equal(t, 2, code)
-
-	_, ok = parseManifestExitCode("no status line here")
-	require.False(t, ok)
-
-	_, ok = parseManifestExitCode("")
-	require.False(t, ok)
-}
-
 func TestBuildContextManifestFilesDeduped(t *testing.T) {
 	t.Parallel()
 

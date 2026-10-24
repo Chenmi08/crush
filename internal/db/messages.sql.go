@@ -292,6 +292,54 @@ func (q *Queries) ListMessagesBySessionFromSummary(ctx context.Context, arg List
 	return items, nil
 }
 
+const listToolMessagesBySession = `-- name: ListToolMessagesBySession :many
+SELECT id, session_id, role, parts, model, created_at, updated_at, finished_at, provider, is_summary_message, prism_model_id, prism_model_name, prism_hypercredit_savings, prism_dollar_savings
+FROM messages
+WHERE session_id = ? AND role = 'tool'
+ORDER BY created_at ASC
+`
+
+// Backs `recall`, which resolves an archived tool call id to its stored
+// result. Filters on session_id so it uses idx_messages_session_id; tool
+// messages are a small fraction of a session, so no extra index is added.
+func (q *Queries) ListToolMessagesBySession(ctx context.Context, sessionID string) ([]Message, error) {
+	rows, err := q.query(ctx, q.listToolMessagesBySessionStmt, listToolMessagesBySession, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Message{}
+	for rows.Next() {
+		var i Message
+		if err := rows.Scan(
+			&i.ID,
+			&i.SessionID,
+			&i.Role,
+			&i.Parts,
+			&i.Model,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.FinishedAt,
+			&i.Provider,
+			&i.IsSummaryMessage,
+			&i.PrismModelID,
+			&i.PrismModelName,
+			&i.PrismHypercreditSavings,
+			&i.PrismDollarSavings,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUserMessagesBySession = `-- name: ListUserMessagesBySession :many
 SELECT id, session_id, role, parts, model, created_at, updated_at, finished_at, provider, is_summary_message, prism_model_id, prism_model_name, prism_hypercredit_savings, prism_dollar_savings
 FROM messages

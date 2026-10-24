@@ -937,6 +937,9 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 		tools.NewFetchTool(c.cfg.WorkingDir(), nil),
 		tools.NewSourcegraphTool(nil),
 		tools.NewTodosTool(c.sessions),
+		// Available to sub-agents as well: it only reads the caller's
+		// own session, which a sub-agent owns separately.
+		tools.NewRecallTool(c.messages),
 		tools.NewViewTool(c.lspManager, c.filetracker, c.skillTracker, c.cfg, c.cfg.WorkingDir(), c.cfg.Config().Options.SkillsPaths...),
 		tools.NewWriteTool(c.lspManager, c.permissions, c.history, c.filetracker, c.cfg.WorkingDir(), writeOpts),
 	)

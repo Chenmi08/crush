@@ -64,6 +64,13 @@ const (
 	BashNoOutput               = "no output"
 )
 
+// isBashToolName reports whether a tool name refers to a bash tool. MCP
+// tools are namespaced as "<server>_<tool>", so a suffix check is used rather
+// than equality.
+func IsBashToolName(name string) bool {
+	return name == BashToolName || strings.HasSuffix(name, "_"+BashToolName)
+}
+
 //go:embed bash.md.tpl
 var bashDescriptionTmpl []byte
 

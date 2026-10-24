@@ -1127,6 +1127,7 @@ func allToolNames() []string {
 		"lsp_replace_symbol",
 		"fetch",
 		"question",
+		"recall",
 		"sourcegraph",
 		"todos",
 		"view",
@@ -1150,7 +1151,7 @@ func resolveReadOnlyTools(tools []string) []string {
 	// can search with rg, fd, and friends while every write attempt is
 	// refused by the policy. Without bash the sub-agent would be limited to
 	// the dedicated file tools alone.
-	readOnlyTools := []string{"bash", "lsp_call_hierarchy", "lsp_definition", "lsp_symbols", "sourcegraph", "view"}
+	readOnlyTools := []string{"bash", "lsp_call_hierarchy", "lsp_definition", "lsp_symbols", "recall", "sourcegraph", "view"}
 	// filter to only include tools that are in allowedtools (include mode)
 	return filterSlice(tools, readOnlyTools, true)
 }

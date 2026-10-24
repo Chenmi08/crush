@@ -79,3 +79,12 @@ FROM messages
 WHERE session_id = ? AND role = 'assistant' AND is_summary_message = 0
 ORDER BY created_at DESC
 LIMIT 1;
+
+-- name: ListToolMessagesBySession :many
+-- Backs `recall`, which resolves an archived tool call id to its stored
+-- result. Filters on session_id so it uses idx_messages_session_id; tool
+-- messages are a small fraction of a session, so no extra index is added.
+SELECT *
+FROM messages
+WHERE session_id = ? AND role = 'tool'
+ORDER BY created_at ASC;

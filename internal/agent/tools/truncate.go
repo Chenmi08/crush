@@ -13,13 +13,39 @@ func truncateUTF8(s string, maxBytes int) string {
 	if len(s) <= maxBytes {
 		return s
 	}
+	return s[:runeStartAtOrBefore(s, maxBytes)]
+}
 
-	// Walk back from the limit until we land on the start of a rune.
-	cut := maxBytes
-	for cut > 0 && !utf8.RuneStart(s[cut]) {
-		cut--
+// runeStartAtOrBefore returns the largest offset <= i that begins a rune,
+// clamped to the length of s. Callers slicing s[:result] with it can never
+// cut a multi-byte rune in half.
+func runeStartAtOrBefore(s string, i int) int {
+	if i >= len(s) {
+		return len(s)
 	}
-	return s[:cut]
+	if i < 0 {
+		return 0
+	}
+	for i > 0 && !utf8.RuneStart(s[i]) {
+		i--
+	}
+	return i
+}
+
+// runeStartAtOrAfter returns the smallest offset >= i that begins a rune,
+// clamped to the length of s. Callers slicing s[result:] with it can never
+// start in the middle of a multi-byte rune.
+func runeStartAtOrAfter(s string, i int) int {
+	if i <= 0 {
+		return 0
+	}
+	if i >= len(s) {
+		return len(s)
+	}
+	for i < len(s) && !utf8.RuneStart(s[i]) {
+		i++
+	}
+	return i
 }
 
 // truncateRunes returns at most maxRunes runes of s.

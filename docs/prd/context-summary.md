@@ -597,13 +597,16 @@ actually done" without reading the tree.
 | 3 | not started | — |
 | 4 | **done**, reviewed | `templates/summary.md`, `summary_prompt.go`, `agent.go` |
 | 5 | **done**, reviewed, amended (§7.3) | `summary_manifest.go`, `summary_worktree.go`, `agent.go` |
-| 6-12 | not started | — |
+| 6 | **done** | `tools/recall.go`, `message.go`, `messages.sql`, `config.go`, `coordinator.go` |
+| 7-12 | not started | — |
 
-This is the §7.1 minimum viable subset (1, 4, 5) plus PR-2, which was cheap
-because it extends a helper that already existed. Zero schema changes, zero
-config changes, zero new dependencies. "Reviewed" means the two-axis review
-recorded below has been run and its findings applied; it does not mean the
-PRDs' acceptance commands all ran, since `task lint` cannot execute here.
+This is the §7.1 minimum viable subset (1, 4, 5) plus PR-2 and PR-6. One
+generated query, no schema change, and no new configuration option (the tool
+name is added to the built-in allow-list, which is not user-facing config).
+"Reviewed" means the
+two-axis review recorded below has been run and its findings applied; it does
+not mean the PRDs' acceptance commands all ran, since `task lint` cannot
+execute here.
 
 **PR-1 — truncation guard.** `summaryMaxOutputTokens = 20_000` is attached to
 the summarizer via `fantasy.WithMaxOutputTokens` (fixes P2). The pure helper
@@ -687,6 +690,60 @@ cost or cumulative totals, because the rejection paths do not save the session
 at all (adding it means deciding what a failed compaction costs, which belongs
 with PR-3's failure accounting). Guard rejections also do not yet increment a
 counter, so the circuit breaker still has nothing to read.
+
+**PR-6 — `recall` for archived tool results.** `recall(tool_call_id, offset,
+limit)` reads back a tool result that compaction dropped from the prompt,
+from the same SQLite row, byte for byte. It is additive: nothing elides a
+payload yet, so the tool is usable on its own, which is what makes PR-7
+reversible when it lands.
+
+The query takes no summary anchor — that is the point, since
+`ListFromSummary` is exactly what hides archived results — and filters on
+`session_id` rather than the `(role, created_at)` index, as §4.6 anticipated.
+No index was added.
+
+Implementation notes worth keeping:
+
+- **The header carries `exit=` and `bytes=`.** §4.6's example shows `exit`
+  for bash; `bytes` is borrowed from §4.3's tombstone, for the same reason:
+  it is what prices a retrieval. Both are the first thing a caller needs to
+  decide whether the body is worth fetching, and reading them off the body
+  would defeat the purpose of a header. `exit=` is gated on the tool being
+  bash, mirroring the manifest: a `view` result whose tail quotes
+  "Exit code 3" must not be reported as a failure.
+- **The exit-code parser moved into `internal/agent/tools`.** It was
+  `parseManifestExitCode` in the agent package, but `tools/bash.go` is what
+  *writes* the `Exit code N` line, so the inverse belongs beside it. Both the
+  manifest and `recall` now call `tools.ParseExitCode`, and the duplicated
+  "is this bash" predicate moved with it as `tools.IsBashToolName`. The
+  alternative — a second regexp and a second name check — would have been
+  two definitions that can drift apart, and the un-gated first draft did
+  exactly that: it attached `exit=` to non-bash results.
+- **`spill_path` is deliberately absent.** §7 says not to advertise a
+  capability PR-11 has not implemented. The params struct has only
+  `tool_call_id`, `offset` and `limit`. §4.6 asks the empty-argument error to
+  "explain both forms"; with one form shipped, it names that one rather than
+  describing a parameter the model cannot pass. §7's "both params set" test
+  therefore has no second parameter to set and is not written.
+- **The empty-result notice and the `is_error` omission are small
+  deviations.** §4.6 does not specify a response for a zero-byte result, and
+  returning a header with nothing after it would read as a retrieval that
+  failed; it says the result is empty instead. The `is_error` field in the
+  first draft was dropped from the header, because §4.6's header does not
+  carry it and the archived body already contains whatever the tool said.
+- **Slicing is rune-safe at both ends**, via `runeStartAtOrAfter` /
+  `runeStartAtOrBefore`, which now also back `truncateUTF8` — the rune walk
+  existed and is shared rather than re-implemented. Concatenating pages can
+  drop a rune but can never produce invalid UTF-8. `recallSlice` is pure and
+  table-tested.
+- **The tool is registered for sub-agents too**, per §4.6's "read-only"
+  note: it reads only the caller's own session, which a sub-agent owns
+  separately. It had to be added to `allToolNames()` as well, or
+  `AllowedTools` filtering would have removed it from every agent;
+  `resolveReadOnlyTools` now lists it so the task agent keeps it. The plan
+  agent does not get it: `resolvePlanTools` is a deliberately narrow
+  allow-list of planning aids, and an archived payload is only useful when
+  resuming work, which the plan agent does not do.
 
 **PR-4 — prompt and template.** `templates/summary.md` now carries the seven
 model-authored headings of §4.7 in order; `## Full Transcript` is absent by

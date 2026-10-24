@@ -53,6 +53,10 @@ type Querier interface {
 	ListNewFiles(ctx context.Context) ([]File, error)
 	ListSessionReadFiles(ctx context.Context, sessionID string) ([]ReadFile, error)
 	ListSessions(ctx context.Context) ([]Session, error)
+	// Backs `recall`, which resolves an archived tool call id to its stored
+	// result. Filters on session_id so it uses idx_messages_session_id; tool
+	// messages are a small fraction of a session, so no extra index is added.
+	ListToolMessagesBySession(ctx context.Context, sessionID string) ([]Message, error)
 	// Backs prompt history, which steps back one entry at a time.
 	ListUserMessagesBySession(ctx context.Context, sessionID string) ([]Message, error)
 	RecordFileRead(ctx context.Context, arg RecordFileReadParams) error
