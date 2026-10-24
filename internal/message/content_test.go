@@ -255,3 +255,52 @@ func TestToAIMessageIgnoresStats(t *testing.T) {
 	require.Len(t, messages, 1)
 	require.Len(t, messages[0].Content, 1, "stats are metadata and must not be sent back to the model")
 }
+
+func TestSetContentReplacesStreamedText(t *testing.T) {
+	t.Parallel()
+
+	t.Run("replaces the accumulated text and keeps other parts", func(t *testing.T) {
+		t.Parallel()
+
+		msg := Message{
+			Parts: []ContentPart{
+				ReasoningContent{Thinking: "thoughts"},
+				TextContent{Text: "<analysis>x</analysis>\nbody"},
+			},
+		}
+		msg.SetContent("body")
+
+		require.Len(t, msg.Parts, 2)
+		require.Equal(t, "body", msg.Content().Text)
+		require.Equal(t, "thoughts", msg.ReasoningContent().String())
+	})
+
+	t.Run("appends text when the stream produced none", func(t *testing.T) {
+		t.Parallel()
+
+		msg := Message{Parts: []ContentPart{ReasoningContent{Thinking: "t"}}}
+		msg.SetContent("body")
+		require.Equal(t, "body", msg.Content().Text)
+		require.Equal(t, "t", msg.ReasoningContent().String())
+	})
+
+	t.Run("collapses repeated text parts", func(t *testing.T) {
+		t.Parallel()
+
+		msg := Message{Parts: []ContentPart{
+			TextContent{Text: "a"},
+			TextContent{Text: "b"},
+		}}
+		msg.SetContent("final")
+		require.Len(t, msg.Parts, 1)
+		require.Equal(t, "final", msg.Content().Text)
+	})
+
+	t.Run("preserves the hidden flag of the replaced part", func(t *testing.T) {
+		t.Parallel()
+
+		msg := Message{Parts: []ContentPart{TextContent{Text: "streamed", Hidden: true}}}
+		msg.SetContent("final")
+		require.True(t, msg.Content().Hidden)
+	})
+}

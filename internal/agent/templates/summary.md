@@ -1,48 +1,74 @@
-You are summarizing a conversation to preserve context for continuing work later.
+**This summary is the only context that will survive.** Every message before it
+will be gone when the conversation resumes: no tool results, no file contents,
+no earlier reasoning. Write for the teammate who reads this document instead.
+Be thorough.
 
-**Critical**: This summary will be the ONLY context available when the conversation resumes. Assume all previous messages will be lost. Be thorough.
+You are briefing a teammate who is taking over your work mid-task.
 
-**Required sections**:
+**Tool use is forbidden.** You have no tools worth calling for this task and
+none of them will be executed. Tool calls will be rejected and will waste this
+turn: nothing you write afterwards will be saved. Read the conversation above
+and write the summary.
+
+You may open a single `<analysis>` block at the very start of your reply to
+think before writing. It is stripped before the summary is stored, so nothing
+in it survives — put every fact that matters in the sections below.
+
+**Required sections**, in this order. Every section is mandatory; write `none`
+if a section has nothing to report, so "nothing happened" stays
+distinguishable from "the summarizer skipped it".
 
 ## Current State
 
-- What task is being worked on (exact user request)
-- Current progress and what's been completed
-- What's being worked on right now (incomplete work)
-- What remains to be done (specific next steps, not vague)
+- The exact current user request, quoted verbatim.
+- Progress so far: what is completed and verified, what is half done, what has
+  not been started.
+- What was in flight when this summary was taken.
+- The todo list, restated with each item's status. If there is no todo list,
+  say so.
 
-## Files & Changes
+## User Messages
 
-- Files that were modified (with brief description of changes)
-- Files that were read/analyzed (why they're relevant)
-- Key files not yet touched but will need changes
-- File paths and line numbers for important code locations
+Every user message from the conversation, in order, verbatim. Do not
+paraphrase, merge, shorten or reorder. Include messages that consist only of a
+shell command, annotated as such. This is the highest-value section: mid-task
+corrections and added constraints survive only here.
 
-## Technical Context
+## Constraints
 
-- Architecture decisions made and why
-- Patterns being followed (with examples)
-- Libraries/frameworks being used
-- Commands that worked (exact commands with context)
-- Commands that failed (what was tried and why it didn't work)
-- Environment details (language versions, dependencies, etc.)
+Explicit limits the user stated, quoted verbatim: files not to touch,
+libraries to use or avoid, style rules, budgets, deadlines, things the user
+already rejected.
 
-## Strategy & Approach
+## Decisions
 
-- Overall approach being taken
-- Why this approach was chosen over alternatives
-- Key insights or gotchas discovered
-- Assumptions made
-- Any blockers or risks identified
+Each decision, its rationale, and the evidence that supports it (file path,
+command, error string, benchmark). Mark decisions that were later reversed as
+`superseded by: <the later decision>`.
+
+## Rejected Approaches
+
+What was tried, why it failed, and the evidence it failed. Keep failures
+intact; a reader who does not know the dead ends will walk into them again.
+
+## Artifacts
+
+Breadcrumbs the resuming assistant can query immediately: file path, symbol,
+line number. One item per line, with a note on why it matters. Do not guess a
+path or line number you have not seen. (A separate machine-generated index
+carries the authoritative list of changed files; this section carries the why.)
 
 ## Exact Next Steps
 
-Be specific. Don't write "implement authentication" - write:
+A numbered list of concrete actions. Not "implement authentication" but
+"add the token check to internal/auth/middleware.go:112, then run
+go test ./internal/auth/". End with a verbatim quote of the most recent
+exchange showing where the work stopped.
 
-1. Add JWT middleware to src/middleware/auth.js:15
-2. Update login handler in src/routes/user.js:45 to return token
-3. Test with: npm test -- auth.test.js
+**Do not shorten paths, commands, error strings or user quotes.** They are the
+reason the summary exists. Length itself is not capped, but every section must
+be populated: a short summary that drops a fact is worse than a long one that
+repeats one.
 
-**Tone**: Write as if briefing a teammate taking over mid-task. Include everything they'd need to continue without asking questions. No emojis ever.
-
-**Length**: No limit. Err on the side of too much detail rather than too little. Critical context is worth the tokens.
+**Tone**: briefing a teammate who starts in five minutes from this document
+alone. No emojis.

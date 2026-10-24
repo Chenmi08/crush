@@ -191,3 +191,37 @@ func TestSummarize_NoFinishReasonIsAccepted(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, after.SummaryMessageID)
 }
+
+func TestSummarize_StripsAnalysisBlockBeforePersisting(t *testing.T) {
+	t.Parallel()
+
+	env := testEnv(t)
+	body := "## Current State\n- done\n\n## User Messages\n- \"fix the test\""
+	model := &summaryStreamModel{
+		text:         "<analysis>\nlet me think about this\n</analysis>\n\n" + body,
+		finishReason: fantasy.FinishReasonStop,
+	}
+	sa := summaryTestAgent(env, model)
+
+	ctx := t.Context()
+	sessionID := summaryTestSession(t, env)
+
+	require.NoError(t, sa.Summarize(ctx, sessionID, fantasy.ProviderOptions{}, nil))
+
+	after, err := env.sessions.Get(ctx, sessionID)
+	require.NoError(t, err)
+	require.NotEmpty(t, after.SummaryMessageID)
+
+	msg, err := env.messages.Get(ctx, after.SummaryMessageID)
+	require.NoError(t, err)
+	content := msg.Content().Text
+	require.NotContains(t, content, "<analysis>")
+	require.NotContains(t, content, "let me think about this")
+
+	// The narrative is preserved verbatim.
+	require.Equal(t, body, content)
+	// The seven authored headings survive the strip.
+	for _, heading := range []string{"## Current State", "## User Messages"} {
+		require.Contains(t, content, heading)
+	}
+}

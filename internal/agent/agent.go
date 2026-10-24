@@ -861,7 +861,6 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 		fantasy.WithSystemPrompt(systemPrompt),
 		fantasy.WithTools(agentTools...),
 		fantasy.WithUserAgent(userAgent),
-		fantasy.WithMaxOutputTokens(summaryMaxOutputTokens),
 	)
 
 	sessionLock := sync.Mutex{}
@@ -1651,6 +1650,13 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 		}
 		return guardErr
 	}
+
+	// The prompt lets the model think inside an <analysis> block. It is
+	// stripped only here, on completion: the UI streams the deltas live,
+	// and the block must not become part of the context the session is
+	// reduced to. The subsequent update is terminal (it adds the finish
+	// part), so it also flushes the trim.
+	summaryMessage.SetContent(stripAnalysisBlock(summaryMessage.Content().Text))
 
 	summaryMessage.AddFinish(message.FinishReasonEndTurn, "", "")
 	err = a.messages.Update(genCtx, summaryMessage)
@@ -2541,17 +2547,25 @@ func (a *sessionAgent) workaroundProviderMediaLimitations(messages []fantasy.Mes
 }
 
 // buildSummaryPrompt constructs the prompt text for session summarization.
+// The todo list is injected as input: the summary template already asks for
+// it to be restated under "## Current State", and the injected block is the
+// prompt, not the output.
 func buildSummaryPrompt(todos []session.Todo) string {
 	var sb strings.Builder
-	sb.WriteString("Provide a detailed summary of our conversation above.")
-	if len(todos) > 0 {
-		sb.WriteString("\n\n## Current Todo List\n\n")
-		for _, t := range todos {
-			fmt.Fprintf(&sb, "- [%s] %s\n", t.Status, t.Content)
-		}
-		sb.WriteString("\nInclude these tasks and their statuses in your summary. ")
-		sb.WriteString("Instruct the resuming assistant to use the `todos` tool to continue tracking progress on these tasks.")
+	sb.WriteString("Provide a detailed summary of our conversation above, following the required sections.")
+	if len(todos) == 0 {
+		sb.WriteString("\n\nThe session has no todo list. Say so under `## Current State`; do not invent one.")
+		return sb.String()
 	}
+	sb.WriteString("\n\nThe session's todo list at the time of this summary:\n\n")
+	for _, t := range todos {
+		fmt.Fprintf(&sb, "- [%s] %s\n", t.Status, t.Content)
+		if t.ActiveForm != "" {
+			fmt.Fprintf(&sb, "  active form: %s\n", t.ActiveForm)
+		}
+	}
+	sb.WriteString("\nRestate this list, with each item's status, under `## Current State`. ")
+	sb.WriteString("Instruct the resuming assistant to keep tracking these tasks with the `todos` tool.")
 	return sb.String()
 }
 

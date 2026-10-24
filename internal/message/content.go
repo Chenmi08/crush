@@ -381,6 +381,31 @@ func (m *Message) AppendContent(delta string) {
 	}
 }
 
+// SetContent replaces the message's text with text, collapsing any text parts
+// accumulated by streaming deltas into one. Non-text parts are preserved.
+// Used when a streamed body must be rewritten after the stream completes, e.g.
+// stripping a scratchpad block from a summary.
+func (m *Message) SetContent(text string) {
+	parts := make([]ContentPart, 0, len(m.Parts))
+	replaced := false
+	for _, part := range m.Parts {
+		tc, ok := part.(TextContent)
+		if !ok {
+			parts = append(parts, part)
+			continue
+		}
+		if replaced {
+			continue
+		}
+		parts = append(parts, TextContent{Text: text, Hidden: tc.Hidden})
+		replaced = true
+	}
+	if !replaced && text != "" {
+		parts = append(parts, TextContent{Text: text})
+	}
+	m.Parts = parts
+}
+
 func (m *Message) AppendReasoningContent(delta string) {
 	found := false
 	for i, part := range m.Parts {
