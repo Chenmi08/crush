@@ -58,6 +58,14 @@ const (
 	largeContextWindowThreshold = 200_000
 	largeContextWindowBuffer    = 20_000
 	smallContextWindowRatio     = 0.2
+
+	// summaryMaxOutputTokens caps the length of a single summary. It is an
+	// output cap, not a context cap: the summarizer reads the whole
+	// conversation it is replacing and writes one document. Leaving it
+	// unset hands the summary length to whatever the provider defaults to,
+	// which is far too small for a long session and silently truncates
+	// mid-section.
+	summaryMaxOutputTokens = 20_000
 )
 
 var userAgent = fmt.Sprintf("Charm-Crush/%s (https://charm.land/crush)", version.Version)
@@ -853,6 +861,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 		fantasy.WithSystemPrompt(systemPrompt),
 		fantasy.WithTools(agentTools...),
 		fantasy.WithUserAgent(userAgent),
+		fantasy.WithMaxOutputTokens(summaryMaxOutputTokens),
 	)
 
 	sessionLock := sync.Mutex{}
@@ -1560,6 +1569,7 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 		largeModel.Model,
 		fantasy.WithSystemPrompt(string(summaryPrompt)),
 		fantasy.WithUserAgent(userAgent),
+		fantasy.WithMaxOutputTokens(summaryMaxOutputTokens),
 	)
 	summaryMessage, err := a.messages.Create(ctx, sessionID, message.CreateMessageParams{
 		Role:             message.Assistant,
@@ -1622,6 +1632,24 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 			return updateErr
 		}
 		return err
+	}
+
+	if guardErr := summaryOutcome(resp); guardErr != nil {
+		// The provider stopped mid-document. Persisting this summary as a
+		// success would replace the whole conversation with a partial
+		// summary and leave no signal anywhere that it is incomplete, so
+		// record the failure on the summary message instead and leave the
+		// session's anchor (the previous, complete summary) untouched.
+		slog.Warn(
+			"Summary hit the output limit, keeping the previous summary",
+			"session_id", sessionID,
+			"summary_message_id", summaryMessage.ID,
+		)
+		summaryMessage.AddFinish(message.FinishReasonError, "Summarization Error", "summary hit the output limit")
+		if updateErr := a.messages.Update(genCtx, summaryMessage); updateErr != nil {
+			return updateErr
+		}
+		return guardErr
 	}
 
 	summaryMessage.AddFinish(message.FinishReasonEndTurn, "", "")
