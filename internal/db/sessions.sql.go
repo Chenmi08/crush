@@ -341,10 +341,7 @@ type UpdateSessionDisabledSkillsParams struct {
 }
 
 func (q *Queries) UpdateSessionDisabledSkills(ctx context.Context, arg UpdateSessionDisabledSkillsParams) (int64, error) {
-	result, err := q.exec(ctx, q.updateSessionDisabledSkillsStmt, updateSessionDisabledSkills,
-		arg.DisabledSkills,
-		arg.ID,
-	)
+	result, err := q.exec(ctx, q.updateSessionDisabledSkillsStmt, updateSessionDisabledSkills, arg.DisabledSkills, arg.ID)
 	if err != nil {
 		return 0, err
 	}

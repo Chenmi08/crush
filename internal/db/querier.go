@@ -60,6 +60,7 @@ type Querier interface {
 	SetSessionChannel(ctx context.Context, arg SetSessionChannelParams) (Session, error)
 	UpdateMessage(ctx context.Context, arg UpdateMessageParams) error
 	UpdateSession(ctx context.Context, arg UpdateSessionParams) (Session, error)
+	UpdateSessionDisabledSkills(ctx context.Context, arg UpdateSessionDisabledSkillsParams) (int64, error)
 	UpdateSessionTitleAndUsage(ctx context.Context, arg UpdateSessionTitleAndUsageParams) error
 }
 

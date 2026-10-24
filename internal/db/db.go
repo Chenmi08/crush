@@ -156,11 +156,11 @@ func Prepare(ctx context.Context, db DBTX) (*Queries, error) {
 	if q.updateMessageStmt, err = db.PrepareContext(ctx, updateMessage); err != nil {
 		return nil, fmt.Errorf("error preparing query UpdateMessage: %w", err)
 	}
-	if q.updateSessionDisabledSkillsStmt, err = db.PrepareContext(ctx, updateSessionDisabledSkills); err != nil {
-		return nil, fmt.Errorf("error preparing query UpdateSessionDisabledSkills: %w", err)
-	}
 	if q.updateSessionStmt, err = db.PrepareContext(ctx, updateSession); err != nil {
 		return nil, fmt.Errorf("error preparing query UpdateSession: %w", err)
+	}
+	if q.updateSessionDisabledSkillsStmt, err = db.PrepareContext(ctx, updateSessionDisabledSkills); err != nil {
+		return nil, fmt.Errorf("error preparing query UpdateSessionDisabledSkills: %w", err)
 	}
 	if q.updateSessionTitleAndUsageStmt, err = db.PrepareContext(ctx, updateSessionTitleAndUsage); err != nil {
 		return nil, fmt.Errorf("error preparing query UpdateSessionTitleAndUsage: %w", err)
@@ -390,14 +390,14 @@ func (q *Queries) Close() error {
 			err = fmt.Errorf("error closing updateMessageStmt: %w", cerr)
 		}
 	}
-	if q.updateSessionDisabledSkillsStmt != nil {
-		if cerr := q.updateSessionDisabledSkillsStmt.Close(); cerr != nil {
-			err = fmt.Errorf("error closing updateSessionDisabledSkillsStmt: %w", cerr)
-		}
-	}
 	if q.updateSessionStmt != nil {
 		if cerr := q.updateSessionStmt.Close(); cerr != nil {
 			err = fmt.Errorf("error closing updateSessionStmt: %w", cerr)
+		}
+	}
+	if q.updateSessionDisabledSkillsStmt != nil {
+		if cerr := q.updateSessionDisabledSkillsStmt.Close(); cerr != nil {
+			err = fmt.Errorf("error closing updateSessionDisabledSkillsStmt: %w", cerr)
 		}
 	}
 	if q.updateSessionTitleAndUsageStmt != nil {
@@ -488,8 +488,8 @@ type Queries struct {
 	renameSessionStmt                    *sql.Stmt
 	setSessionChannelStmt                *sql.Stmt
 	updateMessageStmt                    *sql.Stmt
-	updateSessionDisabledSkillsStmt      *sql.Stmt
 	updateSessionStmt                    *sql.Stmt
+	updateSessionDisabledSkillsStmt      *sql.Stmt
 	updateSessionTitleAndUsageStmt       *sql.Stmt
 }
 
@@ -541,8 +541,8 @@ func (q *Queries) WithTx(tx *sql.Tx) *Queries {
 		renameSessionStmt:                    q.renameSessionStmt,
 		setSessionChannelStmt:                q.setSessionChannelStmt,
 		updateMessageStmt:                    q.updateMessageStmt,
-		updateSessionDisabledSkillsStmt:      q.updateSessionDisabledSkillsStmt,
 		updateSessionStmt:                    q.updateSessionStmt,
+		updateSessionDisabledSkillsStmt:      q.updateSessionDisabledSkillsStmt,
 		updateSessionTitleAndUsageStmt:       q.updateSessionTitleAndUsageStmt,
 	}
 }
