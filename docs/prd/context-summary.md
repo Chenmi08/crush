@@ -911,10 +911,12 @@ whether the archive is worth searching at all.
 
 ---
 
-**Not verifiable in this environment.** `sqlc` is not installed and
-`golangci-lint` (both v1 and v2 on `PATH`) refuses to load the config because
-it was built with Go 1.24 against a Go 1.27 target. Nothing in PR-1/4/5 needs
-either, but PR-3 and later must not be merged on a green test run alone.
+**Partly not verifiable in this environment.** `golangci-lint` (both v1 and
+v2 on `PATH`) refuses to load the config because it was built with Go 1.24
+against a Go 1.27 target, so `task lint` cannot run here; PR-3 and later must
+not be merged on a green test run alone. `sqlc` was the other blocker and is
+now solved — see the install recipe in §13, which is what let PR-6 add a
+query.
 Separately, `./internal/sandbox` fails five tests on this machine (a
 locale-dependent "read-only filesystem" message and
 `landlock: function not implemented`); the same five fail on a pristine
@@ -1824,6 +1826,51 @@ conversation failure multiplies the damage.
   PRD adds must work under a read-only policy, or be skipped for sub-agents.
 - `recall` and the transcript pointer must not leak absolute paths outside
   `DataDirectory`.
+- A synthetic tool name that ends in `_bash` is still a bash tool: MCP tools
+  are namespaced `<server>_<tool>`. Use `tools.IsBashToolName` rather than
+  comparing to `"bash"`, or an MCP bash wrapper will report no exit status.
+
+**Toolchain: regenerating `internal/db`**
+
+`sqlc` is not vendored and `go install` fails in this environment for two
+avoidable reasons — the module cache is read-only, and checksum verification
+wants to write to `sum.golang.org`'s cache. Both are fixed by pointing at a
+writable cache and disabling the checksum DB for the install only:
+
+```sh
+mkdir -p /tmp/gomodcache /tmp/gobin
+env GOMODCACHE=/tmp/gomodcache GOSUMDB=off GOFLAGS=-mod=mod \
+    GOBIN=/tmp/gobin \
+    go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0
+```
+
+`GOPROXY` may need setting too: `proxy.golang.org` timed out from this
+machine while a regional mirror worked, so add `GOPROXY=<mirror>,direct` if
+the download stalls. The `GOSUMDB=off` is for the install only — it works
+around the read-only sumdb cache, and nothing about the project's own
+dependency verification changes.
+
+Verified as written: with the cache warm the recipe installs without
+`GOPROXY`, and `/tmp/gobin/sqlc generate` on a clean checkout produces no
+diff. Remove the temp directories afterwards if disk matters — the sandbox
+may refuse to delete them, in which case leave them; they are outside the
+repo.
+
+Pin the version: the committed files carry a `sqlc v1.30.0` marker, and a
+different generator reformats unrelated code, which buries the real change in
+the diff. `/tmp/gobin/sqlc generate` then matches `internal/db` exactly (see
+`24d7563`, which cleared a pre-existing drift of that kind before PR-6 could
+add to it).
+
+Two consequences worth knowing before the next schema PR:
+
+- **Verify the regeneration is empty first.** Run `sqlc generate` before
+  editing any query. If `git status` shows `internal/db` changes, the
+  checkout was already out of sync: commit that separately, so the schema PR
+  contains only its own query.
+- **`golangci-lint` still cannot run here** (see the note above
+  §7 "PR-1"). `task lint`, including `task lint:log`, is not a check this
+  environment can perform; review new log calls by hand.
 
 **Definition of done for the whole PRD**
 
@@ -1845,22 +1892,26 @@ Follow this literally; it assumes no memory of the design discussion.
    `preparePrompt`, and `internal/agent/templates/summary.md`.
 2. **Verify the anchors in §3 still match.** Line numbers drift; symbol names
    should not. If a symbol moved, update §3 in the same PR that moves it.
-3. **Pick PR-1.** It is the smallest, it is independent, and it fixes a
-   correctness bug. Do not start with PR-4 or PR-7 even though they are more
-   interesting — PR-1 sets the pattern for everything else (pure helper in a
-   new file, table test, no schema change).
-4. **One PR at a time.** Do not bundle. Each PR in §7 lists its own tests and
+3. **Pick the next PR from §7.2's status table, not from this list.** PR-1,
+   PR-2, PR-4, PR-5 and PR-6 have landed; the next one by dependency order is
+   PR-3 (circuit breaker). Look at the table before starting anything: it is
+   the only place that says what is actually done.
+4. **If the PR touches the schema, set up `sqlc` first** using the recipe in
+   §13, and confirm `sqlc generate` produces no diff *before* editing any
+   query. A dirty baseline means a drifted checkout, not your change.
+5. **One PR at a time.** Do not bundle. Each PR in §7 lists its own tests and
    its own acceptance command; run exactly those, then `task test` before
    opening the PR.
-5. **Never regenerate the baseline fixtures blindly.** If a PR is supposed to
+6. **Never regenerate the baseline fixtures blindly.** If a PR is supposed to
    change rendered history, assert the change explicitly in the test rather
    than accepting a golden diff.
-6. **When the document and the code disagree, the code wins for facts and
+7. **When the document and the code disagree, the code wins for facts and
    the document wins for intent.** Record the discrepancy in the PR
    description and fix the document in the same PR.
 
-If you are asked to "just do the summary improvement", the answer is PR-1,
-PR-4, PR-5 in that order (see §7.1). Everything else is optional on top.
+If you are asked to "just do the summary improvement" and none of it has
+landed, the answer is PR-1, PR-4, PR-5 in that order (see §7.1). On this
+branch those are done; check §7.2 and continue from PR-3.
 
 ---
 
