@@ -252,15 +252,15 @@ by code from `messages`, never by the model.
 <context_manifest generated="2026-10-24T10:12:03Z">
 archived: messages=142 range=2026-10-23T14:02:11Z..2026-10-23T15:31:40Z tool_calls=38 tool_result_bytes=412988 failures=3
 failures:
-- id=msg_7f3a tool=bash exit=1 cmd="go test ./internal/agent/..." key="--- FAIL: TestSummarize"
-- id=msg_9c11 tool=bash exit=1 cmd="go build ./..." key="undefined: foo"
+- id=msg_7f3a tool=bash exit=1 cmd="go test ./internal/agent/..." key="--- FAIL: TestSummarize" tool_call_id=call_7f3a
+- id=msg_9c11 tool=bash exit=1 cmd="go build ./..." key="undefined: foo" tool_call_id=call_9c11
 files:
 - path=internal/agent/agent.go ops=read,edit reads=4 edits=2 last=2026-10-23T15:28:02Z src=tool
 - path=internal/message/message.go ops=read reads=1 last=2026-10-23T14:40:09Z src=tool
 - path=internal/agent/summary_manifest.go ops=none src=git state=modified
 anchors:
 - id=msg_2b01 kind=user
-- id=msg_7f3a kind=failure
+- id=call_7f3a kind=failure
 coverage: 142/142 archived messages scanned
 </context_manifest>
 ```
@@ -269,7 +269,13 @@ Generation rules:
 
 - `archived` counts messages strictly before the anchor being replaced.
 - `failures`: tool results with `IsError`, or `bash` content whose parsed
-  exit code is non-zero; **most recent 10**, newest first.
+  exit code is non-zero; **most recent 10**, newest first. Each line ends with
+  `tool_call_id=<id>`: `id` is the message that carried the result, while
+  `tool_call_id` is the handle `recall` takes, and the two differ. The extra
+  field is appended **after** the fields listed in §4.4 so a reader that
+  learned that order still parses the line, and it is emitted here rather than
+  only in `anchors:` because anchors are capped at ten shared with the user
+  messages, so an eleventh failure must still be retrievable.
 - `files`: derived from `view`/`edit`/`write`/`multiedit`/`lsp_replace_symbol`
   tool calls found in the archived range, keyed by file path, with op counts
   and last-seen timestamp, **merged with** the paths `git status` reports as
@@ -277,8 +283,12 @@ Generation rules:
   **Most recent 20** by `last`, newest first. The git half is required, not
   optional: see D-1 in §7.3 — tool calls alone miss every edit made through a
   shell command, which is how most edits actually happen.
-- `anchors`: up to 10 `message_id`s the agent can pass to `recall`
-  (all user messages, all failures).
+- `anchors`: up to 10 ids the agent can pass to `recall` (all user messages,
+  all failures). **The id is the argument `recall` takes, so it differs by
+  kind**: a `kind=user` anchor is a message id (`recall(message_id=...)`), a
+  `kind=failure` anchor is the tool call id of the failing result
+  (`recall(tool_call_id=...)`). An earlier draft published message ids for
+  both, which no `recall` parameter accepted.
 - `coverage`: `scanned/total`. If any archived message failed to decode, emit
   `coverage: 140/142 scanned (2 undecodable)` — the agent must be able to
   tell "not there" from "not indexed".
@@ -326,16 +336,17 @@ referenced by the current `SummaryMessageID`.
 Failure to write the transcript is **non-fatal**: log at `Warn`, continue
 with the summary (the manifest and messages table still hold the facts).
 
-### 4.6 `recall` tool (PR-6)
+### 4.6 `recall` tool (PR-6, extended by PR-11 and PR-20)
 
-Final shape (PR-6 ships everything except `SpillPath`, which PR-11 adds;
-do not advertise a param you cannot serve):
+Final shape (PR-6 ships `ToolCallID`; PR-11 adds `SpillPath`; PR-20 adds
+`MessageID` so the `anchors:` handles §4.4 publishes are actually usable):
 
 ```go
 const RecallToolName = "recall"
 
 type RecallParams struct {
     ToolCallID string `json:"tool_call_id,omitempty"`
+    MessageID  string `json:"message_id,omitempty"`  // PR-20
     SpillPath  string `json:"spill_path,omitempty"` // PR-11 only
     Offset     int    `json:"offset,omitempty"`
     Limit      int    `json:"limit,omitempty"`      // bytes, default 8192, max 65536
@@ -344,12 +355,20 @@ type RecallParams struct {
 
 Behavior:
 
-- Exactly one of `tool_call_id` / `spill_path` must be set; otherwise return
-  a text error explaining both forms.
+- Exactly one of `tool_call_id` / `message_id` / `spill_path` must be set;
+  otherwise return a text error explaining all three forms.
 - `tool_call_id`: scan `role='tool'` messages of the **current session**
   (from `GetSessionFromContext(ctx)`), decode `parts`, find the matching
   `ToolResult`. Not found → error listing that the id is unknown for this
   session (do not silently return empty).
+- `message_id`: fetch the message and require it to belong to the current
+  session. It must not be a summary row: that row is the previous
+  compaction's own output, so reading it back would hand the model a stale
+  copy of the state it is replacing. An assistant row is refused too, with the
+  tool call ids it carries: summaries written before PR-20 used an assistant
+  message id as a failure anchor, and "0 bytes" would be indistinguishable
+  from "that record is empty". Otherwise return the message's text under the
+  same paging rules as a tool result, with a `role=user` header.
 - Return a header, then the body slice:
 
 ```
@@ -365,8 +384,8 @@ recorded_at=2026-10-23T15:12:04Z (archived record; may not reflect current state
 - Body is returned **unmodified** (including ANSI — do not strip; the caller
   asked for the archived bytes).
 - `Offset` beyond the end → empty body plus an explicit notice.
-- Session mismatch, sub-session, or a `tool_call_id` from a different session
-  → error.
+- Session mismatch, sub-session, or a `tool_call_id` / `message_id` from a
+  different session → error.
 
 New query (`internal/db/sql/messages.sql`), then `sqlc generate`:
 
@@ -575,6 +594,7 @@ and PR-12 are follow-ups.
 | 10 | Real todo + recitation | — | no | — |
 | 11 | `fetch`/search spill handles | 6 | no | — |
 | 12 | Write/exec ledger + recent files | — | yes (new table) | — |
+| 20 | Make published anchors retrievable | 5, 6 | no | — |
 
 Three PRs (3, 9, 12) touch the schema. Each carries its own migration so two
 can be in flight without a conflict; if they land in the same window, merge
@@ -604,10 +624,13 @@ actually done" without reading the tree.
 | 9 | **done**, reviewed | `summary_merge.go`, `agent.go`, `session.go`, migration + sqlc |
 | 11 | **done**, reviewed | `tools/fetch.go`, `tools/search.go`, `tools/recall.go`, `tools/spill.go`, `shell/truncate.go` |
 | 12 | **done**, reviewed | `filetracker/service.go`, `summary_recent.go`, `agent.go`, tools, migration + sqlc |
+| 20 | **done** | `tools/recall.go`, `tools/recall.md`, `summary_manifest.go`, PRD §4.4/§4.6 |
 
 This is the §7.1 minimum viable subset (1, 4, 5) plus PR-2, PR-3, PR-6, PR-7,
-PR-8, PR-9, PR-10, PR-11 and PR-12. All twelve §7 PRs are now implemented;
-PR-13..PR-19 remain deferred (§8). PR-3 adds one migration; PR-6 adds one generated query; PR-7 adds
+PR-8, PR-9, PR-10, PR-11 and PR-12. All twelve §7 PRs are now implemented, and
+PR-20 closes the defect the post-implementation inspection of a real session
+found in PR-5 and PR-6 together; PR-13..PR-19 remain deferred (§8). PR-3 adds
+one migration; PR-6 adds one generated query; PR-7 adds
 the first user-facing configuration option in this PRD
 (`compaction-elide`, §6).
 "Reviewed" means the
@@ -730,8 +753,9 @@ Implementation notes worth keeping:
   capability PR-11 has not implemented. The params struct has only
   `tool_call_id`, `offset` and `limit`. §4.6 asks the empty-argument error to
   "explain both forms"; with one form shipped, it names that one rather than
-  describing a parameter the model cannot pass. §7's "both params set" test
-  therefore has no second parameter to set and is not written.
+  describing a parameter the model cannot pass, and §7's "both parameters set"
+  case had no second parameter to set. PR-11 added the second form and PR-20
+  the third, so the error now names all three.
 - **The empty-result notice and the `is_error` omission are small
   deviations.** §4.6 does not specify a response for a zero-byte result, and
   returning a header with nothing after it would read as a retrieval that
@@ -792,8 +816,10 @@ facts, the document wins for intent", recorded here rather than silently):
 draft. All three are fixed and each has a regression test:
 
 1. `- id=... tool_call_id=... tool=...` inserted an undeclared field into the
-   normative failure line of §4.4. The line is back to
-   `id, tool, exit, cmd, key`.
+   normative failure line of §4.4. The line went back to
+   `id, tool, exit, cmd, key` — which it kept until PR-20 re-added
+   `tool_call_id` at the end, deliberately and with §4.4 amended to match
+   (§7.3 D-3).
 2. `anchors` kept the **oldest** ten handles when trimming, dropping the
    current request — the one §4.7 calls the most important thing to carry.
    It now keeps the newest ten and still renders oldest-first.
@@ -1132,6 +1158,73 @@ unavailable or the tree has been reverted since. A resuming agent needs both
 facts, and the manifest's `src=` field already distinguishes the sources on its
 side.
 
+**PR-20 — make the published anchors retrievable.** PR-5 published ids under
+`anchors:` and PR-6 shipped `recall`, and the two did not meet: the manifest
+listed message ids while `recall` accepted only tool call ids. Inspecting a
+real compacted session (565 archived messages, six anchors) and calling the
+tool with each one produced six "no archived tool result" errors, so every
+handle the summary offered was dead on arrival. The document carried the same
+contradiction (§4.4 said "`message_id`s the agent can pass to `recall`", §4.6
+listed no such parameter), which is why it survived review.
+
+Two changes close it, one on each side:
+
+- **`recall` accepts `message_id`.** A user request is worth keeping verbatim
+  — §4.7 calls that section the highest-value one — and compaction otherwise
+  keeps it only as the model's paraphrase. The reader fetches the message,
+  requires the caller's own session, refuses a summary row (it is the previous
+  compaction's output; reading it back would offer a stale copy of the state
+  being replaced), and pages the text with the same rule as a tool result. The
+  alternative — teaching the model to call `recall` with an id it was never
+  given a parameter for — was not an option, and stuffing user text into the
+  manifest would recreate the bloat compaction removes.
+- **Failure anchors and failure lines carry `tool_call_id`.** The id a
+  `kind=failure` anchor publishes is now the tool call id, because that is
+  what fetches the failing output; the assistant message that requested the
+  call is not what a resuming agent needs to read. The same handle is appended
+  to each `failures:` line, after every field §4.4 fixes, because anchors are
+  capped at ten shared with the user messages — the eleventh failure would
+  otherwise be listed but unreadable.
+
+Deduplication now keys on the handle rather than the message: results batched
+into one assistant message share its id, and each failed call is a separate
+payload worth its own anchor.
+
+**Old summaries still parse.** A summary written before this change lists a
+failure anchor as the assistant message that requested the failing call. That
+id now reaches `recall` as `message_id`, and answering "0 bytes" would read as
+"the record is empty" when the payload simply lives under a different key, so
+an assistant row is refused with the tool call ids from that message. Anchors
+are not re-read from disk, so the fix must be kind to the ids already written.
+
+Two smaller facts recorded while fixing it. `manifestAnchor` gained nothing —
+the renderer formats `id` and `kind`, and `kind` is what tells the caller
+which `recall` parameter to pass. And the two failure list ids are now
+deliberately different fields: `id=` names the carrying message (stable across
+the batch, useful for grouping), `tool_call_id=` names the payload.
+
+**Inspection findings left as documented gaps, not code changes.** A full
+read of one real compaction against the PRD produced two more observations
+that do not justify behaviour changes on their own:
+
+- **A session that edits only through `bash` produces no recently-modified
+  list.** `file_events` gets `exec` rows from shell commands but no `write`
+  rows, so PR-12's block is empty exactly in the case D-1 built the git half
+  for. The block is not wrong — it claims only what file tools wrote, and the
+  manifest's `src=git` entries still name the changed paths — but the two
+  sections then disagree, and a future reader will ask why. Fixing it means
+  deriving paths from commands (rejected in D-1: `sed -i`, heredocs and shell
+  functions are not reliably parseable) or reading git for this block too
+  (then it duplicates `files:`). Left as is, and named here so the empty list
+  is not mistaken for a bug in the ledger.
+- **Manifest `files:` paths are absolute while PR-12's list is
+  workspace-relative.** §4.4's example shows relative paths. The manifest
+  keeps whatever the tool call recorded, which is absolute for the file tools;
+  `recentlyModifiedBlock` shortens against the session's workspace. Harmless
+  today — both spellings resolve — but the inconsistency is deliberate only in
+  the sense that nobody chose it, so a future pass should pick one and apply
+  it to both.
+
 **Known gaps, in dependency order.** PR-12's exec ledger has no reader: the
 summary lists writes only, and nothing else queries `kind='exec'` yet. The
 rows are correct and bounded, but they are written for a consumer that does
@@ -1146,8 +1239,8 @@ to the message service and belongs with a later PR.
 
 ### 7.3 Defects found after implementation
 
-Two defects were found by inspecting a real session rather than the test
-suite. Both are recorded here with the reasoning, because each one invalidates
+Three defects were found by inspecting a real session rather than the test
+suite. All are recorded here with the reasoning, because each one invalidates
 a claim this document makes elsewhere, and a future implementer will otherwise
 re-derive the same wrong design.
 
@@ -1239,6 +1332,41 @@ session carrying four kilobytes of tool output from one carrying four
 hundred. §4.3 argues the tombstone needs a byte count so the model can price a
 retrieval; the same argument applies one level up, where the decision is
 whether the archive is worth searching at all.
+
+**D-3 — `anchors:` published ids that no `recall` parameter accepted.**
+
+The manifest offered up to ten `message_id`s "the agent can pass to `recall`",
+and `recall` had no `message_id` parameter: its params were `tool_call_id`,
+`offset` and `limit` from PR-6, plus `spill_path` from PR-11. Neither review
+axis caught it because each PR was internally consistent — PR-5 emitted ids
+its own tests could match, PR-6 filtered the ids it was handed — and the
+contract between them lived only in prose.
+
+Probing a real compacted session made it unambiguous. Its manifest listed six
+anchors; calling the tool with each returned:
+
+```
+no archived tool result with tool_call_id "c210f989-..." in this session;
+ids from other sessions, parent sessions or sub-agent sessions are not visible here
+```
+
+That error is itself misleading, which is the second half of the defect: the
+id *is* in this session, it is simply not a tool call id, so the message
+points the model at a scoping problem that does not exist. The same six ids
+were all resolvable the moment `message_id` was added.
+
+The fix has no schema or query cost: `messages.Get` already existed, and the
+session check reuses the field it returns. The design question was what
+`kind=failure` should publish, and the answer follows from what the section is
+for — a resuming agent wants the failing output, and only `tool_call_id`
+reaches it, so failure anchors switched from the message id to the call id.
+Both ids still appear in `failures:` under distinct names, because the message
+id is the stable key when several results share one assistant row.
+
+The general lesson, since this document is the contract between PRs: **a
+handle is not a fact until a caller with a name and a test resolves it.** Two
+PRs that both look right can still disagree about a string, and only an
+end-to-end probe against real data finds that.
 
 ---
 
@@ -1549,7 +1677,8 @@ any other, so it is the one to gate behind a review of the rendered prompt.
     correct byte counts
   - `Offset` past the end → empty body + notice
   - unknown id → error mentioning the id
-  - both params set / neither set → error naming both forms
+  - more than one selector set / none set → error naming each form (PR-20
+    raises the count from two to three)
   - id belonging to a different session → error
   - multi-byte rune at the slice boundary is not split
 - `internal/message/message_test.go`: `ListToolMessages` returns only
@@ -1922,10 +2051,49 @@ impossible).
 
 ---
 
+### PR-20 — Make the published anchors retrievable
+
+**Depends on:** PR-5 (publishes `anchors:`), PR-6 (`recall` exists).
+**Fixes:** D-3 in §7.3 — every anchor the manifest published was unusable.
+
+**Changes**
+
+- `internal/agent/tools/recall.go`: add `MessageID` to `RecallParams`, and
+  replace the two-selector check with a count over all three selectors so the
+  error names each form. `recallMessage` fetches the message, requires its
+  session to match the caller's, refuses a summary row with an explanation,
+  and pages `Content().Text` through the existing `recallSlice`.
+  `messageResponse` renders `message_id`, `role=user`, `bytes` and
+  `recorded_at`, so an archived request is as labelled as an archived result.
+- `internal/agent/summary_manifest.go`: failure anchors publish
+  `ToolCallID` instead of the carrying message id; deduplicate anchors by
+  handle rather than by message so batched failures each get one; append
+  `tool_call_id=` to each `failures:` line after the fields §4.4 fixes.
+- `internal/agent/tools/recall.md`: document `message_id` and state which
+  `kind` maps to which parameter.
+
+**Tests**
+
+- `recall`: an archived user message round-trips; it pages; an unknown id, a
+  foreign session's id and a summary row are each refused with a message that
+  says which; `message_id` + `spill_path` is refused as "not several".
+- manifest: `kind=failure` anchors carry the call id; the `failures:` line
+  keeps its declared order and gains `tool_call_id` last; batched failures
+  produce one anchor each.
+
+**Acceptance**
+
+- `go test ./internal/agent/ ./internal/agent/tools/ -run 'Recall|Manifest|Anchor'`
+
+**Rollback:** revert; a manifest written by the new code still parses, since
+only trailing fields were added.
+
+---
+
 ## 8. Deferred Work (named, not scheduled)
 
 Listed so the PR numbers referenced elsewhere in this document have a home.
-None of these block the twelve PRs above.
+None of these block the PRs above.
 
 - **PR-13 — Optional small model for summarization.** Config
   `compaction-summary-model = large|small` (default `large`). Blocked on
@@ -2205,7 +2373,8 @@ Two consequences worth knowing before the next schema PR:
 
 **Definition of done for the whole PRD**
 
-- All twelve PRs merged (PR-11/PR-12 may be deferred without blocking).
+- All twelve PRs merged (PR-11/PR-12 may be deferred without blocking),
+  plus PR-20, which is what makes the anchors §4.4 publishes usable.
 - `task fmt && task lint && task test` green.
 - Shadow-mode data reviewed; a decision recorded on whether to flip
   `compaction-elide` to `on` by default.

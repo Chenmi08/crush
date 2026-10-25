@@ -201,7 +201,10 @@ func TestBuildContextManifestAnchors(t *testing.T) {
 	require.Contains(t, block, "anchors:")
 	require.Contains(t, block, "id=u1 kind=user")
 	require.Contains(t, block, "id=u2 kind=user")
-	require.Contains(t, block, "id=f kind=failure")
+	// A failure anchor carries the argument `recall` takes for it, which
+	// is the tool call id rather than the message that requested the call.
+	require.Contains(t, block, "id=call_f kind=failure")
+	require.NotContains(t, block, "id=f kind=failure")
 }
 
 // getSessionMessages rewrites the previous summary's role to user so the
@@ -510,7 +513,9 @@ func TestBuildContextManifestFailureFieldOrder(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, line)
-	require.Regexp(t, `^- id=f tool=bash exit=1 cmd="go test \./\.\.\." key="--- FAIL: TestX"$`, line)
+	// The declared fields keep their §4.4 order; the retrieval handle is
+	// appended so a parser that learned the old shape still works.
+	require.Regexp(t, `^- id=f tool=bash exit=1 cmd="go test \./\.\.\." key="--- FAIL: TestX" tool_call_id=call_f$`, line)
 }
 
 // Ties are common: results batched into one assistant message share both the
@@ -613,4 +618,53 @@ func runGit(t *testing.T, dir string, args ...string) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
 	require.NoError(t, cmd.Run(), "git %v", args)
+}
+
+// Batched results share one assistant message id, so deduplicating anchors by
+// message would drop all but the first failed call. Each payload needs its
+// own handle.
+func TestBuildContextManifestBatchedFailuresGetOneAnchorEach(t *testing.T) {
+	t.Parallel()
+
+	var calls []message.ContentPart
+	for _, id := range []string{"c1", "c2", "c3"} {
+		calls = append(calls, message.ToolCall{ID: id, Name: "bash", Input: `{"command":"make"}`})
+	}
+	msgs := []message.Message{manifestMsg("batch", message.Assistant, 1000, calls...)}
+	for _, id := range []string{"c1", "c2", "c3"} {
+		msgs = append(msgs, manifestMsg("batch-r", message.Tool, 1000, message.ToolResult{
+			ToolCallID: id, Name: "bash", Content: "boom\n\nExit code 1",
+		}))
+	}
+
+	block := buildContextManifest(manifestInput{Messages: msgs, AnchorAt: 2000})
+
+	require.Contains(t, block, "id=c1 kind=failure")
+	require.Contains(t, block, "id=c2 kind=failure")
+	require.Contains(t, block, "id=c3 kind=failure")
+}
+
+// Every anchor must name what `recall` takes for it: a message id for a user
+// message, a tool call id for a failure. This is the regression test for D-3.
+func TestBuildContextManifestAnchorsAreRetrievable(t *testing.T) {
+	t.Parallel()
+
+	msgs := []message.Message{
+		manifestMsg("u1", message.User, 1000, message.TextContent{Text: "first"}),
+		bashFailureMsg("f", 2000, "make", ""),
+		bashResultMsg("f-r", 2001, "Error: boom\n\nExit code 1", true),
+	}
+
+	block := buildContextManifest(manifestInput{Messages: msgs, AnchorAt: 3000})
+
+	var anchors []string
+	for _, line := range strings.Split(block, "\n") {
+		if strings.HasPrefix(line, "- id=") && strings.Contains(line, "kind=") {
+			anchors = append(anchors, line)
+		}
+	}
+	require.Contains(t, anchors, "- id=u1 kind=user")
+	require.Contains(t, anchors, "- id=call_f kind=failure",
+		"a failure anchor must be the tool call id, or recall cannot resolve it")
+	require.NotContains(t, anchors, "- id=f kind=failure")
 }

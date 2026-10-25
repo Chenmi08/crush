@@ -223,6 +223,14 @@ func renderManifest(in manifestRenderInput) string {
 			if f.Key != "" {
 				fmt.Fprintf(&sb, " key=%q", manifestEscape(f.Key))
 			}
+			// `id` is the assistant message that requested the call;
+			// this is the handle `recall(tool_call_id=...)` takes. It
+			// comes last so the fields §4.4 fixes keep their order,
+			// and it lives here as well as in `anchors:` because
+			// anchors are capped at ten shared with user messages.
+			if f.ToolCallID != "" {
+				fmt.Fprintf(&sb, " tool_call_id=%s", manifestEscape(f.ToolCallID))
+			}
 			sb.WriteString("\n")
 		}
 		if in.failuresDropped > 0 {
@@ -275,7 +283,13 @@ func renderManifest(in manifestRenderInput) string {
 	if len(in.anchors) > 0 || in.anchorsCapped > 0 {
 		sb.WriteString("anchors:\n")
 		for _, a := range in.anchors {
-			fmt.Fprintf(&sb, "- id=%s kind=%s\n", a.ID, a.Kind)
+			// The id is the argument `recall` takes, which differs by
+			// kind: a user anchor is a message id (`message_id=`), a
+			// failure anchor is the tool call id of the failing
+			// result (`tool_call_id=`). `kind` is what tells the
+			// caller which argument to pass, so an anchor is always
+			// retrievable rather than merely informational.
+			fmt.Fprintf(&sb, "- id=%s kind=%s\n", manifestEscape(a.ID), a.Kind)
 		}
 		if in.anchorsCapped > 0 {
 			fmt.Fprintf(&sb, "- (truncated: %d more)\n", in.anchorsCapped)
@@ -571,13 +585,19 @@ func manifestCommand(call *manifestToolCall) string {
 	return params.Command
 }
 
-// manifestAnchors lists message ids the agent can hand to `recall`: the user
+// manifestAnchors lists the handles the agent can hand to `recall`: the user
 // messages (the least derivable content in a session) and the failures.
+//
+// The id is the argument `recall` takes, so it differs by kind: a user
+// message is retrieved with `message_id`, a failure with `tool_call_id`
+// (which is what fetches the failing output; the assistant message that
+// requested it is not what a resuming agent needs to read). `kind` is
+// therefore not decoration — it selects the parameter.
 //
 // Summary rows are skipped even when they arrive as a user message:
 // getSessionMessages rewrites the previous summary's role so the resumption
-// prompt reads naturally, but its id is not something a retrieval tool can
-// resolve, and the next summary replaces it anyway.
+// prompt reads naturally, but reading it back would hand the model a stale
+// copy of the state it is replacing.
 func manifestAnchors(msgs []message.Message, failures []manifestFailure) []manifestAnchor {
 	var anchors []manifestAnchor
 	for _, m := range msgs {
@@ -586,16 +606,26 @@ func manifestAnchors(msgs []message.Message, failures []manifestFailure) []manif
 		}
 		anchors = append(anchors, manifestAnchor{ID: m.ID, Kind: "user", At: m.CreatedAt})
 	}
+	// Failures are deduplicated by handle, not by message: results batched
+	// into one assistant message share its id, and each failed call is a
+	// separate payload worth a separate handle.
 	seen := make(map[string]struct{}, len(anchors))
 	for _, a := range anchors {
 		seen[a.ID] = struct{}{}
 	}
 	for _, f := range failures {
-		if _, ok := seen[f.MessageID]; ok {
+		// Only a result with a call id is reachable by `recall`. A
+		// failure without one cannot be retrieved at all, so it gets no
+		// anchor rather than an anchor that resolves to the request
+		// instead of the payload.
+		if f.ToolCallID == "" {
 			continue
 		}
-		seen[f.MessageID] = struct{}{}
-		anchors = append(anchors, manifestAnchor{ID: f.MessageID, Kind: "failure", At: f.At})
+		if _, ok := seen[f.ToolCallID]; ok {
+			continue
+		}
+		seen[f.ToolCallID] = struct{}{}
+		anchors = append(anchors, manifestAnchor{ID: f.ToolCallID, Kind: "failure", At: f.At})
 	}
 	slices.SortFunc(anchors, func(a, b manifestAnchor) int {
 		if a.At != b.At {
