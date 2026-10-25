@@ -1,2 +1,2 @@
-Search the web via DuckDuckGo; returns titles, URLs, and snippets. Follow up with web_fetch to get full page content.
+Search the web via DuckDuckGo; returns titles, URLs, and snippets. A snippet far longer than the prompt cap is truncated, and the result names a spill file holding it in full, readable with `recall(spill_path=...)`. Follow up with web_fetch to get full page content.
 {{- if .GhAvailable }} For GitHub searches when an exact repo name, issue, or link is provided, use `gh search` in bash instead.{{- end }}

@@ -161,6 +161,9 @@ func (c *coordinator) researchTools(ctx context.Context, tmpDir string, client *
 	base := []fantasy.AgentTool{
 		tools.NewSourcegraphTool(client),
 		tools.NewViewTool(c.lspManager, c.filetracker, nil, c.cfg, tmpDir),
+		// Spills written by this agent (a truncated snippet or page body)
+		// must be readable by it, or the path in the notice is dead.
+		tools.NewRecallTool(c.messages, c.cfg.Config().Options.DataDirectory),
 	}
 
 	exaTools := c.builtinSearchTools(ctx)
@@ -169,7 +172,7 @@ func (c *coordinator) researchTools(ctx context.Context, tmpDir string, client *
 		// configuration and reads every page directly rather than retrying
 		// an endpoint that just failed.
 		fallback := []fantasy.AgentTool{
-			tools.NewWebSearchTool(client),
+			tools.NewWebSearchTool(c.cfg.Config().Options.DataDirectory, client),
 			tools.NewWebFetchTool(nil, tmpDir, client, nil),
 		}
 		return append(fallback, base...)
@@ -180,7 +183,7 @@ func (c *coordinator) researchTools(ctx context.Context, tmpDir string, client *
 	// DuckDuckGo as a per-call fallback so the sub-agent degrades instead
 	// of receiving an error it cannot act on. The fallback is not
 	// registered as a tool, so the model still sees one search tool.
-	fallback := tools.NewExaSearchFallback(client)
+	fallback := tools.NewExaSearchFallback(c.cfg.Config().Options.DataDirectory, client)
 	searchTools := make([]fantasy.AgentTool, 0, len(exaTools))
 	for _, tool := range exaTools {
 		tool.SetFallback(fallback)

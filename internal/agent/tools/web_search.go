@@ -20,8 +20,10 @@ var webSearchDescriptionTpl = template.Must(
 		Parse(string(webSearchDescriptionTmpl)),
 )
 
-// NewWebSearchTool creates a web search tool for sub-agents (no permissions needed).
-func NewWebSearchTool(client *http.Client) fantasy.AgentTool {
+// NewWebSearchTool creates a web search tool for sub-agents (no permissions
+// needed). spillDir is where a snippet too long for the prompt is written in
+// full; an empty value disables that and keeps the truncated snippet.
+func NewWebSearchTool(spillDir string, client *http.Client) fantasy.AgentTool {
 	if client == nil {
 		transport := http.DefaultTransport.(*http.Transport).Clone()
 		transport.MaxIdleConns = 100
@@ -57,7 +59,9 @@ func NewWebSearchTool(client *http.Client) fantasy.AgentTool {
 				return fantasy.NewTextErrorResponse("Failed to search: " + err.Error()), nil
 			}
 
-			return fantasy.NewTextResponse(formatSearchResults(results)), nil
+			return fantasy.NewTextResponse(
+				formatSearchResults(results, spillDirOrDefault(ctx, spillDir)),
+			), nil
 		},
 	)
 }
@@ -65,9 +69,9 @@ func NewWebSearchTool(client *http.Client) fantasy.AgentTool {
 // NewExaSearchFallback returns the DuckDuckGo search tool adapted to the
 // parameter names Exa's search tools use, for use as a call-time fallback
 // when the Exa backend fails.
-func NewExaSearchFallback(client *http.Client) fantasy.AgentTool {
+func NewExaSearchFallback(spillDir string, client *http.Client) fantasy.AgentTool {
 	return remapInputTool{
-		AgentTool: NewWebSearchTool(client),
+		AgentTool: NewWebSearchTool(spillDir, client),
 		remap:     exaSearchParamsToWebSearch,
 	}
 }

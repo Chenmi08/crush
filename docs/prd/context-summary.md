@@ -602,10 +602,11 @@ actually done" without reading the tree.
 | 7 | **done**, reviewed | `tombstone.go`, `agent.go`, `message.go`, `config.go`, `shellconfig/options.go` |
 | 8 | **done**, reviewed | `transcript.go`, `agent.go` |
 | 9 | **done**, reviewed | `summary_merge.go`, `agent.go`, `session.go`, migration + sqlc |
-| 11-12 | not started | — |
+| 11 | **done**, reviewed | `tools/fetch.go`, `tools/search.go`, `tools/recall.go`, `tools/spill.go`, `shell/truncate.go` |
+| 12 | not started | — |
 
 This is the §7.1 minimum viable subset (1, 4, 5) plus PR-2, PR-3, PR-6, PR-7,
-PR-8, PR-9 and PR-10. PR-3 adds one migration; PR-6 adds one generated query; PR-7 adds
+PR-8, PR-9, PR-10 and PR-11. PR-3 adds one migration; PR-6 adds one generated query; PR-7 adds
 the first user-facing configuration option in this PRD
 (`compaction-elide`, §6).
 "Reviewed" means the
@@ -1025,6 +1026,52 @@ Findings from review, applied:
   explanatory comment and a `CHECK (>= 0)` on the counter, matching the
   token-totals migration it sits next to; a round-trip test applies it up and
   down against the embedded set.
+
+**PR-11 — spill handles for `fetch` and web search.** A truncated `fetch` body
+and an over-long search snippet are now written to the spill directory in full
+and named in the result, so neither is a permanent loss any more (§1's table).
+`recall(spill_path=...)` reads them back in byte pages with the same rune-safe
+slicing as the archived-result form. Nothing elides a page or a snippet today;
+the handle exists so the truncation notice can point somewhere.
+
+Implementation notes worth keeping:
+
+- **The read root is a list, not one directory.** A tool is constructed with
+  the data directory, but a confined call spills into the policy's private
+  temp directory — the only place a sub-agent's read-only fence allows a
+  write. `spillRoots` accepts both, so a file written under either is
+  readable. `shell.SpillDir` owns the `<dir>/shell-output` layout so the tool
+  does not reconstruct it.
+- **Validation and the open are one step.** `resolveSpillPath` resolves
+  symlinks, checks containment on path segments, then opens the file and
+  confirms the descriptor is the path that passed. A `strings.HasPrefix`
+  check would accept a sibling named `shell-output-evil`; a bare
+  validate-then-open would leave a swap window. Non-regular files are
+  refused so a FIFO cannot block the turn.
+- **The research profile gets `recall`.** PR-11 names spill handles for the
+  web tools, but those tools only exist in the research sub-agent. Without the
+  tool registered there, every path the notice names would be unreadable, so
+  the sub-agent now carries `recall` too: it reads its own session and only
+  Crush's spill directories.
+- **`fetch` converts before it truncates.** PR-9's delivery point is the
+  converted text, so the spill holds that, not the raw response. The buffered
+  read grows to `maxFetchReadSize` (5MB) only so a page that exceeds the
+  100KB prompt cap can still be converted; the model-facing result is still
+  capped and still names the file.
+- **A snippet below the spill threshold still says it was cut.** The spec asks
+  for spill handles on snippets over the cap; spilling a 600-rune snippet
+  would create a file that saves nothing. Instead the result reports the full
+  length, so "this is a fragment" stays distinguishable from "this is the
+  snippet", which is the same reason the manifest carries a `coverage` line.
+- **`SpillOutput` deletes a file it failed to write.** A partial spill whose
+  path was never returned would otherwise sit until the retention sweep.
+- **Known gap: spilled files are shared across sessions.** The spill directory
+  is per-project, not per-session, so a sub-agent can read a file another
+  session spilled by naming its path. The paths are unguessable
+  (`output-<random>.log`) and contain no session content beyond what the tool
+  produced, but this is a wider boundary than §4.6's "only the current
+  session is searched" claims for archived payloads. Per-session spill
+  subdirectories would close it and belong with PR-12's `file_events` work.
 
 **Known gaps, in dependency order.** The cross-cutting fixture in §9
 (`internal/agent/testdata/summary/`) is also not created yet, so PR-1/2/4/5 are

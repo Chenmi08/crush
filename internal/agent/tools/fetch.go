@@ -42,7 +42,10 @@ func fetchDescription() string {
 	})
 }
 
-func NewFetchTool(workingDir string, client *http.Client) fantasy.AgentTool {
+// NewFetchTool builds the simple fetch tool. spillDir is where the bytes the
+// model-facing cap drops are written so the truncated page stays recoverable;
+// an empty value disables spilling rather than guessing a directory.
+func NewFetchTool(workingDir, spillDir string, client *http.Client) fantasy.AgentTool {
 	if client == nil {
 		transport := http.DefaultTransport.(*http.Transport).Clone()
 		transport.MaxIdleConns = 100
@@ -107,19 +110,19 @@ func NewFetchTool(workingDir string, client *http.Client) fantasy.AgentTool {
 				return fantasy.NewTextErrorResponse(fmt.Sprintf("Request failed with status code: %d", resp.StatusCode)), nil
 			}
 
-			// Read one byte past the limit so a response that exactly fills
-			// the buffer is not mistaken for a truncated one.
-			body, err := io.ReadAll(io.LimitReader(resp.Body, int64(MaxFetchSize)+1))
+			// Read enough to convert a page that only exceeds the
+			// model-facing cap, plus one byte so a response that exactly
+			// fills the buffer is not mistaken for a truncated one.
+			body, err := io.ReadAll(io.LimitReader(resp.Body, int64(maxFetchReadSize)+1))
 			if err != nil {
 				return fantasy.NewTextErrorResponse("Failed to read response body: " + err.Error()), nil
 			}
-			sourceTruncated := len(body) > MaxFetchSize
-
-			content := string(body)
+			sourceTruncated := len(body) > maxFetchReadSize
 			if sourceTruncated {
-				content = truncateUTF8(content, MaxFetchSize)
+				body = []byte(truncateUTF8(string(body), maxFetchReadSize))
 			}
 
+			content := string(body)
 			validUTF8 := utf8.ValidString(content)
 			if !validUTF8 {
 				return fantasy.NewTextErrorResponse("Response content is not valid UTF-8"), nil
@@ -167,9 +170,10 @@ func NewFetchTool(workingDir string, client *http.Client) fantasy.AgentTool {
 			// Truncate content if it exceeds the max read size. The notice is
 			// emitted whenever bytes were dropped, even if format conversion
 			// shrank the payload below the limit, so a partial document is
-			// never returned silently.
+			// never returned silently. The dropped part is spilled when the
+			// payload is still larger than the model-facing cap.
 			var truncated bool
-			content, truncated = truncateFetchContent(content, sourceTruncated)
+			content, truncated = truncateFetchContent(content, sourceTruncated, spillDirOrDefault(ctx, spillDir))
 			if truncated {
 				slog.Debug("Fetch response truncated", "url", params.URL, "limit_bytes", MaxFetchSize)
 			}
@@ -179,15 +183,34 @@ func NewFetchTool(workingDir string, client *http.Client) fantasy.AgentTool {
 	)
 }
 
+// maxFetchReadSize bounds how much of a response is buffered before format
+// conversion. It is larger than MaxFetchSize so a page that only exceeds the
+// prompt cap can still be converted and spilled in one piece.
+const maxFetchReadSize = 5 * 1024 * 1024 // 5MB
+
 // truncateFetchContent caps content at MaxFetchSize bytes and appends a
-// notice when bytes were dropped. It reports whether a notice was added.
-func truncateFetchContent(content string, sourceTruncated bool) (string, bool) {
+// notice when bytes were dropped. When spillDir is set the whole payload is
+// written there first and the notice names the file, so what the cap removed
+// is retrievable rather than lost. It reports whether a notice was added.
+func truncateFetchContent(content string, sourceTruncated bool, spillDir string) (string, bool) {
 	if !sourceTruncated && int64(len(content)) <= MaxFetchSize {
 		return content, false
 	}
 
+	full := content
 	content = truncateUTF8(content, MaxFetchSize)
-	return content + fmt.Sprintf("\n\n[Content truncated to %d bytes]", MaxFetchSize), true
+	notice := fmt.Sprintf("\n\n[Content truncated to %d bytes", MaxFetchSize)
+	// Only name a spill file when it holds bytes the caller cannot see.
+	// Conversion can shrink a truncated source below the cap, in which case
+	// there is nothing extra to retrieve even though the source was cut.
+	if spillDir != "" && len(full) > len(content) {
+		if path, err := spillForRecall(full, spillDir); err == nil {
+			return content + notice + fmt.Sprintf("; full content: %s]", path), true
+		} else {
+			slog.Debug("Could not spill fetched content", "dir", spillDir, "error", err)
+		}
+	}
+	return content + notice + "]", true
 }
 
 func extractTextFromHTML(html string) (string, error) {

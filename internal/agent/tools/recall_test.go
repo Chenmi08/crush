@@ -3,6 +3,9 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -10,7 +13,9 @@ import (
 	"charm.land/fantasy"
 	"github.com/charmbracelet/crush/internal/db"
 	"github.com/charmbracelet/crush/internal/message"
+	"github.com/charmbracelet/crush/internal/sandbox"
 	"github.com/charmbracelet/crush/internal/session"
+	"github.com/charmbracelet/crush/internal/shell"
 	"github.com/stretchr/testify/require"
 )
 
@@ -92,7 +97,7 @@ func TestRecall_SmallResultReturnsWholeBody(t *testing.T) {
 	body := "--- FAIL: TestSummarize (0.31s)\nFAIL\n\nExit code 1"
 	storeToolResult(t, messages, sessionID, "call_7f3a", "bash", body, false)
 
-	tool := NewRecallTool(messages)
+	tool := NewRecallTool(messages, t.TempDir())
 	resp, err := runRecall(t, tool, recallCtx(sessionID), RecallParams{ToolCallID: "call_7f3a"})
 	require.NoError(t, err)
 	require.False(t, resp.IsError, resp.Content)
@@ -116,7 +121,7 @@ func TestRecall_LimitReturnsRemainderNotice(t *testing.T) {
 	body := strings.Repeat("x", 100)
 	storeToolResult(t, messages, sessionID, "call_big", "bash", body, false)
 
-	tool := NewRecallTool(messages)
+	tool := NewRecallTool(messages, t.TempDir())
 	resp, err := runRecall(t, tool, recallCtx(sessionID), RecallParams{ToolCallID: "call_big", Limit: 10})
 	require.NoError(t, err)
 
@@ -133,7 +138,7 @@ func TestRecall_OffsetPastEndReturnsNotice(t *testing.T) {
 	sessionID := newRecallSession(t, sessions, "recall")
 	storeToolResult(t, messages, sessionID, "call_small", "view", "hello", false)
 
-	tool := NewRecallTool(messages)
+	tool := NewRecallTool(messages, t.TempDir())
 	resp, err := runRecall(t, tool, recallCtx(sessionID), RecallParams{ToolCallID: "call_small", Offset: 100})
 	require.NoError(t, err)
 
@@ -148,7 +153,7 @@ func TestRecall_UnknownIDIsAnError(t *testing.T) {
 	sessionID := newRecallSession(t, sessions, "recall")
 	storeToolResult(t, messages, sessionID, "call_known", "bash", "ok", false)
 
-	tool := NewRecallTool(messages)
+	tool := NewRecallTool(messages, t.TempDir())
 	resp, err := runRecall(t, tool, recallCtx(sessionID), RecallParams{ToolCallID: "call_missing"})
 	require.NoError(t, err)
 	require.True(t, resp.IsError)
@@ -161,7 +166,7 @@ func TestRecall_RequiresToolCallID(t *testing.T) {
 
 	messages, sessions := recallTestEnvWithSessions(t)
 	sessionID := newRecallSession(t, sessions, "recall")
-	tool := NewRecallTool(messages)
+	tool := NewRecallTool(messages, t.TempDir())
 
 	resp, err := runRecall(t, tool, recallCtx(sessionID), RecallParams{})
 	require.NoError(t, err)
@@ -173,7 +178,7 @@ func TestRecall_RequiresSession(t *testing.T) {
 	t.Parallel()
 
 	messages := recallTestEnv(t)
-	tool := NewRecallTool(messages)
+	tool := NewRecallTool(messages, t.TempDir())
 
 	resp, err := runRecall(t, tool, context.Background(), RecallParams{ToolCallID: "call_x"})
 	require.NoError(t, err)
@@ -190,7 +195,7 @@ func TestRecall_IDFromAnotherSessionIsAnError(t *testing.T) {
 	storeToolResult(t, messages, otherID, "call_foreign", "bash", "secret", false)
 	sessionID := newRecallSession(t, sessions, "recall")
 
-	tool := NewRecallTool(messages)
+	tool := NewRecallTool(messages, t.TempDir())
 	resp, err := runRecall(t, tool, recallCtx(sessionID), RecallParams{ToolCallID: "call_foreign"})
 	require.NoError(t, err)
 	require.True(t, resp.IsError)
@@ -207,7 +212,7 @@ func TestRecall_MultiByteRuneIsNotSplit(t *testing.T) {
 	body := strings.Repeat("日", 10)
 	storeToolResult(t, messages, sessionID, "call_utf8", "view", body, false)
 
-	tool := NewRecallTool(messages)
+	tool := NewRecallTool(messages, t.TempDir())
 	resp, err := runRecall(t, tool, recallCtx(sessionID), RecallParams{ToolCallID: "call_utf8", Limit: 4})
 	require.NoError(t, err)
 	require.True(t, utf8.ValidString(resp.Content))
@@ -225,7 +230,7 @@ func TestRecall_EmptyResult(t *testing.T) {
 	sessionID := newRecallSession(t, sessions, "recall")
 	storeToolResult(t, messages, sessionID, "call_empty", "bash", "", false)
 
-	tool := NewRecallTool(messages)
+	tool := NewRecallTool(messages, t.TempDir())
 	resp, err := runRecall(t, tool, recallCtx(sessionID), RecallParams{ToolCallID: "call_empty"})
 	require.NoError(t, err)
 	require.Contains(t, resp.Content, "archived result is empty")
@@ -240,7 +245,7 @@ func TestRecall_ErrorResultWithoutExitCode(t *testing.T) {
 	sessionID := newRecallSession(t, sessions, "recall")
 	storeToolResult(t, messages, sessionID, "call_err", "bash", "boom", true)
 
-	tool := NewRecallTool(messages)
+	tool := NewRecallTool(messages, t.TempDir())
 	resp, err := runRecall(t, tool, recallCtx(sessionID), RecallParams{ToolCallID: "call_err"})
 	require.NoError(t, err)
 	require.Contains(t, resp.Content, "name=bash")
@@ -259,12 +264,211 @@ func TestRecall_NonBashResultHasNoExitCode(t *testing.T) {
 	body := "file contents\n\nExit code 3"
 	storeToolResult(t, messages, sessionID, "call_view", "view", body, false)
 
-	tool := NewRecallTool(messages)
+	tool := NewRecallTool(messages, t.TempDir())
 	resp, err := runRecall(t, tool, recallCtx(sessionID), RecallParams{ToolCallID: "call_view"})
 	require.NoError(t, err)
 	require.Contains(t, resp.Content, body, "the body is returned unmodified")
 	require.NotContains(t, resp.Content, "exit=",
 		"only a bash result carries an exit status")
+}
+
+// spillTestFile writes content under a data directory's spill subdirectory,
+// the only place `recall(spill_path=...)` may read from.
+func spillTestFile(t *testing.T, dataDir, name, content string) string {
+	t.Helper()
+
+	dir := shell.SpillDir(dataDir)
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	path := filepath.Join(dir, name)
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	return path
+}
+
+func TestRecall_SpillPathReturnsWholeFile(t *testing.T) {
+	t.Parallel()
+
+	body := "full page body\nsecond line"
+	dataDir := t.TempDir()
+	path := spillTestFile(t, dataDir, "output-1.log", body)
+
+	tool := NewRecallTool(recallTestEnv(t), dataDir)
+	resp, err := runRecall(t, tool, context.Background(), RecallParams{SpillPath: path})
+	require.NoError(t, err)
+	require.False(t, resp.IsError, resp.Content)
+
+	require.Contains(t, resp.Content, "spill_path="+path)
+	require.Contains(t, resp.Content, fmt.Sprintf("bytes=%d", len(body)))
+	require.Contains(t, resp.Content, "may not reflect current state")
+	require.Contains(t, resp.Content, body)
+}
+
+func TestRecall_SpillPathPages(t *testing.T) {
+	t.Parallel()
+
+	body := strings.Repeat("x", 100)
+	dataDir := t.TempDir()
+	path := spillTestFile(t, dataDir, "output-2.log", body)
+
+	tool := NewRecallTool(recallTestEnv(t), dataDir)
+	resp, err := runRecall(t, tool, context.Background(), RecallParams{SpillPath: path, Limit: 10})
+	require.NoError(t, err)
+	require.False(t, resp.IsError, resp.Content)
+	require.Contains(t, resp.Content, strings.Repeat("x", 10))
+	require.NotContains(t, resp.Content, strings.Repeat("x", 11))
+	require.Contains(t, resp.Content, "returned bytes 0-10 of 100")
+	require.Contains(t, resp.Content, "offset=10")
+}
+
+func TestRecall_SpillPathOffsetPastEnd(t *testing.T) {
+	t.Parallel()
+
+	dataDir := t.TempDir()
+	path := spillTestFile(t, dataDir, "output-3.log", "hello")
+
+	tool := NewRecallTool(recallTestEnv(t), dataDir)
+	resp, err := runRecall(t, tool, context.Background(), RecallParams{SpillPath: path, Offset: 50})
+	require.NoError(t, err)
+	require.False(t, resp.IsError, resp.Content)
+	require.Contains(t, resp.Content, "past the end")
+}
+
+func TestRecall_SpillPathOutsideSpillDirIsRefused(t *testing.T) {
+	t.Parallel()
+
+	outside := filepath.Join(t.TempDir(), "secret.txt")
+	require.NoError(t, os.WriteFile(outside, []byte("secret"), 0o600))
+
+	tool := NewRecallTool(recallTestEnv(t), t.TempDir())
+	resp, err := runRecall(t, tool, context.Background(), RecallParams{SpillPath: outside})
+	require.NoError(t, err)
+	require.True(t, resp.IsError)
+	require.Contains(t, resp.Content, "outside the spill directory")
+}
+
+func TestRecall_SpillPathTraversalIsRefused(t *testing.T) {
+	t.Parallel()
+
+	dataDir := t.TempDir()
+	tool := NewRecallTool(recallTestEnv(t), dataDir)
+	for _, raw := range []string{
+		"../../etc/passwd",
+		filepath.Join(dataDir, "shell-output", "..", "..", "etc", "passwd"),
+		shell.SpillDir(dataDir) + "-evil/output-1.log",
+	} {
+		resp, err := runRecall(t, tool, context.Background(), RecallParams{SpillPath: raw})
+		require.NoError(t, err)
+		require.True(t, resp.IsError, "expected %q to be refused", raw)
+	}
+}
+
+func TestRecall_SpillPathSymlinkEscapeIsRefused(t *testing.T) {
+	t.Parallel()
+
+	dataDir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "secret.txt")
+	require.NoError(t, os.WriteFile(outside, []byte("secret"), 0o600))
+	link := filepath.Join(shell.SpillDir(dataDir), "link")
+	require.NoError(t, os.MkdirAll(shell.SpillDir(dataDir), 0o700))
+	require.NoError(t, os.Symlink(outside, link))
+
+	tool := NewRecallTool(recallTestEnv(t), dataDir)
+	resp, err := runRecall(t, tool, context.Background(), RecallParams{SpillPath: link})
+	require.NoError(t, err)
+	require.True(t, resp.IsError)
+	require.NotContains(t, resp.Content, "secret")
+}
+
+func TestRecall_SpillPathIsRuneSafe(t *testing.T) {
+	t.Parallel()
+
+	dataDir := t.TempDir()
+	path := spillTestFile(t, dataDir, "output-utf8.log", strings.Repeat("日", 10))
+
+	tool := NewRecallTool(recallTestEnv(t), dataDir)
+	resp, err := runRecall(t, tool, context.Background(), RecallParams{SpillPath: path, Limit: 4})
+	require.NoError(t, err)
+	require.False(t, resp.IsError, resp.Content)
+	require.True(t, utf8.ValidString(resp.Content))
+}
+
+func TestRecall_RejectsBothSelectors(t *testing.T) {
+	t.Parallel()
+
+	messages, sessions := recallTestEnvWithSessions(t)
+	sessionID := newRecallSession(t, sessions, "recall")
+	storeToolResult(t, messages, sessionID, "call_x", "bash", "ok", false)
+
+	tool := NewRecallTool(messages, t.TempDir())
+	resp, err := runRecall(t, tool, recallCtx(sessionID), RecallParams{
+		ToolCallID: "call_x",
+		SpillPath:  "whatever",
+	})
+	require.NoError(t, err)
+	require.True(t, resp.IsError)
+	require.Contains(t, resp.Content, "not both")
+}
+
+// A read-only sub-agent writes spills into the policy's private temp
+// directory. The tool must accept that location even though it was
+// constructed with a different data directory, and reading must need no write
+// permission: the spill is produced by the tool that spilled, through the
+// same code path production uses.
+func TestRecall_SpillPathFromSandboxTempDir(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	policy := sandbox.SubagentPolicy(&sandbox.Policy{
+		Mode:      sandbox.ModeWorkspaceWrite,
+		Workspace: t.TempDir(),
+		TempDir:   tempDir,
+	})
+	ctx := WithSandboxPolicy(context.Background(), policy)
+
+	// The spill location must be writable under the read-only sub-agent
+	// policy, or the fetch/search tools could not spill at all.
+	spillDir := spillDirOrDefault(ctx, t.TempDir())
+	require.NoError(t, policy.CheckWrite(spillDir))
+	path, err := spillForRecall("output the sandboxed command produced", spillDir)
+	require.NoError(t, err)
+
+	dataDir := t.TempDir()
+	tool := NewRecallTool(recallTestEnv(t), dataDir)
+	resp, runErr := runRecall(t, tool, ctx, RecallParams{SpillPath: path})
+	require.NoError(t, runErr)
+	require.False(t, resp.IsError, resp.Content)
+	require.Contains(t, resp.Content, "output the sandboxed command produced")
+
+	// The data directory the tool was built with stays readable too, so a
+	// spill from an unconfined turn is not orphaned by a later policy.
+	other := spillTestFile(t, dataDir, "output-unconfined.log", "unconfined")
+	resp, runErr = runRecall(t, tool, ctx, RecallParams{SpillPath: other})
+	require.NoError(t, runErr)
+	require.False(t, resp.IsError, resp.Content)
+	require.Contains(t, resp.Content, "unconfined")
+}
+
+func TestWithinDir(t *testing.T) {
+	t.Parallel()
+
+	sep := string(filepath.Separator)
+	root := filepath.Join(sep, "data", "shell-output")
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{name: "same", path: root, want: true},
+		{name: "inside", path: filepath.Join(root, "output-1.log"), want: true},
+		{name: "sibling prefix", path: filepath.Join(sep, "data", "shell-output-evil", "x"), want: false},
+		{name: "parent", path: filepath.Join(sep, "data"), want: false},
+		{name: "elsewhere", path: filepath.Join(sep, "etc", "passwd"), want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tt.want, withinDir(tt.path, root))
+		})
+	}
 }
 
 func TestRecallWindow(t *testing.T) {
@@ -300,27 +504,28 @@ func TestRecallSlice(t *testing.T) {
 	t.Run("whole string", func(t *testing.T) {
 		t.Parallel()
 
-		body, start, end, more := recallSlice("hello", 0, 100)
-		require.Equal(t, "hello", body)
-		require.Equal(t, 0, start)
-		require.Equal(t, 5, end)
-		require.False(t, more)
+		page := recallSlice("hello", 0, 100)
+		require.Equal(t, "hello", page.Body)
+		require.Equal(t, 0, page.Start)
+		require.Equal(t, 5, page.End)
+		require.Equal(t, 5, page.Total)
+		require.False(t, page.More)
 	})
 
 	t.Run("offset past end yields nothing", func(t *testing.T) {
 		t.Parallel()
 
-		body, _, _, more := recallSlice("hello", 10, 10)
-		require.Empty(t, body)
-		require.False(t, more)
+		page := recallSlice("hello", 10, 10)
+		require.Empty(t, page.Body)
+		require.False(t, page.More)
 	})
 
 	t.Run("end never splits a rune", func(t *testing.T) {
 		t.Parallel()
 
-		body, _, _, _ := recallSlice(strings.Repeat("日", 4), 0, 4)
-		require.True(t, utf8.ValidString(body))
-		require.Equal(t, "日", body, "3 of the 4 requested bytes fit one rune")
+		page := recallSlice(strings.Repeat("日", 4), 0, 4)
+		require.True(t, utf8.ValidString(page.Body))
+		require.Equal(t, "日", page.Body, "3 of the 4 requested bytes fit one rune")
 	})
 
 	t.Run("start never splits a rune", func(t *testing.T) {
@@ -329,9 +534,9 @@ func TestRecallSlice(t *testing.T) {
 		s := strings.Repeat("日", 4)
 		// Offset 1 lands inside the first rune; the slice starts at the
 		// next one.
-		body, start, _, _ := recallSlice(s, 1, 3)
-		require.Equal(t, 3, start)
-		require.True(t, utf8.ValidString(body))
-		require.Equal(t, "日", body)
+		page := recallSlice(s, 1, 3)
+		require.Equal(t, 3, page.Start)
+		require.True(t, utf8.ValidString(page.Body))
+		require.Equal(t, "日", page.Body)
 	})
 }

@@ -28,6 +28,17 @@ const (
 // caller-supplied data directory.
 const spillSubdir = "shell-output"
 
+// SpillDir returns the directory [SpillOutput] writes into for the given data
+// directory. Callers that need to accept a spill path later (the `recall`
+// tool) use it rather than reconstructing the layout, which would drift the
+// moment the subdirectory is renamed.
+func SpillDir(dir string) string {
+	if dir == "" {
+		return os.TempDir()
+	}
+	return filepath.Join(dir, spillSubdir)
+}
+
 // spillPattern matches the files SpillOutput creates. Pruning is limited to
 // this shape so a misconfigured directory cannot lose unrelated files.
 const spillPattern = "output-*.log"
@@ -150,7 +161,7 @@ func SpillOutput(output, dir string) (string, error) {
 		// deleting someone else's files.
 		dir = os.TempDir()
 	} else {
-		dir = filepath.Join(dir, spillSubdir)
+		dir = SpillDir(dir)
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return "", err
 		}
@@ -161,8 +172,15 @@ func SpillOutput(output, dir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close() //nolint:errcheck
 	if _, err := f.WriteString(output); err != nil {
+		// A failed write leaves the partial file behind otherwise: the
+		// caller gets no path, so nothing would ever read or prune it
+		// before the retention sweep.
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+		return "", err
+	}
+	if err := f.Close(); err != nil {
 		return "", err
 	}
 	return f.Name(), nil

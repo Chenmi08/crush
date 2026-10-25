@@ -225,6 +225,48 @@ func TestSearchSnippetCapped(t *testing.T) {
 	require.Equal(t, maxSnippetRunes, utf8.RuneCountInString(results[0].Snippet))
 }
 
+// TestSearchSnippetSpilled verifies a snippet far over the prompt cap is
+// written in full and named in the rendered results, while a snippet just
+// over the cap is only truncated.
+func TestSearchSnippetSpilled(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	long := strings.Repeat("a", maxSnippetRunes*snippetSpillFactor)
+	short := strings.Repeat("b", maxSnippetRunes+1)
+	results := []SearchResult{
+		{Title: "Long", Link: "https://example.com/long", Snippet: truncateRunes(long, maxSnippetRunes), FullSnippet: long, Position: 1},
+		{Title: "Short", Link: "https://example.com/short", Snippet: truncateRunes(short, maxSnippetRunes), FullSnippet: short, Position: 2},
+	}
+
+	got := formatSearchResults(results, dir)
+	require.Contains(t, got, "full snippet: ")
+	require.Contains(t, got, "characters in full", "a cut snippet says so even when it is not spilled")
+	require.NotContains(t, got, strings.Repeat("b", maxSnippetRunes+1), "a merely long snippet is not spilled")
+
+	path := got[strings.Index(got, "full snippet: ")+len("full snippet: "):]
+	path = strings.TrimSuffix(strings.SplitN(path, "\n", 2)[0], ")")
+
+	spilled, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, long, string(spilled))
+}
+
+// TestSearchSnippetNotSpilledWithoutDir verifies the renderer degrades to the
+// plain truncation when no spill directory is configured.
+func TestSearchSnippetNotSpilledWithoutDir(t *testing.T) {
+	t.Parallel()
+
+	long := strings.Repeat("a", maxSnippetRunes*snippetSpillFactor)
+	results := []SearchResult{
+		{Title: "Long", Link: "https://example.com/long", Snippet: truncateRunes(long, maxSnippetRunes), FullSnippet: long, Position: 1},
+	}
+	got := formatSearchResults(results, "")
+	require.NotContains(t, got, "full snippet")
+	require.Contains(t, got, "characters in full")
+	require.Contains(t, got, truncateRunes(long, maxSnippetRunes))
+}
+
 // TestCleanDuckDuckGoURL covers the redirect link shapes DuckDuckGo emits.
 func TestCleanDuckDuckGoURL(t *testing.T) {
 	cases := []struct {

@@ -934,12 +934,13 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 		tools.NewDownloadTool(c.permissions, c.cfg.WorkingDir(), nil),
 		tools.NewEditTool(c.lspManager, c.permissions, c.history, c.filetracker, c.cfg.WorkingDir(), writeOpts),
 		tools.NewMultiEditTool(c.lspManager, c.permissions, c.history, c.filetracker, c.cfg.WorkingDir(), writeOpts),
-		tools.NewFetchTool(c.cfg.WorkingDir(), nil),
+		tools.NewFetchTool(c.cfg.WorkingDir(), c.cfg.Config().Options.DataDirectory, nil),
 		tools.NewSourcegraphTool(nil),
 		tools.NewTodosTool(c.sessions),
-		// Available to sub-agents as well: it only reads the caller's
-		// own session, which a sub-agent owns separately.
-		tools.NewRecallTool(c.messages),
+		// Available to sub-agents as well: it reads only the caller's
+		// own session, which a sub-agent owns separately, plus files in
+		// the spill directory Crush wrote.
+		tools.NewRecallTool(c.messages, c.cfg.Config().Options.DataDirectory),
 		tools.NewViewTool(c.lspManager, c.filetracker, c.skillTracker, c.cfg, c.cfg.WorkingDir(), c.cfg.Config().Options.SkillsPaths...),
 		tools.NewWriteTool(c.lspManager, c.permissions, c.history, c.filetracker, c.cfg.WorkingDir(), writeOpts),
 	)

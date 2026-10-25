@@ -1,2 +1,2 @@
-Fetch raw content from a URL as text, markdown, or html (max {{ .MaxFetchSizeKB }}KB); no AI processing. For analysis or extraction, delegate to the agent tool's research profile.
+Fetch raw content from a URL as text, markdown, or html (max {{ .MaxFetchSizeKB }}KB); no AI processing. A larger response is truncated in the result, which names a spill file holding the full body: read it with `recall(spill_path=...)`. For analysis or extraction, delegate to the agent tool's research profile.
 {{- if .GhAvailable }} For GitHub content when an exact repo, issue, or PR link is provided, use `gh` CLI in bash instead.{{- end }}

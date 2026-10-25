@@ -13,16 +13,21 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/net/html"
 )
 
 // SearchResult represents a single search result from DuckDuckGo.
 type SearchResult struct {
-	Title    string
-	Link     string
-	Snippet  string
-	Position int
+	Title   string
+	Link    string
+	Snippet string
+	// FullSnippet is the untruncated page snippet. It is kept so a snippet
+	// far over the prompt cap can be spilled instead of lost, while
+	// Snippet stays the model-facing, always-capped value.
+	FullSnippet string
+	Position    int
 }
 
 var userAgents = []string{
@@ -260,7 +265,8 @@ func parseLiteSearchResults(htmlContent string, maxResults int) ([]SearchResult,
 				}
 			}
 			if n.Data == "td" && hasClass(n, "result-snippet") && currentResult != nil {
-				currentResult.Snippet = truncateRunes(getTextContent(n), maxSnippetRunes)
+				currentResult.FullSnippet = getTextContent(n)
+				currentResult.Snippet = truncateRunes(currentResult.FullSnippet, maxSnippetRunes)
 			}
 		}
 		for c := n.FirstChild; c != nil; c = c.NextSibling {
@@ -335,7 +341,17 @@ func cleanDuckDuckGoURL(rawURL string) string {
 	return decoded
 }
 
-func formatSearchResults(results []SearchResult) string {
+// snippetSpillFactor is how far over the prompt cap a snippet must run before
+// it is worth a file. Most snippets are near the cap or under it; spilling
+// each one would leave a pile of files that each save a few hundred bytes.
+// A cut snippet below this multiple is still named in the result, so the
+// model knows it is reading a fragment even when nothing was spilled.
+const snippetSpillFactor = 4
+
+// formatSearchResults renders the results for the model. When spillDir is
+// set, a snippet long enough to be worth it is written there in full and the
+// summary names the file, so the rest of the page is recoverable.
+func formatSearchResults(results []SearchResult, spillDir string) string {
 	if len(results) == 0 {
 		return "No results found. Try rephrasing your search."
 	}
@@ -345,9 +361,36 @@ func formatSearchResults(results []SearchResult) string {
 	for _, result := range results {
 		fmt.Fprintf(&sb, "%d. %s\n", result.Position, result.Title)
 		fmt.Fprintf(&sb, "   URL: %s\n", result.Link)
-		fmt.Fprintf(&sb, "   Summary: %s\n\n", result.Snippet)
+		fmt.Fprintf(&sb, "   Summary: %s", result.Snippet)
+		if path := spillSnippet(result, spillDir); path != "" {
+			fmt.Fprintf(&sb, "\n   (snippet truncated; full snippet: %s)", path)
+		} else if result.FullSnippet != "" && len(result.FullSnippet) > len(result.Snippet) {
+			fmt.Fprintf(&sb, "\n   (snippet truncated; %d characters in full)", utf8.RuneCountInString(result.FullSnippet))
+		}
+		sb.WriteString("\n\n")
 	}
 	return sb.String()
+}
+
+// spillSnippet writes a snippet that is much longer than the prompt cap and
+// returns its path. Short snippets, and snippets in runs with no spill
+// directory, return "".
+func spillSnippet(result SearchResult, spillDir string) string {
+	if spillDir == "" {
+		return ""
+	}
+	if result.FullSnippet == "" || len(result.FullSnippet) <= len(result.Snippet) {
+		return ""
+	}
+	if utf8.RuneCountInString(result.FullSnippet) < maxSnippetRunes*snippetSpillFactor {
+		return ""
+	}
+	path, err := spillForRecall(result.FullSnippet, spillDir)
+	if err != nil {
+		slog.Debug("Could not spill search snippet", "dir", spillDir, "error", err)
+		return ""
+	}
+	return path
 }
 
 var (

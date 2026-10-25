@@ -147,7 +147,7 @@ func coderAgent(r *vcr.Recorder, env fakeEnv, large, small fantasy.LanguageModel
 		tools.NewDownloadTool(env.permissions, env.workingDir, r.GetDefaultClient()),
 		tools.NewEditTool(nil, env.permissions, env.history, *env.filetracker, env.workingDir, tools.FileWriteOptions{}),
 		tools.NewMultiEditTool(nil, env.permissions, env.history, *env.filetracker, env.workingDir, tools.FileWriteOptions{}),
-		tools.NewFetchTool(env.workingDir, r.GetDefaultClient()),
+		tools.NewFetchTool(env.workingDir, cfg.Config().Options.DataDirectory, r.GetDefaultClient()),
 		tools.NewSourcegraphTool(r.GetDefaultClient()),
 		tools.NewViewTool(nil, *env.filetracker, nil, cfg, env.workingDir),
 		tools.NewWriteTool(nil, env.permissions, env.history, *env.filetracker, env.workingDir, tools.FileWriteOptions{}),
