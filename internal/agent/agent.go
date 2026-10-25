@@ -41,6 +41,7 @@ import (
 	"github.com/charmbracelet/crush/internal/agent/tools/mcp"
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/csync"
+	"github.com/charmbracelet/crush/internal/filetracker"
 	"github.com/charmbracelet/crush/internal/message"
 	"github.com/charmbracelet/crush/internal/pubsub"
 	"github.com/charmbracelet/crush/internal/sandbox"
@@ -224,6 +225,10 @@ type sessionAgent struct {
 	isSubAgent bool
 	sessions   session.Service
 	messages   message.Service
+	// filetracker records what the session read and wrote. It is nil in
+	// tests and for agents with no tracker, in which case the summary's
+	// recently-modified list is simply omitted.
+	filetracker filetracker.Service
 	// cfg backs channel reply routing (config lookup + MCP tool
 	// invocation). Nil in tests and sub-agents that never see channel
 	// turns; sendChannelReply treats nil as "routing disabled".
@@ -298,6 +303,7 @@ type SessionAgentOptions struct {
 	IsYolo               bool
 	Sessions             session.Service
 	Messages             message.Service
+	FileTracker          filetracker.Service
 	Cfg                  *config.ConfigStore
 	Tools                []fantasy.AgentTool
 	Notify               pubsub.Publisher[notify.Notification]
@@ -321,6 +327,7 @@ func NewSessionAgent(
 		isSubAgent:           opts.IsSubAgent,
 		sessions:             opts.Sessions,
 		messages:             opts.Messages,
+		filetracker:          opts.FileTracker,
 		cfg:                  opts.Cfg,
 		disableAutoSummarize: opts.DisableAutoSummarize,
 		elidePolicy:          elidePolicyFromConfig(opts.Cfg),
@@ -1888,6 +1895,25 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 	// and refusing to compact would wedge a session that is already over
 	// its window.
 	if block, ok := a.appendTranscript(sessionID, prevSummaryContent, msgs); ok {
+		summaryMessage.AppendContent("\n\n" + block)
+		if updateErr := a.messages.Update(genCtx, summaryMessage); updateErr != nil {
+			return updateErr
+		}
+	}
+
+	// Point the resuming agent at the files this session changed. The
+	// manifest already lists changed paths, but it does so from the archived
+	// range and the working tree; this list is the session's own write
+	// ledger and survives a compaction in which git is unavailable. Paths
+	// only: re-reading them is the caller's decision, and copying contents
+	// into the summary would defeat compaction.
+	workingDir := ""
+	if a.cfg != nil {
+		workingDir = a.cfg.WorkingDir()
+	}
+	if paths, err := a.recentWritePaths(ctx, sessionID); err != nil {
+		slog.Warn("Could not read recent file writes for summary", "session_id", sessionID, "error", err)
+	} else if block := recentlyModifiedBlock(paths, workingDir); block != "" {
 		summaryMessage.AppendContent("\n\n" + block)
 		if updateErr := a.messages.Update(genCtx, summaryMessage); updateErr != nil {
 			return updateErr

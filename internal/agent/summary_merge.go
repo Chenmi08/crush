@@ -9,13 +9,14 @@ import (
 
 // narrativeMarkers introduce the blocks that code appends to a summary after
 // the model's prose. The manifest comes first when it has anything to report,
-// and the transcript block follows it; either can be present on its own.
+// the transcript block follows it, and the recently-modified list comes last;
+// any of them can be present on its own.
 //
 // They are a single slice so the boundary search has one definition. Anything
 // that needs "where does the model's prose end" must use [narrativeCut] rather
 // than looking for one marker: a summary with no failures and no changed files
 // has a transcript but no manifest.
-var narrativeMarkers = []string{manifestLeadIn, transcriptBlockLeadIn}
+var narrativeMarkers = []string{manifestLeadIn, transcriptBlockLeadIn, recentlyModifiedBlockLeadIn}
 
 // mergeInstruction renders the instruction appended to the summary prompt when
 // a previous summary exists. Re-summarizing a summary is what makes the second

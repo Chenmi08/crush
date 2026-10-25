@@ -10,6 +10,7 @@ import (
 
 	"charm.land/fantasy"
 	"github.com/charmbracelet/crush/internal/config"
+	"github.com/charmbracelet/crush/internal/filetracker"
 	"github.com/charmbracelet/crush/internal/permission"
 	"github.com/charmbracelet/crush/internal/pubsub"
 	"github.com/charmbracelet/crush/internal/sandbox"
@@ -129,7 +130,7 @@ func (m *recordingPermissionService) SubscribeNotifications(ctx context.Context)
 func newBashToolForTest(workingDir string) fantasy.AgentTool {
 	permissions := &mockBashPermissionService{Broker: pubsub.NewBroker[permission.PermissionRequest]()}
 	attribution := &config.Attribution{TrailerStyle: config.TrailerStyleNone}
-	return NewBashTool(permissions, workingDir, workingDir, attribution, "test-model", nil)
+	return NewBashTool(permissions, workingDir, workingDir, attribution, "test-model", nil, nil)
 }
 
 func newBashToolWithRecordingPerms(workingDir string, allow bool) (fantasy.AgentTool, *recordingPermissionService) {
@@ -138,7 +139,7 @@ func newBashToolWithRecordingPerms(workingDir string, allow bool) (fantasy.Agent
 		allow:  allow,
 	}
 	attribution := &config.Attribution{TrailerStyle: config.TrailerStyleNone}
-	return NewBashTool(perms, workingDir, workingDir, attribution, "test-model", nil), perms
+	return NewBashTool(perms, workingDir, workingDir, attribution, "test-model", nil, nil), perms
 }
 
 func TestBashTool_ConfinedChainedCommandsRunWithoutPrompt(t *testing.T) {
@@ -192,7 +193,7 @@ func TestBashTool_NetworkCommandRequiresPermission(t *testing.T) {
 		allow:  true,
 	}
 	attribution := &config.Attribution{TrailerStyle: config.TrailerStyleNone}
-	tool := NewBashTool(perms, workingDir, workingDir, attribution, "test-model", nil)
+	tool := NewBashTool(perms, workingDir, workingDir, attribution, "test-model", nil, nil)
 	ctx := context.WithValue(context.Background(), SessionIDContextKey, "test-session")
 	ctx = WithSandboxPolicy(ctx, tableSandboxPolicy(t, workingDir))
 
@@ -226,7 +227,7 @@ func TestBashTool_FullAccessNeverPrompts(t *testing.T) {
 		allow:  true,
 	}
 	attribution := &config.Attribution{TrailerStyle: config.TrailerStyleNone}
-	tool := NewBashTool(perms, workingDir, workingDir, attribution, "test-model", nil)
+	tool := NewBashTool(perms, workingDir, workingDir, attribution, "test-model", nil, nil)
 	ctx := context.WithValue(context.Background(), SessionIDContextKey, "test-session")
 	policy, err := sandbox.Resolve(sandbox.Options{Workspace: workingDir, TempDir: filepath.Join(t.TempDir(), "tmp")})
 	require.NoError(t, err)
@@ -301,4 +302,66 @@ func TestIsNetworkCommand(t *testing.T) {
 	require.False(t, isNetworkCommand("git pushdry", nil), "tokens must match whole")
 	require.False(t, isNetworkCommand("ls -la", nil))
 	require.False(t, isNetworkCommand("", nil))
+}
+
+// Every executed command leaves a ledger entry, so a resuming agent can see
+// what was run even though the files it touched cannot be derived from the
+// command line.
+func TestBashToolRecordsExec(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		command string
+	}{
+		{name: "success", command: "echo recorded"},
+		{name: "failure", command: "exit 3"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			tracker := &recordingFileTracker{}
+			tool := newBashToolWithTracker(t.TempDir(), tracker)
+			ctx := context.WithValue(context.Background(), SessionIDContextKey, "test-session")
+			runBashTool(t, tool, ctx, BashParams{Description: "record exec", Command: tt.command})
+
+			require.Equal(t, []string{tt.command}, tracker.execs)
+			require.Empty(t, tracker.writes, "a command is not a file write")
+		})
+	}
+}
+
+// A command the permission layer refused never ran, so it must not appear as
+// something the session executed.
+func TestBashToolDoesNotRecordDeniedExec(t *testing.T) {
+	t.Parallel()
+
+	tracker := &recordingFileTracker{}
+	tool, _ := newBashToolWithRecordingPermsAndTracker(t.TempDir(), false, tracker)
+	ctx := context.WithValue(context.Background(), SessionIDContextKey, "test-session")
+	ctx = WithSandboxPolicy(ctx, &sandbox.Policy{Mode: sandbox.ModeReadOnly})
+
+	runBashTool(t, tool, ctx, BashParams{Description: "denied", Command: "git push origin main"})
+
+	require.Empty(t, tracker.execs, "a refused command is not a record of what ran")
+}
+
+// newBashToolWithTracker builds a bash tool whose only interesting
+// collaborator is the ledger, for the exec-record tests.
+func newBashToolWithTracker(workingDir string, tracker filetracker.Service) fantasy.AgentTool {
+	permissions := &mockBashPermissionService{Broker: pubsub.NewBroker[permission.PermissionRequest]()}
+	attribution := &config.Attribution{TrailerStyle: config.TrailerStyleNone}
+	return NewBashTool(permissions, workingDir, workingDir, attribution, "test-model", nil, tracker)
+}
+
+// newBashToolWithRecordingPermsAndTracker is the same tool with a permission
+// service that can answer "no".
+func newBashToolWithRecordingPermsAndTracker(workingDir string, allow bool, tracker filetracker.Service) (fantasy.AgentTool, *recordingPermissionService) {
+	perms := &recordingPermissionService{
+		Broker: pubsub.NewBroker[permission.PermissionRequest](),
+		allow:  allow,
+	}
+	attribution := &config.Attribution{TrailerStyle: config.TrailerStyleNone}
+	return NewBashTool(perms, workingDir, workingDir, attribution, "test-model", nil, tracker), perms
 }

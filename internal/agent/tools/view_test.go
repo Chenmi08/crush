@@ -243,6 +243,14 @@ func (m mockFileTracker) ListReadFiles(ctx context.Context, sessionID string) ([
 	return nil, nil
 }
 
+func (m mockFileTracker) RecordWrite(ctx context.Context, sessionID, path string) {}
+
+func (m mockFileTracker) RecordExec(ctx context.Context, sessionID, command string) {}
+
+func (m mockFileTracker) ListRecentWrites(ctx context.Context, sessionID string, limit int) ([]string, error) {
+	return nil, nil
+}
+
 // TestViewToolReadsOutsideWorkingDirWithoutPrompting pins that reads are not
 // confined: the sandbox never restricts reads, so neither the working
 // directory nor the policy's temp directory changes the outcome.

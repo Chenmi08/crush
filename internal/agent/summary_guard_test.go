@@ -145,6 +145,17 @@ func TestSummaryNarrativeTokens(t *testing.T) {
 		require.Equal(t, approxTokenCount(strings.TrimSpace(body)), summaryNarrativeTokens(content))
 	})
 
+	t.Run("recently modified list is excluded", func(t *testing.T) {
+		t.Parallel()
+
+		// The list is the only appended block a compaction with no
+		// failures and no changed files produces, so it is the case a
+		// manifest-only boundary would miscount.
+		body := strings.Repeat("fact ", 40)
+		content := body + "\n\n" + recentlyModifiedBlock([]string{"/ws/a.go"}, "/ws")
+		require.Equal(t, approxTokenCount(strings.TrimSpace(body)), summaryNarrativeTokens(content))
+	})
+
 	t.Run("empty", func(t *testing.T) {
 		t.Parallel()
 

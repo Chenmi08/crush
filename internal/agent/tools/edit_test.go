@@ -14,6 +14,7 @@ import (
 type mockEditFileTracker struct {
 	lastRead time.Time
 	reads    []string
+	writes   []string
 }
 
 func (m *mockEditFileTracker) RecordRead(ctx context.Context, sessionID, path string) {
@@ -26,6 +27,16 @@ func (m *mockEditFileTracker) LastReadTime(ctx context.Context, sessionID, path 
 
 func (m *mockEditFileTracker) ListReadFiles(ctx context.Context, sessionID string) ([]string, error) {
 	return m.reads, nil
+}
+
+func (m *mockEditFileTracker) RecordWrite(ctx context.Context, sessionID, path string) {
+	m.writes = append(m.writes, path)
+}
+
+func (m *mockEditFileTracker) RecordExec(ctx context.Context, sessionID, command string) {}
+
+func (m *mockEditFileTracker) ListRecentWrites(ctx context.Context, sessionID string, limit int) ([]string, error) {
+	return m.writes, nil
 }
 
 func TestReplaceContentPreservesCRLFAndMetadata(t *testing.T) {

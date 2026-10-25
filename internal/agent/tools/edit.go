@@ -200,6 +200,7 @@ func createNewFile(edit editContext, filePath, content string) (fantasy.ToolResp
 	}
 
 	edit.filetracker.RecordRead(edit.ctx, sessionID, filePath)
+	edit.filetracker.RecordWrite(edit.ctx, sessionID, filePath)
 
 	return fantasy.WithResponseMetadata(
 		fantasy.NewTextResponse("File created: "+filePath),
@@ -286,6 +287,7 @@ func commitFileChange(edit editContext, sessionID, filePath, oldContent, newCont
 	}
 
 	edit.filetracker.RecordRead(edit.ctx, sessionID, filePath)
+	edit.filetracker.RecordWrite(edit.ctx, sessionID, filePath)
 	return nil
 }
 

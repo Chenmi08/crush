@@ -17,6 +17,7 @@ import (
 
 	"charm.land/fantasy"
 	"github.com/charmbracelet/crush/internal/config"
+	"github.com/charmbracelet/crush/internal/filetracker"
 	"github.com/charmbracelet/crush/internal/fsext"
 	"github.com/charmbracelet/crush/internal/permission"
 	"github.com/charmbracelet/crush/internal/shell"
@@ -106,8 +107,10 @@ func bashDescription(attribution *config.Attribution, modelID string) string {
 	return out.String()
 }
 
-// NewBashTool builds the bash tool.
-func NewBashTool(permissions permission.Service, workingDir, spillDir string, attribution *config.Attribution, modelID string, networkCommands []string) fantasy.AgentTool {
+// NewBashTool builds the bash tool. ft may be nil, in which case the session
+// gets no exec ledger entry: the command still runs, only the record of it is
+// skipped.
+func NewBashTool(permissions permission.Service, workingDir, spillDir string, attribution *config.Attribution, modelID string, networkCommands []string, filetracker filetracker.Service) fantasy.AgentTool {
 	return fantasy.NewAgentTool(
 		BashToolName,
 		withSandboxNote(bashDescription(attribution, modelID)),
@@ -130,7 +133,6 @@ func NewBashTool(permissions permission.Service, workingDir, spillDir string, at
 			if sessionID == "" {
 				return fantasy.ToolResponse{}, fmt.Errorf("session ID is required for executing shell command")
 			}
-
 			// A validated escalation asks for a wider mode for this call
 			// before the policy for the command is resolved.
 			sessionPolicy := SandboxPolicyFromContext(ctx)
@@ -174,6 +176,17 @@ func NewBashTool(permissions permission.Service, workingDir, spillDir string, at
 				if !p {
 					return NewPermissionDeniedResponse(), nil
 				}
+			}
+
+			// Record the command once every approval has been granted, so a
+			// denied or malformed call does not enter the ledger as something
+			// the session ran. A failed command is still recorded: the
+			// resumption question is "what was run", not "what succeeded",
+			// and its exit status is already in the result. Files it touched
+			// cannot be derived from the command, so only the command line is
+			// kept.
+			if filetracker != nil {
+				filetracker.RecordExec(ctx, sessionID, params.Command)
 			}
 
 			// If explicitly requested as background, start immediately with detached context

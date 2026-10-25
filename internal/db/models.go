@@ -18,6 +18,13 @@ type File struct {
 	UpdatedAt int64  `json:"updated_at"`
 }
 
+type FileEvent struct {
+	SessionID string `json:"session_id"`
+	Path      string `json:"path"`
+	Kind      string `json:"kind"`
+	At        int64  `json:"at"`
+}
+
 type McpDisabledServer struct {
 	Name string `json:"name"`
 }

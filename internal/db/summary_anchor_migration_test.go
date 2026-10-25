@@ -43,7 +43,10 @@ func TestSummaryAnchorMigrationRoundTrip(t *testing.T) {
 	).Scan(&prefix))
 	require.Zero(t, prefix)
 
-	require.NoError(t, goose.Down(conn, "migrations"))
+	// Down to the migration before this one rather than one step back:
+	// later migrations exist, and the test is about this column pair, not
+	// about which migration happens to be newest.
+	require.NoError(t, goose.DownTo(conn, "migrations", 20260928000001))
 	require.False(t, hasColumn("summary_anchor_message_id"))
 	require.False(t, hasColumn("summary_prompt_prefix_len"))
 

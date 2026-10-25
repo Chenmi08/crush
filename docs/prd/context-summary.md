@@ -603,10 +603,11 @@ actually done" without reading the tree.
 | 8 | **done**, reviewed | `transcript.go`, `agent.go` |
 | 9 | **done**, reviewed | `summary_merge.go`, `agent.go`, `session.go`, migration + sqlc |
 | 11 | **done**, reviewed | `tools/fetch.go`, `tools/search.go`, `tools/recall.go`, `tools/spill.go`, `shell/truncate.go` |
-| 12 | not started | — |
+| 12 | **done**, reviewed | `filetracker/service.go`, `summary_recent.go`, `agent.go`, tools, migration + sqlc |
 
 This is the §7.1 minimum viable subset (1, 4, 5) plus PR-2, PR-3, PR-6, PR-7,
-PR-8, PR-9, PR-10 and PR-11. PR-3 adds one migration; PR-6 adds one generated query; PR-7 adds
+PR-8, PR-9, PR-10, PR-11 and PR-12. All twelve §7 PRs are now implemented;
+PR-13..PR-19 remain deferred (§8). PR-3 adds one migration; PR-6 adds one generated query; PR-7 adds
 the first user-facing configuration option in this PRD
 (`compaction-elide`, §6).
 "Reviewed" means the
@@ -1073,9 +1074,71 @@ Implementation notes worth keeping:
   session is searched" claims for archived payloads. Per-session spill
   subdirectories would close it and belong with PR-12's `file_events` work.
 
-**Known gaps, in dependency order.** The cross-cutting fixture in §9
-(`internal/agent/testdata/summary/`) is also not created yet, so PR-1/2/4/5 are
-covered by synthetic in-test histories instead.
+**PR-12 — write/exec ledger and recently-touched files.** `file_events` records
+what a session wrote and ran, and each successful compaction appends a
+`## Recently Modified Files` list of the five newest writes. The read side is
+unchanged: `read_files` still answers "did this session see the file before
+writing it", because `require-read-before-write` depends on its exact
+semantics, and a write event cannot answer that question.
+
+How the pieces fit:
+
+- **Writes are recorded where the file is actually written.** `edit`, `write`,
+  `multiedit`, `lsp_replace_symbol` and `lsp_rename` each call `RecordWrite`
+  next to the existing `RecordRead`. `lsp_rename` is beyond the four tools §7
+  enumerates: it rewrites every affected file, and leaving it out would make
+  the ledger claim a rename changed nothing.
+- **Execs are recorded after approval, not before.** The first draft wrote the
+  ledger entry before the permission gate, so a refused command entered the
+  ledger as something the session ran. It now runs after every approval and
+  before execution, so a command that fails is still recorded (the resumption
+  question is "what was run", not "what succeeded") and a denied one is not.
+- **Timestamps are milliseconds.** `strftime('%s', 'now')` has one-second
+  resolution, and a multi-file edit lands in one burst: five writes in the
+  same second would order alphabetically and drop the newest, which is the one
+  a resuming agent needs. The caller supplies the millisecond stamp.
+- **A write is stored as an absolute path.** `ListReadFiles` re-absolutises
+  relative rows against `os.Getwd()`, which is right for the read guard but
+  wrong for the summary: the block shortens against the session's workspace,
+  which need not be the process working directory. Storing the tool's absolute
+  path lets each reader do its own shortening.
+- **The block is a narrative boundary.** `recentlyModifiedBlockLeadIn` joined
+  the marker list in `summary_merge.go`, and `summaryNarrativeTokens` now cuts
+  with `narrativeCut` instead of searching for the manifest alone. A
+  compaction with no failures and no changed files produces no manifest but
+  does produce this list, so the old single-marker cut would have counted it
+  as model prose and inflated the next guard comparison.
+- **One row per `(session, path, kind)`.** Repeating a write refreshes `at`
+  rather than appending, so the ledger stays bounded to the files and commands
+  a session actually touched. The tradeoff is that history is not kept: PR-12
+  asks for "the newest five", not for a replayable edit log.
+- **The `read` kind is reserved, not written.** §5's table gives the column as
+  `kind`, and §7's prose names `'read'`; SQLite cannot widen a CHECK constraint
+  without rebuilding the table, so the value is admitted now and left unused.
+  `read_files` stays authoritative for reads.
+- **Exec rows are not in the summary.** The spec asks for a top-five list of
+  *files*, and a command is not a modified file; listing one under that
+  heading would claim an edit that may not have happened. The exec ledger
+  remains available to any future consumer (and is what the manifest's bash
+  call count is a weaker substitute for), but nothing reads it today. That is
+  recorded as a known gap, not presented as a working feature.
+
+**PR-12's block versus the manifest's `files:` section.** They overlap and are
+not redundant. `files:` answers "what is changed in the working tree right
+now" and is merged with git, so it survives a session that edited through a
+shell command. The recently-modified list answers "what did *this session*
+write", which git cannot attribute and which still works when git is
+unavailable or the tree has been reverted since. A resuming agent needs both
+facts, and the manifest's `src=` field already distinguishes the sources on its
+side.
+
+**Known gaps, in dependency order.** PR-12's exec ledger has no reader: the
+summary lists writes only, and nothing else queries `kind='exec'` yet. The
+rows are correct and bounded, but they are written for a consumer that does
+not exist; a future "commands run" section, or the bash-call substitute the
+manifest currently infers, is where they would land. The cross-cutting fixture
+in §9 (`internal/agent/testdata/summary/`) is also not created yet, so
+PR-1/2/4/5 are covered by synthetic in-test histories instead.
 `manifestInput.Undecodable` is implemented and unit-tested but unreachable in
 production: `ListFromSummary` returns an error on a decode failure rather than
 a partial slice, so `Summarize` has no count to pass. Wiring it needs a change

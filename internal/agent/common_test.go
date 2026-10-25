@@ -94,6 +94,7 @@ func testSessionAgent(env fakeEnv, large, small fantasy.LanguageModel, systemPro
 		IsYolo:       true,
 		Sessions:     env.sessions,
 		Messages:     env.messages,
+		FileTracker:  *env.filetracker,
 		Tools:        tools,
 	})
 	return agent
@@ -143,7 +144,7 @@ func coderAgent(r *vcr.Recorder, env fakeEnv, large, small fantasy.LanguageModel
 	}
 
 	allTools := []fantasy.AgentTool{
-		tools.NewBashTool(env.permissions, env.workingDir, cfg.Config().Options.DataDirectory, cfg.Config().Options.Attribution, modelName, nil),
+		tools.NewBashTool(env.permissions, env.workingDir, cfg.Config().Options.DataDirectory, cfg.Config().Options.Attribution, modelName, nil, *env.filetracker),
 		tools.NewDownloadTool(env.permissions, env.workingDir, r.GetDefaultClient()),
 		tools.NewEditTool(nil, env.permissions, env.history, *env.filetracker, env.workingDir, tools.FileWriteOptions{}),
 		tools.NewMultiEditTool(nil, env.permissions, env.history, *env.filetracker, env.workingDir, tools.FileWriteOptions{}),

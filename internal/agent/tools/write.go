@@ -174,6 +174,7 @@ func NewWriteTool(
 			}
 
 			filetracker.RecordRead(ctx, sessionID, filePath)
+			filetracker.RecordWrite(ctx, sessionID, filePath)
 
 			notifyLSPs(ctx, lspManager, params.FilePath)
 

@@ -839,6 +839,7 @@ func (c *coordinator) buildAgent(ctx context.Context, prompt *prompt.Prompt, age
 		IsYolo:               c.permissions.SkipRequests(),
 		Sessions:             c.sessions,
 		Messages:             c.messages,
+		FileTracker:          c.filetracker,
 		Cfg:                  c.cfg,
 		Tools:                nil,
 		Notify:               c.notify,
@@ -926,7 +927,7 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 
 	allTools = append(
 		allTools,
-		tools.NewBashTool(c.permissions, c.cfg.WorkingDir(), c.cfg.Config().Options.DataDirectory, c.cfg.Config().Options.Attribution, modelID, networkCommands),
+		tools.NewBashTool(c.permissions, c.cfg.WorkingDir(), c.cfg.Config().Options.DataDirectory, c.cfg.Config().Options.Attribution, modelID, networkCommands, c.filetracker),
 		tools.NewCrushInfoTool(c.cfg, c.lspManager, c.allSkills, c.sessions, c.skillTracker),
 		tools.NewCrushLogsTool(logFile),
 		tools.NewJobOutputTool(c.cfg.Config().Options.DataDirectory),

@@ -149,15 +149,19 @@ func summaryBreakerTripped(s session.Session) bool {
 }
 
 // summaryNarrativeTokens measures the model-written part of a summary. The
-// manifest and, in a later PR, the transcript block are appended by code
-// after the prose; counting them would inflate a size comparison and make
-// the collapse guard more permissive than it should be.
+// manifest, the transcript pointer and the recently-modified list are
+// appended by code after the prose; counting them would inflate a size
+// comparison and make the collapse guard more permissive than it should be.
+//
+// The boundary comes from [narrativeCut] rather than one marker: a summary
+// whose only code-appended block is the recently-modified list has no
+// manifest at all, and cutting on the manifest alone would count that list as
+// prose.
 //
 // Both sides of the ratio are measured with this helper on purpose. Provider
 // usage counts are not comparable to a byte-derived estimate, and after the
-// manifest is appended they also describe a different string, so mixing the
+// blocks are appended they also describe a different string, so mixing the
 // two would let the guard and the stored counters drift apart.
 func summaryNarrativeTokens(content string) int64 {
-	narrative, _, _ := strings.Cut(content, manifestLeadIn)
-	return approxTokenCount(strings.TrimSpace(narrative))
+	return approxTokenCount(strings.TrimSpace(content[:narrativeCut(content)]))
 }

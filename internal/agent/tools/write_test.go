@@ -5,12 +5,50 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
 	"charm.land/fantasy"
 	"github.com/stretchr/testify/require"
 )
+
+// recordingFileTracker notes the ledger calls a tool makes, so a test can
+// assert the write or exec was recorded rather than only that the file
+// changed.
+type recordingFileTracker struct {
+	mu     sync.Mutex
+	writes []string
+	execs  []string
+}
+
+func (m *recordingFileTracker) RecordRead(ctx context.Context, sessionID, path string) {}
+
+func (m *recordingFileTracker) LastReadTime(ctx context.Context, sessionID, path string) time.Time {
+	return time.Now()
+}
+
+func (m *recordingFileTracker) ListReadFiles(ctx context.Context, sessionID string) ([]string, error) {
+	return nil, nil
+}
+
+func (m *recordingFileTracker) RecordWrite(ctx context.Context, sessionID, path string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.writes = append(m.writes, path)
+}
+
+func (m *recordingFileTracker) RecordExec(ctx context.Context, sessionID, command string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.execs = append(m.execs, command)
+}
+
+func (m *recordingFileTracker) ListRecentWrites(ctx context.Context, sessionID string, limit int) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.writes...), nil
+}
 
 type mockFileTrackerService struct{}
 
@@ -22,6 +60,31 @@ func (m mockFileTrackerService) LastReadTime(ctx context.Context, sessionID, pat
 
 func (m mockFileTrackerService) ListReadFiles(ctx context.Context, sessionID string) ([]string, error) {
 	return nil, nil
+}
+
+func (m mockFileTrackerService) RecordWrite(ctx context.Context, sessionID, path string) {}
+
+func (m mockFileTrackerService) RecordExec(ctx context.Context, sessionID, command string) {}
+
+func (m mockFileTrackerService) ListRecentWrites(ctx context.Context, sessionID string, limit int) ([]string, error) {
+	return nil, nil
+}
+
+// A successful write is recorded in the session's ledger, which is what the
+// summary's recently-modified list is built from.
+func TestWriteToolRecordsWrite(t *testing.T) {
+	t.Parallel()
+
+	workingDir := t.TempDir()
+	ctx := context.WithValue(t.Context(), SessionIDContextKey, "test-session")
+	tracker := &recordingFileTracker{}
+
+	tool := NewWriteTool(nil, &mockPermissionService{}, &mockHistoryService{}, tracker, workingDir, FileWriteOptions{})
+	resp := runWriteTool(t, tool, ctx, WriteParams{FilePath: "recorded.txt", Content: "hello"})
+	require.False(t, resp.IsError)
+
+	require.Equal(t, []string{filepath.Join(workingDir, "recorded.txt")}, tracker.writes)
+	require.Empty(t, tracker.execs, "a file write is not an exec")
 }
 
 func TestWriteToolWritesEmptyNewFile(t *testing.T) {

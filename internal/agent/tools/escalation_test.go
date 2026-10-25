@@ -249,7 +249,7 @@ func TestEscalation_ShellTool(t *testing.T) {
 	policy := tableSandboxPolicy(t, workspace)
 	perms := newEscalationService(true)
 	attribution := sandboxAttribution()
-	tool := NewBashTool(perms, workspace, workspace, attribution, "test-model", nil)
+	tool := NewBashTool(perms, workspace, workspace, attribution, "test-model", nil, nil)
 
 	ctx := context.WithValue(context.Background(), SessionIDContextKey, "test-session")
 	ctx = WithSandboxPolicy(ctx, policy)
@@ -284,7 +284,7 @@ func TestEscalation_ToolDescriptionsStateEscalation(t *testing.T) {
 	workspace := t.TempDir()
 	attribution := sandboxAttribution()
 	tools := []fantasy.AgentTool{
-		NewBashTool(&mockPermissionService{}, workspace, workspace, attribution, "test", nil),
+		NewBashTool(&mockPermissionService{}, workspace, workspace, attribution, "test", nil, nil),
 		NewWriteTool(nil, &mockPermissionService{}, &mockHistoryService{}, mockFileTrackerService{}, workspace, FileWriteOptions{}),
 		NewEditTool(nil, &mockPermissionService{}, &mockHistoryService{}, mockFileTrackerService{}, workspace, FileWriteOptions{}),
 		NewMultiEditTool(nil, &mockPermissionService{}, &mockHistoryService{}, mockFileTrackerService{}, workspace, FileWriteOptions{}),

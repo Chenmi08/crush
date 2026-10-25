@@ -52,6 +52,10 @@ type Querier interface {
 	// summary can come back too; the caller slices from the summary by ID.
 	ListMessagesBySessionFromSummary(ctx context.Context, arg ListMessagesBySessionFromSummaryParams) ([]Message, error)
 	ListNewFiles(ctx context.Context) ([]File, error)
+	// Backs the summary's "recently modified files" section: the files this
+	// session wrote, newest first. Ties break on path so an edit that lands in
+	// the same millisecond as another still renders in a stable order.
+	ListRecentFileWrites(ctx context.Context, arg ListRecentFileWritesParams) ([]FileEvent, error)
 	ListSessionReadFiles(ctx context.Context, sessionID string) ([]ReadFile, error)
 	ListSessions(ctx context.Context) ([]Session, error)
 	// Backs `recall`, which resolves an archived tool call id to its stored
@@ -60,6 +64,13 @@ type Querier interface {
 	ListToolMessagesBySession(ctx context.Context, sessionID string) ([]Message, error)
 	// Backs prompt history, which steps back one entry at a time.
 	ListUserMessagesBySession(ctx context.Context, sessionID string) ([]Message, error)
+	// One row per (session, path, kind), so a repeated write moves the timestamp
+	// forward instead of adding an event. `kind` is validated by the table.
+	//
+	// `at` is written by the caller in Unix milliseconds. Second resolution is
+	// not enough to order the edits a multi-file change makes in one burst, and
+	// the summary lists the newest five.
+	RecordFileEvent(ctx context.Context, arg RecordFileEventParams) error
 	RecordFileRead(ctx context.Context, arg RecordFileReadParams) error
 	RenameSession(ctx context.Context, arg RenameSessionParams) error
 	SetSessionChannel(ctx context.Context, arg SetSessionChannelParams) (Session, error)

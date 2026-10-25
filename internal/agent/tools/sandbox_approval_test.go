@@ -27,7 +27,7 @@ func TestApproval_ConfinedCommandIsAutoApproved(t *testing.T) {
 	policy := tableSandboxPolicy(t, workspace)
 	perms := &recordingPermissionService{Broker: pubsubBroker(), allow: true}
 	attribution := &config.Attribution{TrailerStyle: config.TrailerStyleNone}
-	tool := NewBashTool(perms, workspace, workspace, attribution, "test-model", nil)
+	tool := NewBashTool(perms, workspace, workspace, attribution, "test-model", nil, nil)
 
 	ctx := context.WithValue(context.Background(), SessionIDContextKey, "test-session")
 	ctx = WithSandboxPolicy(ctx, policy)
@@ -46,7 +46,7 @@ func TestApproval_NetworkCommandPrompts(t *testing.T) {
 	policy := tableSandboxPolicy(t, workspace)
 	perms := &recordingPermissionService{Broker: pubsubBroker(), allow: true}
 	attribution := &config.Attribution{TrailerStyle: config.TrailerStyleNone}
-	tool := NewBashTool(perms, workspace, workspace, attribution, "test-model", nil)
+	tool := NewBashTool(perms, workspace, workspace, attribution, "test-model", nil, nil)
 
 	ctx := context.WithValue(context.Background(), SessionIDContextKey, "test-session")
 	ctx = WithSandboxPolicy(ctx, policy)
@@ -66,7 +66,7 @@ func TestApproval_NoPolicyNeverPrompts(t *testing.T) {
 	workspace := t.TempDir()
 	perms := &recordingPermissionService{Broker: pubsubBroker(), allow: true}
 	attribution := &config.Attribution{TrailerStyle: config.TrailerStyleNone}
-	tool := NewBashTool(perms, workspace, workspace, attribution, "test-model", nil)
+	tool := NewBashTool(perms, workspace, workspace, attribution, "test-model", nil, nil)
 
 	ctx := context.WithValue(context.Background(), SessionIDContextKey, "test-session")
 
@@ -88,7 +88,7 @@ func TestApproval_YoloKeepsBoundary(t *testing.T) {
 	// boundary must still be enforced by the fence.
 	perms := &recordingPermissionService{Broker: pubsubBroker(), allow: true}
 	attribution := &config.Attribution{TrailerStyle: config.TrailerStyleNone}
-	tool := NewBashTool(perms, workspace, workspace, attribution, "test-model", nil)
+	tool := NewBashTool(perms, workspace, workspace, attribution, "test-model", nil, nil)
 
 	ctx := context.WithValue(context.Background(), SessionIDContextKey, "test-session")
 	ctx = WithSandboxPolicy(ctx, policy)
@@ -108,7 +108,7 @@ func TestApproval_RequestCarriesSandboxState(t *testing.T) {
 	policy := tableSandboxPolicy(t, workspace)
 	perms := &recordingPermissionService{Broker: pubsubBroker(), allow: true}
 	attribution := &config.Attribution{TrailerStyle: config.TrailerStyleNone}
-	tool := NewBashTool(perms, workspace, workspace, attribution, "test-model", nil)
+	tool := NewBashTool(perms, workspace, workspace, attribution, "test-model", nil, nil)
 
 	ctx := context.WithValue(context.Background(), SessionIDContextKey, "test-session")
 	ctx = WithSandboxPolicy(ctx, policy)

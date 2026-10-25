@@ -257,6 +257,7 @@ func processMultiEditWithCreation(edit editContext, params MultiEditParams) (fan
 	}
 
 	edit.filetracker.RecordRead(edit.ctx, sessionID, params.FilePath)
+	edit.filetracker.RecordWrite(edit.ctx, sessionID, params.FilePath)
 
 	var message string
 	if len(failedEdits) > 0 {
