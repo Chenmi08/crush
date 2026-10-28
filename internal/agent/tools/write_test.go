@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"charm.land/fantasy"
+	"github.com/charmbracelet/crush/internal/filetracker"
 	"github.com/stretchr/testify/require"
 )
 
@@ -44,10 +45,14 @@ func (m *recordingFileTracker) RecordExec(ctx context.Context, sessionID, comman
 	m.execs = append(m.execs, command)
 }
 
-func (m *recordingFileTracker) ListRecentWrites(ctx context.Context, sessionID string, limit int) ([]string, error) {
+func (m *recordingFileTracker) ListRecentWrites(ctx context.Context, sessionID string, limit int) ([]filetracker.WriteEvent, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return append([]string(nil), m.writes...), nil
+	writes := make([]filetracker.WriteEvent, 0, len(m.writes))
+	for _, path := range m.writes {
+		writes = append(writes, filetracker.WriteEvent{Path: path})
+	}
+	return writes, nil
 }
 
 type mockFileTrackerService struct{}
@@ -66,7 +71,7 @@ func (m mockFileTrackerService) RecordWrite(ctx context.Context, sessionID, path
 
 func (m mockFileTrackerService) RecordExec(ctx context.Context, sessionID, command string) {}
 
-func (m mockFileTrackerService) ListRecentWrites(ctx context.Context, sessionID string, limit int) ([]string, error) {
+func (m mockFileTrackerService) ListRecentWrites(ctx context.Context, sessionID string, limit int) ([]filetracker.WriteEvent, error) {
 	return nil, nil
 }
 

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/crush/internal/filetracker"
 	"github.com/stretchr/testify/require"
 )
 
@@ -35,8 +36,12 @@ func (m *mockEditFileTracker) RecordWrite(ctx context.Context, sessionID, path s
 
 func (m *mockEditFileTracker) RecordExec(ctx context.Context, sessionID, command string) {}
 
-func (m *mockEditFileTracker) ListRecentWrites(ctx context.Context, sessionID string, limit int) ([]string, error) {
-	return m.writes, nil
+func (m *mockEditFileTracker) ListRecentWrites(ctx context.Context, sessionID string, limit int) ([]filetracker.WriteEvent, error) {
+	writes := make([]filetracker.WriteEvent, 0, len(m.writes))
+	for _, path := range m.writes {
+		writes = append(writes, filetracker.WriteEvent{Path: path})
+	}
+	return writes, nil
 }
 
 func TestReplaceContentPreservesCRLFAndMetadata(t *testing.T) {

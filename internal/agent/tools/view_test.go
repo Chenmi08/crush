@@ -247,7 +247,7 @@ func (m mockFileTracker) RecordWrite(ctx context.Context, sessionID, path string
 
 func (m mockFileTracker) RecordExec(ctx context.Context, sessionID, command string) {}
 
-func (m mockFileTracker) ListRecentWrites(ctx context.Context, sessionID string, limit int) ([]string, error) {
+func (m mockFileTracker) ListRecentWrites(ctx context.Context, sessionID string, limit int) ([]filetracker.WriteEvent, error) {
 	return nil, nil
 }
 

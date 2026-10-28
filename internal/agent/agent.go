@@ -226,8 +226,8 @@ type sessionAgent struct {
 	sessions   session.Service
 	messages   message.Service
 	// filetracker records what the session read and wrote. It is nil in
-	// tests and for agents with no tracker, in which case the summary's
-	// recently-modified list is simply omitted.
+	// tests and for agents with no tracker, in which case the manifest's
+	// file list is what git reports alone.
 	filetracker filetracker.Service
 	// cfg backs channel reply routing (config lookup + MCP tool
 	// invocation). Nil in tests and sub-agents that never see channel
@@ -1859,32 +1859,36 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 	// guaranteed by plumbing, while the model's prose keeps the judgement
 	// (why a file mattered) in `## Artifacts`.
 	//
-	// The working tree is queried because tool calls are not the only way a
-	// file changes: an edit made through a shell command names no path in
-	// any tool input, so a manifest built from tool calls alone would report
-	// an empty file list while the tree is full of changes. git is the
-	// authority here; the command string is never parsed for paths.
-	var worktreeFiles []manifestWorktreeFile
-	var worktreeKnown bool
+	// The file list has two sources. The session's write ledger covers the
+	// file tools, and git covers everything else: an edit made through a
+	// shell command names no path in any tool input, so a manifest built
+	// from tool calls alone would report an empty file list while the tree
+	// is full of changes. git is the authority on the resulting state; the
+	// command string is never parsed for paths.
+	var (
+		workingDir    string
+		worktreeFiles []manifestWorktreeFile
+		worktreeKnown bool
+	)
 	if a.cfg != nil {
-		if files, err := worktreeDirtyFiles(ctx, a.cfg.WorkingDir()); err != nil {
+		workingDir = a.cfg.WorkingDir()
+		if files, err := worktreeDirtyFiles(ctx, workingDir); err != nil {
 			slog.Warn("Could not read working tree for summary manifest", "error", err)
 		} else {
 			worktreeFiles = files
 			worktreeKnown = true
 		}
 	}
+	var appendix summaryAppendix
 	if manifest := buildContextManifest(manifestInput{
 		Messages:      msgs,
 		AnchorAt:      time.Now().Unix(),
 		GeneratedAt:   time.Now(),
 		Worktree:      worktreeFiles,
 		WorktreeKnown: worktreeKnown,
+		Files:         a.summaryWrites(ctx, sessionID, workingDir),
 	}); manifest != "" {
-		summaryMessage.AppendContent("\n\n" + manifestLeadIn + manifest)
-		if updateErr := a.messages.Update(genCtx, summaryMessage); updateErr != nil {
-			return updateErr
-		}
+		appendix.add(manifestLeadIn + manifest)
 	}
 
 	// Export the pre-compaction conversation and point the summary at it.
@@ -1895,26 +1899,13 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 	// and refusing to compact would wedge a session that is already over
 	// its window.
 	if block, ok := a.appendTranscript(sessionID, prevSummaryContent, msgs); ok {
-		summaryMessage.AppendContent("\n\n" + block)
-		if updateErr := a.messages.Update(genCtx, summaryMessage); updateErr != nil {
-			return updateErr
-		}
+		appendix.add(block)
 	}
 
-	// Point the resuming agent at the files this session changed. The
-	// manifest already lists changed paths, but it does so from the archived
-	// range and the working tree; this list is the session's own write
-	// ledger and survives a compaction in which git is unavailable. Paths
-	// only: re-reading them is the caller's decision, and copying contents
-	// into the summary would defeat compaction.
-	workingDir := ""
-	if a.cfg != nil {
-		workingDir = a.cfg.WorkingDir()
-	}
-	if paths, err := a.recentWritePaths(ctx, sessionID); err != nil {
-		slog.Warn("Could not read recent file writes for summary", "session_id", sessionID, "error", err)
-	} else if block := recentlyModifiedBlock(paths, workingDir); block != "" {
-		summaryMessage.AppendContent("\n\n" + block)
+	// One append and one write for the whole appendix: the blocks are a single
+	// unit, and a summary is either persisted with all of them or none.
+	if !appendix.empty() {
+		summaryMessage.AppendContent("\n\n" + appendix.render())
 		if updateErr := a.messages.Update(genCtx, summaryMessage); updateErr != nil {
 			return updateErr
 		}

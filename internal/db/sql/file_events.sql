@@ -19,9 +19,9 @@ INSERT INTO file_events (
     at = excluded.at;
 
 -- name: ListRecentFileWrites :many
--- Backs the summary's "recently modified files" section: the files this
--- session wrote, newest first. Ties break on path so an edit that lands in
--- the same millisecond as another still renders in a stable order.
+-- Backs the `files:` section of the summary manifest: the files this session
+-- wrote, newest first. Ties break on path so an edit that lands in the same
+-- millisecond as another still renders in a stable order.
 SELECT *
 FROM file_events
 WHERE session_id = ? AND kind = 'write'

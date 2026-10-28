@@ -344,9 +344,9 @@ func TestSummarize_StripsAnalysisBlockBeforePersisting(t *testing.T) {
 	require.NotContains(t, content, "<analysis>")
 	require.NotContains(t, content, "let me think about this")
 
-	// The narrative is preserved verbatim; the code-generated manifest may
-	// follow it.
-	narrative, _, _ := strings.Cut(content, manifestLeadIn)
+	// The narrative is preserved verbatim; the code-generated appendix may
+	// follow it, and the appendix marker is the one boundary.
+	narrative, _, _ := strings.Cut(content, appendixLeadIn)
 	require.Equal(t, body, strings.TrimSpace(narrative))
 	// The seven authored headings survive the strip.
 	for _, heading := range []string{"## Current State", "## User Messages"} {
@@ -361,6 +361,7 @@ func TestSummarize_AppendsManifestAfterModelProse(t *testing.T) {
 	body := "## Current State\n- the failing test is `TestSummarize`"
 	model := &summaryStreamModel{text: body, finishReason: fantasy.FinishReasonStop}
 	sa := summaryTestAgent(env, model)
+	sa.cfg = testConfigStore(t, env.workingDir)
 
 	ctx := t.Context()
 	sess, err := env.sessions.Create(ctx, "summary session")
@@ -407,6 +408,10 @@ func TestSummarize_AppendsManifestAfterModelProse(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	// The edit tool records its write in the session ledger; the manifest
+	// reads that ledger instead of re-parsing the tool call input.
+	(*env.filetracker).RecordWrite(ctx, sess.ID, filepath.Join(env.workingDir, "internal", "agent", "agent.go"))
+
 	require.NoError(t, sa.Summarize(ctx, sess.ID, fantasy.ProviderOptions{}, nil))
 
 	after, err := env.sessions.Get(ctx, sess.ID)
@@ -417,12 +422,17 @@ func TestSummarize_AppendsManifestAfterModelProse(t *testing.T) {
 	content := msg.Content().Text
 	require.Contains(t, content, "<context_manifest")
 	require.Contains(t, content, `cmd="go test ./internal/agent/..."`)
-	require.Contains(t, content, "path=internal/agent/agent.go ops=edit edits=1")
+	require.Contains(t, content, "path=internal/agent/agent.go last=")
+	require.Contains(t, content, "src=tool")
 
-	// The model's prose precedes the code-generated block: the summary the
-	// model wrote is not rewritten, the facts are appended to it. The
-	// lead-in marks the manifest as data, not instructions.
-	require.Less(t, strings.Index(content, body), strings.Index(content, manifestLeadIn))
+	// The model's prose precedes the code-generated blocks: the summary the
+	// model wrote is not rewritten, the facts are appended to it. One
+	// appendix marker introduces all of them, and the manifest lead-in keeps
+	// the manifest framed as data, not instructions.
+	require.Equal(t, 1, strings.Count(content, appendixLeadIn),
+		"all appended blocks share one boundary")
+	require.Less(t, strings.Index(content, body), strings.Index(content, appendixLeadIn))
+	require.Less(t, strings.Index(content, appendixLeadIn), strings.Index(content, manifestLeadIn))
 	require.Less(t, strings.Index(content, manifestLeadIn), strings.Index(content, "<context_manifest"))
 }
 

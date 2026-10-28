@@ -22,9 +22,9 @@ type ListRecentFileWritesParams struct {
 	Limit     int64  `json:"limit"`
 }
 
-// Backs the summary's "recently modified files" section: the files this
-// session wrote, newest first. Ties break on path so an edit that lands in
-// the same millisecond as another still renders in a stable order.
+// Backs the `files:` section of the summary manifest: the files this session
+// wrote, newest first. Ties break on path so an edit that lands in the same
+// millisecond as another still renders in a stable order.
 func (q *Queries) ListRecentFileWrites(ctx context.Context, arg ListRecentFileWritesParams) ([]FileEvent, error) {
 	rows, err := q.query(ctx, q.listRecentFileWritesStmt, listRecentFileWrites, arg.SessionID, arg.Limit)
 	if err != nil {

@@ -52,7 +52,7 @@ type Querier interface {
 	// summary can come back too; the caller slices from the summary by ID.
 	ListMessagesBySessionFromSummary(ctx context.Context, arg ListMessagesBySessionFromSummaryParams) ([]Message, error)
 	ListNewFiles(ctx context.Context) ([]File, error)
-	// Backs the summary's "recently modified files" section: the files this
+	// Backs the `files:` section of the summary manifest: the files this
 	// session wrote, newest first. Ties break on path so an edit that lands in
 	// the same millisecond as another still renders in a stable order.
 	ListRecentFileWrites(ctx context.Context, arg ListRecentFileWritesParams) ([]FileEvent, error)

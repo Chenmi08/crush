@@ -18,6 +18,14 @@ import (
 // live in file_events, which answers "what did this session change".
 type EventKind string
 
+// WriteEvent is one file the session created or modified, with the time of
+// the latest write. The summary lists these as the session's own changes;
+// git supplies the edits it cannot attribute.
+type WriteEvent struct {
+	Path string
+	At   time.Time
+}
+
 const (
 	// EventWrite is a file the session created or modified with a file tool.
 	EventWrite EventKind = "write"
@@ -47,11 +55,12 @@ type Service interface {
 	// is stored verbatim; it is not parsed for file paths.
 	RecordExec(ctx context.Context, sessionID, command string)
 
-	// ListRecentWrites returns the paths the session wrote, newest first.
-	// Paths are absolute: the caller shortens them against whatever
-	// workspace it is summarizing for, which need not be the process
-	// working directory ListReadFiles resolves against.
-	ListRecentWrites(ctx context.Context, sessionID string, limit int) ([]string, error)
+	// ListRecentWrites returns the files the session wrote, newest first,
+	// with the time of the latest write. Paths are absolute: the caller
+	// shortens them against whatever workspace it is summarizing for, which
+	// need not be the process working directory ListReadFiles resolves
+	// against.
+	ListRecentWrites(ctx context.Context, sessionID string, limit int) ([]WriteEvent, error)
 }
 
 type service struct {
@@ -113,7 +122,7 @@ func (s *service) recordEvent(ctx context.Context, sessionID, value string, kind
 }
 
 // ListRecentWrites returns the files the session wrote, newest first.
-func (s *service) ListRecentWrites(ctx context.Context, sessionID string, limit int) ([]string, error) {
+func (s *service) ListRecentWrites(ctx context.Context, sessionID string, limit int) ([]WriteEvent, error) {
 	if limit <= 0 {
 		return nil, nil
 	}
@@ -125,11 +134,14 @@ func (s *service) ListRecentWrites(ctx context.Context, sessionID string, limit 
 		return nil, fmt.Errorf("listing recent file writes: %w", err)
 	}
 
-	paths := make([]string, 0, len(events))
+	writes := make([]WriteEvent, 0, len(events))
 	for _, event := range events {
-		paths = append(paths, event.Path)
+		writes = append(writes, WriteEvent{
+			Path: event.Path,
+			At:   time.UnixMilli(event.At),
+		})
 	}
-	return paths, nil
+	return writes, nil
 }
 
 // LastReadTime returns when a file was last read.

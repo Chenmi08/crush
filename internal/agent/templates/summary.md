@@ -57,6 +57,8 @@ Breadcrumbs the resuming assistant can query immediately: file path, symbol,
 line number. One item per line, with a note on why it matters. Do not guess a
 path or line number you have not seen. (A separate machine-generated index
 carries the authoritative list of changed files; this section carries the why.)
+Do not restate that list and do not count its files: the tree changes after
+every write, so a count here goes stale while the index stays correct.
 
 ## Exact Next Steps
 

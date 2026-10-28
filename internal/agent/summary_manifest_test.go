@@ -103,49 +103,29 @@ func TestBuildContextManifestIsErrorFailureWithoutExitCode(t *testing.T) {
 func TestBuildContextManifestFilesDeduped(t *testing.T) {
 	t.Parallel()
 
-	msgs := []message.Message{
-		manifestMsg("a", message.Assistant, 1000,
-			message.ToolCall{ID: "c1", Name: "view", Input: `{"file_path":"internal/agent/agent.go"}`},
-		),
-		manifestMsg("b", message.Assistant, 2000,
-			message.ToolCall{ID: "c2", Name: "view", Input: `{"file_path":"internal/agent/agent.go"}`},
-		),
-		manifestMsg("c", message.Assistant, 3000,
-			message.ToolCall{ID: "c3", Name: "edit", Input: `{"file_path":"internal/agent/agent.go"}`},
-		),
-		manifestMsg("d", message.Assistant, 1500,
-			message.ToolCall{ID: "c4", Name: "view", Input: `{"file_path":"internal/message/message.go"}`},
-		),
-	}
-
-	block := buildContextManifest(manifestInput{Messages: msgs, AnchorAt: 4000})
+	block := buildContextManifest(manifestInput{
+		Messages:      []message.Message{manifestMsg("u", message.User, 1000)},
+		AnchorAt:      4000,
+		WorktreeKnown: true,
+		Files: []manifestFile{
+			{Path: "internal/agent/agent.go", Last: 3000},
+			{Path: "internal/message/message.go", Last: 1500},
+			// A ledger row for the same path is merged, keeping the
+			// newest timestamp rather than listing the file twice.
+			{Path: "internal/agent/agent.go", Last: 3500},
+		},
+	})
 
 	require.Contains(t, block, "files:")
 	require.Equal(t, 1, strings.Count(block, "path=internal/agent/agent.go"),
-		"a path is listed once, not once per operation")
-	require.Contains(t, block, "ops=read,edit reads=2 edits=1")
-	require.Contains(t, block, "path=internal/message/message.go ops=read reads=1")
+		"a path is listed once, not once per ledger row")
+	require.Contains(t, block, "path=internal/agent/agent.go last=")
+	require.Contains(t, block, "src=tool")
 
-	// The most recently touched file comes first.
+	// The most recently written file comes first.
 	agentIdx := strings.Index(block, "path=internal/agent/agent.go")
 	messageIdx := strings.Index(block, "path=internal/message/message.go")
 	require.Less(t, agentIdx, messageIdx)
-}
-
-func TestBuildContextManifestSkipsUndecodableToolInput(t *testing.T) {
-	t.Parallel()
-
-	msgs := []message.Message{
-		manifestMsg("a", message.Assistant, 1000,
-			message.ToolCall{ID: "c1", Name: "view", Input: `not json`},
-			message.ToolCall{ID: "c2", Name: "view", Input: `{"file_path":"ok.go"}`},
-		),
-	}
-
-	block := buildContextManifest(manifestInput{Messages: msgs, AnchorAt: 2000})
-
-	require.Contains(t, block, "path=ok.go")
-	require.NotContains(t, block, "not json")
 }
 
 func TestBuildContextManifestCoverageReportsUndecodable(t *testing.T) {
@@ -180,50 +160,10 @@ func TestBuildContextManifestEscapesValues(t *testing.T) {
 	// The command's newlines (there are none here) and the key's do not
 	// break the line-oriented format.
 	for _, line := range strings.Split(block, "\n") {
-		if strings.HasPrefix(line, "- id=") {
+		if strings.HasPrefix(line, "- tool=") {
 			require.NotContains(t, line, "\t")
 		}
 	}
-}
-
-func TestBuildContextManifestAnchors(t *testing.T) {
-	t.Parallel()
-
-	msgs := []message.Message{
-		manifestMsg("u1", message.User, 1000, message.TextContent{Text: "first"}),
-		bashFailureMsg("f", 2000, "make", ""),
-		bashResultMsg("f-r", 2001, "Error: boom\n\nExit code 1", true),
-		manifestMsg("u2", message.User, 3000, message.TextContent{Text: "second"}),
-	}
-
-	block := buildContextManifest(manifestInput{Messages: msgs, AnchorAt: 4000})
-
-	require.Contains(t, block, "anchors:")
-	require.Contains(t, block, "id=u1 kind=user")
-	require.Contains(t, block, "id=u2 kind=user")
-	// A failure anchor carries the argument `recall` takes for it, which
-	// is the tool call id rather than the message that requested the call.
-	require.Contains(t, block, "id=call_f kind=failure")
-	require.NotContains(t, block, "id=f kind=failure")
-}
-
-// getSessionMessages rewrites the previous summary's role to user so the
-// resumption prompt reads naturally. Its id is still not a recall handle:
-// the next summary replaces it, so it must not be offered as an anchor.
-func TestBuildContextManifestSkipsSummaryRowsInAnchors(t *testing.T) {
-	t.Parallel()
-
-	prev := manifestMsg("prev-summary", message.User, 1000, message.TextContent{Text: "old summary"})
-	prev.IsSummaryMessage = true
-	msgs := []message.Message{
-		prev,
-		manifestMsg("u1", message.User, 2000, message.TextContent{Text: "next request"}),
-	}
-
-	block := buildContextManifest(manifestInput{Messages: msgs, AnchorAt: 3000})
-
-	require.Contains(t, block, "id=u1 kind=user")
-	require.NotContains(t, block, "prev-summary")
 }
 
 func TestBuildContextManifestOmitsEmptySections(t *testing.T) {
@@ -242,7 +182,8 @@ func TestBuildContextManifestOmitsEmptySections(t *testing.T) {
 	require.NotContains(t, block, "failures:")
 	require.NotContains(t, block, "files:",
 		"a verified-clean tree with no file tool calls has nothing to list")
-	require.Contains(t, block, "anchors:")
+	require.NotContains(t, block, "anchors:",
+		"the manifest publishes no retrieval handles beyond the failure rows")
 	require.Contains(t, block, "archived: messages=1")
 }
 
@@ -303,33 +244,25 @@ func TestBuildContextManifestIncludesShellEditedFiles(t *testing.T) {
 		},
 	})
 
-	require.Contains(t, block, "path=x.go ops=none")
+	require.Contains(t, block, "path=x.go")
 	require.Contains(t, block, "src=git state=modified")
 }
 
-// A path touched by a file tool and also dirty is listed once, with both
-// provenances and the tool's counters intact.
+// A path written by a tool and also dirty is listed once, marked as git's
+// because git is the authority on the resulting state.
 func TestBuildContextManifestMergesToolAndWorktreeEntries(t *testing.T) {
 	t.Parallel()
 
-	msgs := []message.Message{
-		manifestMsg("e", message.Assistant, 1500,
-			message.ToolCall{ID: "c1", Name: "view", Input: `{"file_path":"a.go"}`},
-		),
-		manifestMsg("f", message.Assistant, 1600,
-			message.ToolCall{ID: "c2", Name: "edit", Input: `{"file_path":"a.go"}`},
-		),
-	}
-
 	block := buildContextManifest(manifestInput{
-		Messages:      msgs,
+		Messages:      []message.Message{manifestMsg("e", message.Assistant, 1500)},
 		AnchorAt:      2000,
 		WorktreeKnown: true,
+		Files:         []manifestFile{{Path: "a.go", Last: 1500}},
 		Worktree:      []manifestWorktreeFile{{Path: "a.go", Status: "modified"}},
 	})
 
 	require.Equal(t, 1, strings.Count(block, "path=a.go"))
-	require.Contains(t, block, "ops=read,edit reads=1 edits=1")
+	require.Contains(t, block, "path=a.go last=")
 	require.Contains(t, block, "src=git state=modified")
 }
 
@@ -393,19 +326,22 @@ func TestParseWorktreeStatus(t *testing.T) {
 func TestBuildContextManifestBudgetDropsFilesFirst(t *testing.T) {
 	t.Parallel()
 
-	var msgs []message.Message
-	for i := range 30 {
-		at := int64(1000 + i)
-		msgs = append(msgs, manifestMsg("m", message.Assistant, at,
-			message.ToolCall{
-				ID:    "c" + string(rune('a'+i)),
-				Name:  "edit",
-				Input: `{"file_path":"internal/agent/very/long/path/to/some/file/number/` + strings.Repeat("x", 40) + string(rune('a'+i)) + `.go"}`,
-			},
-		))
+	// Enough long paths to overrun the budget on their own: with no
+	// structural cap, the loop is what trims them, one entry at a time.
+	files := make([]manifestFile, 0, 60)
+	for i := range 60 {
+		files = append(files, manifestFile{
+			Path: "internal/agent/very/long/path/to/some/file/number/" + strings.Repeat("x", 40) + string(rune('a'+i%26)) + string(rune('a'+i/26)) + ".go",
+			Last: int64(1000 + i),
+		})
 	}
 
-	block := buildContextManifest(manifestInput{Messages: msgs, AnchorAt: 5000})
+	block := buildContextManifest(manifestInput{
+		Messages:      []message.Message{manifestMsg("u", message.User, 1000)},
+		AnchorAt:      5000,
+		WorktreeKnown: true,
+		Files:         files,
+	})
 
 	require.LessOrEqual(t, approxTokenCount(block), int64(manifestTokenBudget))
 	require.Contains(t, block, "truncated:")
@@ -439,24 +375,29 @@ func TestManifestFailureKeyPrefersMarker(t *testing.T) {
 	require.Empty(t, manifestFailureKey("   \n\n"))
 }
 
-func TestBuildContextManifestReportsStructuralCap(t *testing.T) {
+func TestBuildContextManifestKeepsEveryFileUnderBudget(t *testing.T) {
 	t.Parallel()
 
-	var msgs []message.Message
-	for i := range manifestMaxFiles + 5 {
-		msgs = append(msgs, manifestMsg("m", message.Assistant, int64(1000+i),
-			message.ToolCall{
-				ID:    "c" + string(rune('a'+i%26)) + string(rune('a'+i/26)),
-				Name:  "view",
-				Input: `{"file_path":"file` + string(rune('a'+i%26)) + string(rune('a'+i/26)) + `.go"}`,
-			},
-		))
+	// Files have no structural cap: the budget is the only thing that trims
+	// them. More entries than the old twenty-file cap must all survive when
+	// the block fits, because the entries it used to drop were real work.
+	files := make([]manifestFile, 0, 25)
+	for i := range 25 {
+		files = append(files, manifestFile{
+			Path: "file" + string(rune('a'+i)) + ".go",
+			Last: int64(1000 + i),
+		})
 	}
 
-	block := buildContextManifest(manifestInput{Messages: msgs, AnchorAt: 5000})
+	block := buildContextManifest(manifestInput{
+		Messages:      []message.Message{manifestMsg("u", message.User, 1000)},
+		AnchorAt:      5000,
+		WorktreeKnown: true,
+		Files:         files,
+	})
 
-	require.Contains(t, block, "- (truncated: 5 more)",
-		"dropping entries must be visible, not silent")
+	require.NotContains(t, block, "truncated:")
+	require.Equal(t, 25, strings.Count(block, "- path="))
 	require.LessOrEqual(t, approxTokenCount(block), int64(manifestTokenBudget))
 }
 
@@ -470,31 +411,6 @@ func TestManifestEscape(t *testing.T) {
 	require.Equal(t, "plain", manifestEscape("plain"))
 }
 
-func TestManifestFileOpReadsBothPathSpellings(t *testing.T) {
-	t.Parallel()
-
-	path, op, ok := manifestFileOp("view", `{"file_path":"a.go"}`)
-	require.True(t, ok)
-	require.Equal(t, "a.go", path)
-	require.Equal(t, manifestOpRead, op)
-
-	path, op, ok = manifestFileOp("edit", `{"path":"b.go"}`)
-	require.True(t, ok)
-	require.Equal(t, "b.go", path)
-	require.Equal(t, manifestOpEdit, op)
-
-	_, _, ok = manifestFileOp("bash", `{"command":"ls"}`)
-	require.False(t, ok)
-
-	_, _, ok = manifestFileOp("view", `{}`)
-	require.False(t, ok)
-
-	_, _, ok = manifestFileOp("view", `garbage`)
-	require.False(t, ok)
-}
-
-// §4.4 is normative: the fields appear in a fixed order, so a parser or a
-// reader that learned the shape is not surprised by an extra field.
 func TestBuildContextManifestFailureFieldOrder(t *testing.T) {
 	t.Parallel()
 
@@ -507,15 +423,15 @@ func TestBuildContextManifestFailureFieldOrder(t *testing.T) {
 
 	var line string
 	for _, l := range strings.Split(block, "\n") {
-		if strings.HasPrefix(l, "- id=f ") {
+		if strings.HasPrefix(l, "- tool=") {
 			line = l
 			break
 		}
 	}
 	require.NotEmpty(t, line)
 	// The declared fields keep their §4.4 order; the retrieval handle is
-	// appended so a parser that learned the old shape still works.
-	require.Regexp(t, `^- id=f tool=bash exit=1 cmd="go test \./\.\.\." key="--- FAIL: TestX" tool_call_id=call_f$`, line)
+	// appended last so a parser that learned the old shape still works.
+	require.Regexp(t, `^- tool=bash exit=1 cmd="go test \./\.\.\." key="--- FAIL: TestX" tool_call_id=call_f$`, line)
 }
 
 // Ties are common: results batched into one assistant message share both the
@@ -545,31 +461,6 @@ func TestBuildContextManifestFailureOrderIsDeterministic(t *testing.T) {
 	}
 }
 
-// Keeping the oldest handles would drop the current request, which §4.7 calls
-// the most important thing to carry across.
-func TestBuildContextManifestAnchorsKeepNewest(t *testing.T) {
-	t.Parallel()
-
-	var msgs []message.Message
-	for i := range manifestMaxAnchors + 5 {
-		msgs = append(msgs, manifestMsg(
-			"u"+string(rune('a'+i)),
-			message.User,
-			int64(1000+i),
-			message.TextContent{Text: "request"},
-		))
-	}
-
-	block := buildContextManifest(manifestInput{Messages: msgs, AnchorAt: 5000})
-
-	newest := "u" + string(rune('a'+manifestMaxAnchors+4))
-	oldest := "u" + string(rune('a'))
-	require.Contains(t, block, "id="+newest, "the most recent request must be kept")
-	require.NotContains(t, block, "id="+oldest+" ", "the oldest request is the one to drop")
-}
-
-// A working directory that is not a repository must not fail the summary; the
-// manifest just reports that it could not check.
 func TestWorktreeDirtyFilesOutsideRepository(t *testing.T) {
 	t.Parallel()
 
@@ -618,53 +509,4 @@ func runGit(t *testing.T, dir string, args ...string) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
 	require.NoError(t, cmd.Run(), "git %v", args)
-}
-
-// Batched results share one assistant message id, so deduplicating anchors by
-// message would drop all but the first failed call. Each payload needs its
-// own handle.
-func TestBuildContextManifestBatchedFailuresGetOneAnchorEach(t *testing.T) {
-	t.Parallel()
-
-	var calls []message.ContentPart
-	for _, id := range []string{"c1", "c2", "c3"} {
-		calls = append(calls, message.ToolCall{ID: id, Name: "bash", Input: `{"command":"make"}`})
-	}
-	msgs := []message.Message{manifestMsg("batch", message.Assistant, 1000, calls...)}
-	for _, id := range []string{"c1", "c2", "c3"} {
-		msgs = append(msgs, manifestMsg("batch-r", message.Tool, 1000, message.ToolResult{
-			ToolCallID: id, Name: "bash", Content: "boom\n\nExit code 1",
-		}))
-	}
-
-	block := buildContextManifest(manifestInput{Messages: msgs, AnchorAt: 2000})
-
-	require.Contains(t, block, "id=c1 kind=failure")
-	require.Contains(t, block, "id=c2 kind=failure")
-	require.Contains(t, block, "id=c3 kind=failure")
-}
-
-// Every anchor must name what `recall` takes for it: a message id for a user
-// message, a tool call id for a failure. This is the regression test for D-3.
-func TestBuildContextManifestAnchorsAreRetrievable(t *testing.T) {
-	t.Parallel()
-
-	msgs := []message.Message{
-		manifestMsg("u1", message.User, 1000, message.TextContent{Text: "first"}),
-		bashFailureMsg("f", 2000, "make", ""),
-		bashResultMsg("f-r", 2001, "Error: boom\n\nExit code 1", true),
-	}
-
-	block := buildContextManifest(manifestInput{Messages: msgs, AnchorAt: 3000})
-
-	var anchors []string
-	for _, line := range strings.Split(block, "\n") {
-		if strings.HasPrefix(line, "- id=") && strings.Contains(line, "kind=") {
-			anchors = append(anchors, line)
-		}
-	}
-	require.Contains(t, anchors, "- id=u1 kind=user")
-	require.Contains(t, anchors, "- id=call_f kind=failure",
-		"a failure anchor must be the tool call id, or recall cannot resolve it")
-	require.NotContains(t, anchors, "- id=f kind=failure")
 }

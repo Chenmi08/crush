@@ -137,22 +137,31 @@ func TestSummaryNarrativeTokens(t *testing.T) {
 		require.Equal(t, approxTokenCount(strings.TrimSpace(body)), summaryNarrativeTokens(body))
 	})
 
-	t.Run("manifest is excluded", func(t *testing.T) {
+	t.Run("legacy manifest is excluded", func(t *testing.T) {
 		t.Parallel()
 
 		body := strings.Repeat("fact ", 40)
-		content := body + "\n\n" + manifestLeadIn + "<context_manifest generated=\"x\">\narchived: messages=1\n</context_manifest>"
+		content := body + "\n\n" + legacyManifestLeadIn + "<context_manifest generated=\"x\">\narchived: messages=1\n</context_manifest>"
 		require.Equal(t, approxTokenCount(strings.TrimSpace(body)), summaryNarrativeTokens(content))
 	})
 
-	t.Run("recently modified list is excluded", func(t *testing.T) {
+	t.Run("appendix is excluded", func(t *testing.T) {
 		t.Parallel()
 
-		// The list is the only appended block a compaction with no
-		// failures and no changed files produces, so it is the case a
-		// manifest-only boundary would miscount.
 		body := strings.Repeat("fact ", 40)
-		content := body + "\n\n" + recentlyModifiedBlock([]string{"/ws/a.go"}, "/ws")
+		content := body + "\n\n" + appendixLeadIn + "\n\n" +
+			manifestLeadIn + "<context_manifest generated=\"x\">\narchived: messages=1\n</context_manifest>"
+		require.Equal(t, approxTokenCount(strings.TrimSpace(body)), summaryNarrativeTokens(content))
+	})
+
+	t.Run("legacy recently modified list is excluded", func(t *testing.T) {
+		t.Parallel()
+
+		// Summaries written before the manifest absorbed the write list
+		// carry that block's own lead-in; the boundary search still has
+		// to stop before it.
+		body := strings.Repeat("fact ", 40)
+		content := body + "\n\n" + recentlyModifiedBlockLeadIn + "\n\n- a.go"
 		require.Equal(t, approxTokenCount(strings.TrimSpace(body)), summaryNarrativeTokens(content))
 	})
 

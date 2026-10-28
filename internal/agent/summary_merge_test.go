@@ -27,13 +27,19 @@ func TestSplitPreviousSummary(t *testing.T) {
 			want:    narrative,
 		},
 		{
-			name:    "manifest appended",
-			content: narrative + "\n\n" + manifestLeadIn + "<context_manifest></context_manifest>",
+			name:    "legacy manifest appended",
+			content: narrative + "\n\n" + legacyManifestLeadIn + "<context_manifest></context_manifest>",
 			want:    narrative,
 		},
 		{
-			name:    "manifest and transcript appended",
-			content: narrative + "\n\n" + manifestLeadIn + "<context_manifest></context_manifest>" + "\n\n## Full Transcript\n\nstored at /tmp/x",
+			name: "appendix appended",
+			content: narrative + "\n\n" + appendixLeadIn + "\n\n" +
+				manifestLeadIn + "<context_manifest></context_manifest>",
+			want: narrative,
+		},
+		{
+			name:    "legacy manifest and transcript appended",
+			content: narrative + "\n\n" + legacyManifestLeadIn + "<context_manifest></context_manifest>" + "\n\n## Full Transcript\n\nstored at /tmp/x",
 			want:    narrative,
 		},
 		{
@@ -71,9 +77,20 @@ func TestNarrativeCut(t *testing.T) {
 	narrative := "## Current State\n- work is half done"
 	require.Equal(t, len(narrative), narrativeCut(narrative), "no appended block cuts at the end")
 
-	// The manifest is the first boundary when both blocks exist.
-	withManifest := narrative + "\n\n" + manifestLeadIn + "<context_manifest/>"
+	// The appendix marker is the single boundary for summaries written now.
+	withAppendix := narrative + "\n\n" + appendixLeadIn + "\n\n" + manifestLeadIn + "<context_manifest/>"
+	require.Equal(t, len(narrative)+2, narrativeCut(withAppendix))
+
+	// The legacy per-block markers still cut stored summaries written before
+	// the appendix existed. The old manifest lead-in is a pinned literal: the
+	// current one is shorter, so only the old wording can find a stored block.
+	withManifest := narrative + "\n\n" + legacyManifestLeadIn + "<context_manifest/>"
 	require.Equal(t, len(narrative)+2, narrativeCut(withManifest))
+
+	// The current lead-in only ever appears inside the appendix, so on its own
+	// it is prose, not a boundary.
+	currentOnly := narrative + "\n\n" + manifestLeadIn + "<context_manifest/>"
+	require.Equal(t, len(currentOnly), narrativeCut(currentOnly))
 
 	// A transcript-only summary still has a boundary: the manifest is
 	// omitted when there are no failures and no changed files.
@@ -81,8 +98,30 @@ func TestNarrativeCut(t *testing.T) {
 	require.Equal(t, len(narrative)+2, narrativeCut(withTranscript))
 
 	// The earliest marker wins regardless of the order they appear in.
-	both := narrative + "\n\n" + transcriptBlockLeadIn + "\n\nstored\n\n" + manifestLeadIn + "<x/>"
+	both := narrative + "\n\n" + transcriptBlockLeadIn + "\n\nstored\n\n" + legacyManifestLeadIn + "<x/>"
 	require.Equal(t, len(narrative)+2, narrativeCut(both))
+}
+
+func TestNarrativeCutIgnoresQuotedMarkers(t *testing.T) {
+	t.Parallel()
+
+	narrative := "## Current State\n- work is half done"
+
+	// Prose can quote a marker: a summary of the code that defines these
+	// constants does. Quoted inline it is not a boundary.
+	inline := narrative + "\n\nleadIn is `" + appendixLeadIn + "` in summary_appendix.go"
+	require.Equal(t, len(inline), narrativeCut(inline))
+
+	// The appendix is always the final block, so a line-start quote inside
+	// the prose (a fenced sample) does not move the boundary either: the
+	// last line-start occurrence wins.
+	fenced := narrative + "\n\n```\n" + appendixLeadIn + "\n```\n\nmore prose"
+	withQuote := fenced + "\n\n" + appendixLeadIn + "\n\n" + manifestLeadIn + "<context_manifest/>"
+	require.Equal(t, len(fenced)+2, narrativeCut(withQuote))
+
+	// A legacy marker quoted inline is not a boundary either.
+	inlineLegacy := narrative + "\n\n- dropped `" + recentlyModifiedBlockLeadIn + "` from summary_recent.go"
+	require.Equal(t, len(inlineLegacy), narrativeCut(inlineLegacy))
 }
 
 func TestBuildSummaryPrompt_MergeInstructionOnlyWithPrevious(t *testing.T) {

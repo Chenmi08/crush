@@ -31,11 +31,10 @@ const (
 )
 
 // RecallParams are the arguments to the `recall` tool. Exactly one of
-// ToolCallID, MessageID and SpillPath selects what to read; Offset and Limit
-// slice the body by bytes.
+// ToolCallID and SpillPath selects what to read; Offset and Limit slice the
+// body by bytes.
 type RecallParams struct {
 	ToolCallID string `json:"tool_call_id,omitempty" description:"ID of the tool call whose archived result to retrieve"`
-	MessageID  string `json:"message_id,omitempty" description:"ID of an archived user message, as listed under anchors: in the context manifest"`
 	SpillPath  string `json:"spill_path,omitempty" description:"Path of a file Crush spilled because its content was truncated; only files under the spill directory are accepted"`
 	Offset     int    `json:"offset,omitempty" description:"Byte offset into the archived content to start from (default 0)"`
 	Limit      int    `json:"limit,omitempty" description:"Maximum number of bytes to return (default 8192, max 65536)"`
@@ -55,7 +54,7 @@ func NewRecallTool(messages message.Service, spillDir string) fantasy.AgentTool 
 		recallDescription,
 		func(ctx context.Context, params RecallParams, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 			selectors := 0
-			for _, selector := range []string{params.ToolCallID, params.MessageID, params.SpillPath} {
+			for _, selector := range []string{params.ToolCallID, params.SpillPath} {
 				if selector != "" {
 					selectors++
 				}
@@ -63,11 +62,11 @@ func NewRecallTool(messages message.Service, spillDir string) fantasy.AgentTool 
 			switch {
 			case selectors > 1:
 				return fantasy.NewTextErrorResponse(
-					"recall takes exactly one of `tool_call_id` (an archived tool result), `message_id` (an archived user message) or `spill_path` (a file named in a truncation notice), not several",
+					"recall takes exactly one of `tool_call_id` (an archived tool result) or `spill_path` (a file named in a truncation notice), not both",
 				), nil
 			case selectors == 0:
 				return fantasy.NewTextErrorResponse(
-					"recall needs one of `tool_call_id`, the id of the tool call whose archived result you want; `message_id`, the id of an archived user message; or `spill_path`, the file named in a truncation notice",
+					"recall needs `tool_call_id`, the id of the tool call whose archived result you want, or `spill_path`, the file named in a truncation notice",
 				), nil
 			}
 
@@ -78,10 +77,6 @@ func NewRecallTool(messages message.Service, spillDir string) fantasy.AgentTool 
 			sessionID := GetSessionFromContext(ctx)
 			if sessionID == "" {
 				return fantasy.NewTextErrorResponse("recall requires a session and none is attached to this turn"), nil
-			}
-
-			if params.MessageID != "" {
-				return recallMessage(ctx, messages, sessionID, params), nil
 			}
 
 			result, recordedAt, err := findArchivedToolResult(ctx, messages, sessionID, params.ToolCallID)
@@ -140,73 +135,6 @@ func findArchivedToolResult(ctx context.Context, messages message.Service, sessi
 	)
 }
 
-// recallMessage reads a page of an archived user message. Compaction keeps
-// earlier user requests only as prose in the summary, which paraphrases them;
-// the manifest lists their ids under `anchors:` so the exact wording stays
-// retrievable, and this is what makes those handles usable.
-//
-// An archived request is refused if it is not usable as a quote, and the
-// refusal says which of the three reasons applies: a summary row, another
-// session, or a row that carries tool calls instead of text. Answering
-// "0 bytes" to any of them would read as "that record is empty".
-func recallMessage(ctx context.Context, messages message.Service, sessionID string, params RecallParams) fantasy.ToolResponse {
-	msg, err := messages.Get(ctx, params.MessageID)
-	if err != nil {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf(
-			"could not read archived message %q: %v", params.MessageID, err,
-		))
-	}
-	if msg.SessionID != sessionID {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf(
-			"no archived message with message_id %q in this session; ids from other sessions, parent sessions or sub-agent sessions are not visible here",
-			params.MessageID,
-		))
-	}
-	if msg.IsSummaryMessage {
-		return fantasy.NewTextErrorResponse(fmt.Sprintf(
-			"message_id %q is a previous summary, not a user message; read the current summary instead",
-			params.MessageID,
-		))
-	}
-	if msg.Role != message.User {
-		return fantasy.NewTextErrorResponse(nonUserRedirect(msg, params.MessageID))
-	}
-
-	page := recallSlice(msg.Content().Text, params.Offset, params.Limit)
-	return fantasy.NewTextResponse(messageResponse(msg, page))
-}
-
-// nonUserRedirect explains that a message id names a request or a record, not
-// a payload, and points at what it does hold. Summaries written before PR-20
-// listed a failure anchor as the assistant message that requested the failing
-// call, so that id arrives here as `message_id`; naming its tool calls turns
-// a dead handle into a working one instead of an empty page.
-func nonUserRedirect(msg message.Message, messageID string) string {
-	var sb strings.Builder
-	fmt.Fprintf(&sb,
-		"message_id %q is an archived %s message, not a user message; there is no text to page through",
-		messageID, msg.Role,
-	)
-	if results := msg.ToolResults(); len(results) > 0 {
-		// A tool row's payload is its results, which are already
-		// addressable by their own handles.
-		sb.WriteString(". Read one of these with `tool_call_id`:")
-		for _, result := range results {
-			fmt.Fprintf(&sb, " %s (%s)", result.ToolCallID, result.Name)
-		}
-		return sb.String()
-	}
-	if calls := msg.ToolCalls(); len(calls) > 0 {
-		sb.WriteString(". Read the result of one of these with `tool_call_id`:")
-		for _, call := range calls {
-			fmt.Fprintf(&sb, " %s (%s)", call.ID, call.Name)
-		}
-		return sb.String()
-	}
-	sb.WriteString("; it has no tool calls or results, so there is nothing to recall from it")
-	return sb.String()
-}
-
 // recallPage is one slice of a larger record: the returned bytes, the range
 // they cover, and whether anything follows. The three travel together through
 // both retrieval forms, so they are one value rather than three arguments
@@ -243,17 +171,6 @@ func recallResponse(result message.ToolResult, recordedAt int64, page recallPage
 	sb.WriteString(page.Body)
 	sb.WriteString(page.remainder())
 	return sb.String()
-}
-
-// messageResponse renders an archived user message. It says what a resuming
-// agent needs to judge the quote: whose word it is, how long it was, and when
-// it was said, so an old instruction is not mistaken for the current one.
-func messageResponse(msg message.Message, page recallPage) string {
-	return recallDocument(
-		fmt.Sprintf("message_id=%s role=user bytes=%d", msg.ID, page.Total),
-		time.Unix(msg.CreatedAt, 0),
-		page,
-	)
 }
 
 // spillResponse renders a page of a spill file. The header carries the same

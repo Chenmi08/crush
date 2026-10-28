@@ -133,7 +133,7 @@ func TestService_RecordWriteAndExec(t *testing.T) {
 
 	writes, err := env.svc.ListRecentWrites(env.ctx, sessionID, 10)
 	require.NoError(t, err)
-	require.Equal(t, []string{filepath.Clean("/path/to/file.go")}, writes,
+	require.Equal(t, []string{filepath.Clean("/path/to/file.go")}, writePaths(writes),
 		"only writes are listed, and the stored path is absolute")
 
 	var events int
@@ -179,7 +179,7 @@ func TestService_ListRecentWritesOrdersAndLimits(t *testing.T) {
 
 	all, err := env.svc.ListRecentWrites(env.ctx, sessionID, 10)
 	require.NoError(t, err)
-	require.Equal(t, []string{"/w/a.go", "/w/b.go", "/w/c.go"}, all,
+	require.Equal(t, []string{"/w/a.go", "/w/b.go", "/w/c.go"}, writePaths(all),
 		"same-second writes break the tie on path, so the order is stable")
 }
 
@@ -229,4 +229,14 @@ func TestService_RecordEventIgnoresEmptyInput(t *testing.T) {
 		env.ctx, "SELECT COUNT(*) FROM file_events",
 	).Scan(&events))
 	require.Zero(t, events, "an empty session or value is not a recordable event")
+}
+
+// writePaths extracts the paths from ledger entries, which is what the tests
+// that predate the timestamp compare against.
+func writePaths(writes []WriteEvent) []string {
+	paths := make([]string, 0, len(writes))
+	for _, write := range writes {
+		paths = append(paths, write.Path)
+	}
+	return paths
 }
